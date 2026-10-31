@@ -43,40 +43,6 @@ channel. Captured audio is temporary and is not saved in a patch.
 Build it yourself from this checkout; that is the most reliable route, because the
 result matches your machine and your macOS version exactly.
 
-### Install it from VS Code
-
-Once the source folder exists (see the step below), the whole install is one
-keystroke.
-
-1. **Open the folder** — `File > Open Folder…` and choose `Brood-Source`, or from
-   a terminal inside it: `code .`
-2. **Trust the folder** if VS Code asks (workspace trust is required to run
-   tasks).
-3. **Install the suggested extensions** when the notification appears — *C/C++*
-   and *CMake Tools*. Optional: they give error squiggles and C++ debugging.
-   Nothing else is required, and no C#/.NET anything.
-4. **Press ⌘⇧B.** The default build task is `Brood Mood: build + install`; it
-   configures CMake, compiles, ad-hoc signs, copies the bundles into
-   `~/Library/Audio/Plug-Ins/`, and runs `auval`. First run downloads JUCE and
-   takes several minutes; later runs are incremental.
-5. **Quit Ableton Live completely and reopen it**, then
-   `Settings > Plug-Ins > Rescan` while holding Option. The effect appears under
-   *Plug-Ins > VST3 > Fx* (search "Brood").
-
-Everything else lives in the same menu: `Terminal > Run Task…`
-
-| Task | What it does |
-| --- | --- |
-| `build + install` (⌘⇧B) | the one you want |
-| `clean build + install` | same, after deleting `native/build` — use it after an interrupted build |
-| `doctor (DAW cannot see it?)` | full health report, changes nothing |
-| `build universal + install` | one bundle with arm64 + x86_64 |
-| `open the standalone app` | build and play without a DAW |
-| `run tests` | native DSP tests + JavaScript suite |
-| `start the browser version` | the WebAudio version in a browser |
-
-`F5` builds and starts the standalone app under the debugger.
-
 ### Get the source
 
 ```sh
@@ -89,8 +55,8 @@ open -a "Visual Studio Code" .
 `open -a` is used because VS Code's `code` command is only on the `PATH` after
 `⌘⇧P > Shell Command: Install 'code' command in PATH`; both open the same thing.
 
-The `-b` selects the branch containing the working tree. A plain `git clone`
-gives the upstream skeleton only.
+The `-b` selects the branch containing the working tree; a plain `git clone` gives
+the upstream skeleton only.
 
 **Do not use a `.patch` file for this.** A patch cannot carry binary files: the
 transport drops the bytes and `git apply` stops with
@@ -100,34 +66,42 @@ error: cannot apply binary patch to 'assets/fonts/VT323-Regular.ttf' without ful
 ```
 
 That is why the fonts are downloaded by `scripts/fetch-fonts.sh` at build time
-instead of being committed — `assets/fonts/*.ttf` is in `.gitignore`. If you have
-an old patch lying around, delete it so it cannot be applied by mistake:
-
-```sh
-rm -f ~/Documents/AI/Brood-Mood/*.patch
-```
+rather than committed — `assets/fonts/*.ttf` is in `.gitignore`. Delete any old
+patch so it cannot be applied by mistake: `rm -f ~/Documents/AI/Brood-Mood/*.patch`
 
 ### Install it from VS Code
 
-Once the source folder exists (see the step below), the whole install is one
-keystroke.
-
-1. **Open the folder** — `File > Open Folder…` and choose `Brood-Source`, or from
-   a terminal inside it: `code .`
-2. **Trust the folder** if VS Code asks (workspace trust is required to run
-   tasks).
-3. **Install the suggested extensions** when the notification appears — *C/C++*
-   and *CMake Tools*. Optional: they give error squiggles and C++ debugging.
-   Nothing else is required, and no C#/.NET anything.
-4. **Press ⌘⇧B.** The default build task is `Brood Mood: build + install`; it
+1. **Install the tools once.** In Terminal:
+   ```sh
+   xcode-select --install          # Apple's compiler and SDK
+   brew install cmake              # CMake 3.22 or newer
+   ```
+2. **Open the folder** — `File > Open Folder…`, choose `Brood-Source`, and trust
+   it when VS Code asks (workspace trust is required to run tasks).
+3. **Install the suggested extensions** — *C/C++* and *CMake Tools*. Optional:
+   they add error squiggles and C++ debugging. Nothing else is needed, and no
+   C#/.NET anything.
+4. **Press ⌘⇧B.** The default build task is `Brood Mood: build + install`. It
    configures CMake, compiles, ad-hoc signs, copies the bundles into
-   `~/Library/Audio/Plug-Ins/`, and runs `auval`. First run downloads JUCE and
-   takes several minutes; later runs are incremental.
-5. **Quit Ableton Live completely and reopen it**, then
+   `~/Library/Audio/Plug-Ins/`, and runs `auval`. The first run downloads JUCE
+   8.0.9 (about 100 MB) into `native/build/_deps`, then compiles for several
+   minutes; later runs are incremental.
+5. **Restart and rescan your DAW.** Quit Ableton Live completely, reopen it, then
    `Settings > Plug-Ins > Rescan` while holding Option. The effect appears under
    *Plug-Ins > VST3 > Fx* (search "Brood").
 
-Everything else lives in the same menu: `Terminal > Run Task…`
+| Format | Installed to |
+| --- | --- |
+| VST3 | `~/Library/Audio/Plug-Ins/VST3/Brood Mood.vst3` |
+| Audio Unit | `~/Library/Audio/Plug-Ins/Components/Brood Mood.component` |
+| Standalone | left in `native/build/plugin/MoodEmu_artefacts/Release/Standalone/` |
+
+Because you build locally, the bundle links against your own SDK and is never
+quarantined, so no Gatekeeper prompt appears. Ad-hoc signing is automatic; set
+`DEVELOPMENT_TEAM`/`CODE_SIGN_IDENTITY` yourself only if you intend to
+distribute the build.
+
+Everything else lives under `Terminal > Run Task…`:
 
 | Task | What it does |
 | --- | --- |
@@ -140,74 +114,6 @@ Everything else lives in the same menu: `Terminal > Run Task…`
 | `start the browser version` | the WebAudio version in a browser |
 
 `F5` builds and starts the standalone app under the debugger.
-
-### First: turn the patch into a working checkout
-
-The `.patch` file is a diff, not the project. A folder holding only
-`01a1919c-….patch` has no `Makefile`, no `scripts/` and no source, so every
-build command fails there. Restore the tree once, in a new folder:
-
-```sh
-cd ~/Documents/AI
-git clone https://github.com/Jackherz/Brood.git Brood-Source
-cd Brood-Source
-git apply --whitespace=nowarn ../Brood-Mood/*.patch
-ls                 # Makefile, native, scripts, src … now exist
-```
-
-Then build from inside `Brood-Source`.
-
-**Use `git apply`, not `patch`.** The patch carries three binary font files, and
-`patch` prints `git binary diffs are not supported` and skips them; the build then
-fails because the UI embeds those fonts. If you already restored a tree that way,
-re-run `git apply` on a fresh clone rather than trying to repair it.
-
-If `git apply` reports that the patch does not apply, the clone has moved on;
-check out the commit the patch was made against and retry:
-
-```sh
-git checkout bf2e30a83954ebbf7ae79e6768e84778b48ccde5
-git apply --whitespace=nowarn ../Brood-Mood/*.patch
-```
-
-### Build and install in VS Code (macOS, recommended)
-
-1. **Install the tools once.** In Terminal:
-   ```sh
-   xcode-select --install          # Apple's compiler and SDK
-   brew install cmake              # CMake 3.22 or newer
-   ```
-   In VS Code, install the extensions it suggests (`ms-vscode.cpptools` and
-   `ms-vscode.cmake-tools`); they are listed in `.vscode/extensions.json`.
-2. **Open this folder** in VS Code (`File > Open Folder`).
-3. **Run the build task.** Press `⌘⇧B`, or use `Terminal > Run Task…` and pick
-   `Brood Mood: build + install`. The first run downloads JUCE 8.0.9 (about
-   100 MB) into `native/build/_deps`, then compiles.
-4. **Rescan your DAW.** Ableton Live: `Settings > Plug-Ins > Rescan`. REAPER:
-   `Options > Preferences > Plug-ins > VST > Re-scan`. Quit and reopen the DAW
-   if the plug-in still does not appear.
-5. **Check it loaded.** The script runs `auval` automatically after installing,
-   which instantiates the Audio Unit and catches load or signing problems. You
-   can also play the DSP without any DAW: run the task
-   `Brood Mood: open the standalone app`.
-
-The task installs the whole bundles to:
-
-| Format | Folder |
-| --- | --- |
-| VST3 | `~/Library/Audio/Plug-Ins/VST3/Brood Mood.vst3` |
-| Audio Unit | `~/Library/Audio/Plug-Ins/Components/Brood Mood.component` |
-| Standalone | left in `native/build/plugin/MoodEmu_artefacts/Release/Standalone/` |
-
-Other VS Code tasks: `build only`, `build universal + install` (one bundle with
-arm64 **and** x86_64 slices), `clean`, `run tests`, and `start the browser
-version`. `F5` starts the standalone app under the debugger (see
-`.vscode/launch.json`).
-
-Because you build locally, macOS does not quarantine the bundle and it links
-against your own SDK, so no `xattr` step and no Gatekeeper prompt are needed.
-Set `DEVELOPMENT_TEAM`/`CODE_SIGN_IDENTITY` yourself only if you intend to
-distribute the build.
 
 ### "Do I need an Apple Developer account?"
 
@@ -311,10 +217,9 @@ bash scripts/build-plugin.sh --clean --juce /path/to/JUCE
 bash scripts/build-plugin.sh --test --install
 ```
 
-Run it with `bash` so it works even if the executable bit was lost in transit
-(an archive or patch can drop it). `chmod +x scripts/build-plugin.sh` also lets
-you use `./scripts/build-plugin.sh`. The script needs Bash 3.2 or newer, which
-ships with macOS and every mainstream Linux.
+Run it with `bash` so it works even if the executable bit was lost in transit.
+The script needs Bash 3.2 or newer, which ships with macOS and every mainstream
+Linux.
 
 `--help` lists the options; arguments after `--` are passed to CMake verbatim.
 The script needs CMake 3.22+, Git and a C++17 compiler, and on Linux it also
