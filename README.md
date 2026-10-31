@@ -77,6 +77,70 @@ Everything else lives in the same menu: `Terminal > Run Task…`
 
 `F5` builds and starts the standalone app under the debugger.
 
+### Get the source
+
+```sh
+cd ~/Documents/AI
+git clone -b arena/7dccc818-brood https://github.com/Jackherz/Brood.git Brood-Source
+cd Brood-Source
+open -a "Visual Studio Code" .
+```
+
+`open -a` is used because VS Code's `code` command is only on the `PATH` after
+`⌘⇧P > Shell Command: Install 'code' command in PATH`; both open the same thing.
+
+The `-b` selects the branch containing the working tree. A plain `git clone`
+gives the upstream skeleton only.
+
+**Do not use a `.patch` file for this.** A patch cannot carry binary files: the
+transport drops the bytes and `git apply` stops with
+
+```text
+error: cannot apply binary patch to 'assets/fonts/VT323-Regular.ttf' without full index line
+```
+
+That is why the fonts are downloaded by `scripts/fetch-fonts.sh` at build time
+instead of being committed — `assets/fonts/*.ttf` is in `.gitignore`. If you have
+an old patch lying around, delete it so it cannot be applied by mistake:
+
+```sh
+rm -f ~/Documents/AI/Brood-Mood/*.patch
+```
+
+### Install it from VS Code
+
+Once the source folder exists (see the step below), the whole install is one
+keystroke.
+
+1. **Open the folder** — `File > Open Folder…` and choose `Brood-Source`, or from
+   a terminal inside it: `code .`
+2. **Trust the folder** if VS Code asks (workspace trust is required to run
+   tasks).
+3. **Install the suggested extensions** when the notification appears — *C/C++*
+   and *CMake Tools*. Optional: they give error squiggles and C++ debugging.
+   Nothing else is required, and no C#/.NET anything.
+4. **Press ⌘⇧B.** The default build task is `Brood Mood: build + install`; it
+   configures CMake, compiles, ad-hoc signs, copies the bundles into
+   `~/Library/Audio/Plug-Ins/`, and runs `auval`. First run downloads JUCE and
+   takes several minutes; later runs are incremental.
+5. **Quit Ableton Live completely and reopen it**, then
+   `Settings > Plug-Ins > Rescan` while holding Option. The effect appears under
+   *Plug-Ins > VST3 > Fx* (search "Brood").
+
+Everything else lives in the same menu: `Terminal > Run Task…`
+
+| Task | What it does |
+| --- | --- |
+| `build + install` (⌘⇧B) | the one you want |
+| `clean build + install` | same, after deleting `native/build` — use it after an interrupted build |
+| `doctor (DAW cannot see it?)` | full health report, changes nothing |
+| `build universal + install` | one bundle with arm64 + x86_64 |
+| `open the standalone app` | build and play without a DAW |
+| `run tests` | native DSP tests + JavaScript suite |
+| `start the browser version` | the WebAudio version in a browser |
+
+`F5` builds and starts the standalone app under the debugger.
+
 ### First: turn the patch into a working checkout
 
 The `.patch` file is a diff, not the project. A folder holding only
