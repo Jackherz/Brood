@@ -26,8 +26,6 @@ const KNOB_DEFAULTS = { time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock:
 const WET = ['REVERB', 'DELAY', 'SLIP'];
 const LOOP = ['ENV', 'TAPE', 'STRETCH'];
 const ROUTE = ['IN', 'BOTH', 'LOOP'];
-const PLUGIN_ZIP = 'Brood-Mood-macOS-arm64-Experimental.zip';
-const PLUGIN_ZIP_URL = `${import.meta.env.BASE_URL}downloads/${PLUGIN_ZIP}`;
 const DESCRIPTIONS = {
   time: ['DECAY / SIZE', 'DELAY TIME', 'SAMPLE SIZE'],
   modWet: ['SMEAR', 'FEEDBACK', 'SPEED / DIR'],
@@ -279,8 +277,6 @@ function App() {
   const [wave, setWave] = useState(null);
   const [notice, setNotice] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
-  const [downloadAvailable, setDownloadAvailable] = useState(false);
-  const [downloading, setDownloading] = useState(false);
   const [touched, setTouched] = useState('clock');
   const fileInput = useRef(null);
   const engineRef = useRef(null);
@@ -292,16 +288,6 @@ function App() {
       if (message.type === 'wave') setWave(message);
     }, (message) => setNotice(message));
   }
-  // Some deployments don't include a native binary; only offer the button
-  // when an actual ZIP is available (Vite may otherwise return its HTML shell).
-  useEffect(() => {
-    let alive = true;
-    fetch(PLUGIN_ZIP_URL, { method: 'HEAD' })
-      .then(r => r.ok && (r.headers.get('content-type') || '').includes('application/zip'))
-      .then(available => { if (alive) setDownloadAvailable(available); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
   useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-mood-params-v1', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
   const update = React.useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
@@ -331,23 +317,6 @@ function App() {
   const savePatch = () => {
     const saved = sanitize(params);
     setUserPatch(saved); safeWrite('brood-mood-user-patch-v1', saved); setPreset(PRESETS.length); setNotice('Your patch is saved on this device.');
-  };
-  const downloadPlugin = async () => {
-    if (downloading) return;
-    setDownloading(true);
-    try {
-      // Fetch through the same preview origin, then download a local blob. This
-      // avoids opening the sandbox's protected raw URL in a separate tab.
-      const response = await fetch(PLUGIN_ZIP_URL);
-      if (!response.ok || !(response.headers.get('content-type') || '').includes('application/zip')) throw new Error('Download is unavailable.');
-      const url = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement('a');
-      anchor.href = url; anchor.download = PLUGIN_ZIP;
-      document.body.appendChild(anchor); anchor.click(); anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch (_) {
-      setNotice('Download unavailable here. Use the ZIP in Arena’s file viewer.');
-    } finally { setDownloading(false); }
   };
   const startAudio = async () => {
     if (busy) return;
@@ -385,7 +354,6 @@ function App() {
       <div className="utility-brand"><span className="brand-mark"><Spark size={14}/></span><span>BROOD <i>/</i> AUDIO OBJECTS</span></div>
       <div className="utility-center">A LITTLE MACHINE FOR HAPPY ACCIDENTS <span>✳</span></div>
       <div className="utility-actions">
-        {downloadAvailable && <button className="utility-download" type="button" onClick={downloadPlugin} disabled={downloading}>{downloading ? 'PREPARING…' : '↓ MAC VST3'}</button>}
         <button className="utility-help" onClick={() => setGuideOpen(!guideOpen)} aria-expanded={guideOpen}><span>?</span> {guideOpen ? 'CLOSE GUIDE' : 'HOW TO PLAY'}</button>
       </div>
     </div>

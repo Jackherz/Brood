@@ -1,0 +1,20 @@
+# Normalise line endings so a checkout on macOS, Linux or Windows produces the
+# same bytes and diff noise stays out of the way.
+* text=auto eol=lf
+
+# Shell scripts must keep LF endings: CRLF makes bash fail with
+# "$'\r': command not found".
+*.sh text eol=lf
+
+# Binary media. These are not committed (see .gitignore) — this only stops Git
+# from trying to text-diff them if one is ever added by mistake.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.zip binary
+
+# Keep generated artefacts out of diffs.
+package-lock.json linguist-generated

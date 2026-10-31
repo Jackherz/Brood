@@ -17,4 +17,7 @@ SDK and other third-party components; its licence file lists them. See also
 
 The bundled VT323 (Peter Hull), Press Start 2P (CodeMan38), and Space Mono
 (Colophon Foundry) fonts are licensed under the SIL Open Font License 1.1.
-Their individual notices and licence texts are in `assets/fonts/`.
+Their licence texts are in `assets/fonts/`. The font binaries themselves are not
+committed: `scripts/fetch-fonts.sh` downloads them from
+https://github.com/google/fonts at build time and verifies each against a pinned
+SHA-256, which also keeps this repository free of binary files.

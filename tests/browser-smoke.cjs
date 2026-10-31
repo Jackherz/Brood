@@ -27,15 +27,6 @@ let browser;
  page.on('pageerror', error => errors.push(error.message));
  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
  await page.goto(process.env.BROOD_TEST_URL || 'http://127.0.0.1:5173/', { waitUntil: 'networkidle' });
- const zipPath = path.join(__dirname, '../public/downloads/Brood-Mood-Linux-x86_64-Experimental.zip');
- if (fs.existsSync(zipPath)) {
-   const button = page.getByRole('button', {name:'↓ LINUX VST3'});
-   await button.waitFor();
-   const [download] = await Promise.all([page.waitForEvent('download'), button.click()]);
-   assert.equal(download.suggestedFilename(), path.basename(zipPath));
-   assert.deepEqual(fs.readFileSync(await download.path()), fs.readFileSync(zipPath));
-   console.log('preview ZIP download matches the packaged binary');
- }
  // Exercise the actual browser AudioWorklet offline with a left-only input.
  const stereo = await page.evaluate(async () => {
    async function run(wet) {

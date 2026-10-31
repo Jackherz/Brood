@@ -6,6 +6,8 @@
 #   make run        build and launch the standalone app
 #   make web        run the browser version
 #   make test       native DSP tests, then the JavaScript suite
+#   make check      repository self-check (no binaries, scripts parse, …)
+#   make doctor-fix re-sign and de-quarantine installed bundles
 #   make clean      remove native/build
 #
 # These wrap scripts/build-plugin.sh and scripts/diagnose-plugin.sh so the
@@ -15,10 +17,10 @@ SHELL := /bin/bash
 SCRIPTS := scripts
 BUILD := native/build
 
-.PHONY: help install build universal run doctor clean test web
+.PHONY: help install build universal run doctor doctor-fix clean test check web
 
 help:
-	@sed -n '2,12p' Makefile | sed 's/^# \{0,1\}//'
+	@awk 'NR <= 15 && /^#/' Makefile | sed 's/^# *//'
 
 install:
 	@bash $(SCRIPTS)/build-plugin.sh --install
@@ -35,6 +37,12 @@ run:
 
 doctor:
 	@bash $(SCRIPTS)/diagnose-plugin.sh
+
+doctor-fix:
+	@bash $(SCRIPTS)/diagnose-plugin.sh --fix
+
+check:
+	@bash $(SCRIPTS)/check-repo.sh
 
 clean:
 	@rm -rf "$(BUILD)"

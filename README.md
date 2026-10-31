@@ -5,6 +5,9 @@ plugin, with a black-and-white pixel-art interface. It includes a JUCE VST3
 plugin and a browser version that runs the same DSP. There is also source for
 JUCE standalone and macOS AU targets.
 
+New here? [INSTALL.md](INSTALL.md) is the three-command version of the macOS
+install; this README has the detail.
+
 **This is an independent approximation, not the original pedal firmware or a
 bit-exact emulation.** Chase Bliss's public firmware repository distributes
 binary firmware rather than the MOOD DSP source. The algorithms and parameter
@@ -204,6 +207,7 @@ make universal        # one bundle with arm64 + x86_64 slices, then install
 make doctor           # why is the plug-in not showing up?
 make run              # build and open the standalone app
 make test             # native DSP tests, then the JavaScript suite
+make check            # repository self-check (no binaries, scripts parse, JSON valid)
 make clean            # remove native/build
 ```
 
@@ -236,14 +240,13 @@ Targets: `MoodEmu_VST3`, `MoodEmu_Standalone`, and on macOS `MoodEmu_AU`. Set
 `-DBROOD_BUILD_PLUGIN_TESTS=ON` for the headless processor tests and
 `-DBROOD_BUILD_VST3_HOST_TESTS=ON` for the VST3 hosting smoke test.
 
-### Prebuilt experiments
+### Prebuilt experiments (removed)
 
-`Brood-Mood-macOS-arm64-Experimental.zip` and
-`Brood-Mood-Linux-x86_64-Experimental.zip`, if provided with this checkout, are
-cross-compiled bundles for a quick try. The macOS one is arm64 only and has no
-`moduleinfo.json`; the Linux one needs glibc 2.35+, `GLIBCXX_3.4.30`, FreeType,
-Fontconfig and X11. Neither has been opened in a DAW on the target platform, and
-neither is a substitute for building locally.
+Earlier versions of this project shipped cross-compiled bundles
+(`Brood-Mood-macOS-arm64-Experimental.zip`). They were arm64-only, had no
+`moduleinfo.json`, were never opened in a DAW, and could not be transported
+through the patch channel at all — the download button and the ZIP are gone.
+Build locally with the steps above; that is the supported route.
 
 The plugin normally processes the host track's input. The editor also offers a
 generated demo and local file input. Plugin settings and wet on/off state are

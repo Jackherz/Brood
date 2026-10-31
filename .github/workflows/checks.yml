@@ -1,0 +1,35 @@
+name: checks
+
+# Guards the two failure modes that made this repository hard to build from a
+# copy: a committed binary asset (patches cannot carry it) and a broken build
+# entry point. Runs on every push and pull request.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  repo:
+    name: repo self-check + JS tests + web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Repository self-check
+        run: bash scripts/check-repo.sh
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: JavaScript DSP tests
+        run: npm test
+
+      - name: Build the browser version
+        run: npm run build
