@@ -71,7 +71,7 @@ int main() {
         CHECK(std::fabs(c.capturedLength() / mood::kCoreFs - 0.8) < 0.01, "loop %.3f s", c.capturedLength() / mood::kCoreFs);
     }
     {   // every mode/routing combination stays finite and bounded
-        for (int lm = 0; lm < 3; ++lm) for (int r = 0; r < 3; ++r) for (int wm = 0; wm < 3; ++wm) {
+        for (int lm = 0; lm < 3; ++lm) for (int r = 0; r < 3; ++r) for (int wm = 0; wm < 4; ++wm) {
             mood::Core c; c.p.loopMode = lm; c.p.routing = r; c.p.wetMode = wm; c.p.modLoop = 0.1; c.p.modWet = 1; c.p.clock = 0.3;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 2, [](double t) { return 0.3 * std::sin(2 * mood::kPi * 196 * t) * std::exp(-3 * std::fmod(t, 0.5)); },
@@ -80,6 +80,30 @@ int main() {
             CHECK(finite(o.L) && finite(o.R) && bounded, "loop %d routing %d wet %d", lm, r, wm);
             CHECK(rms(o.L, 1.2, 2.0) > 1e-3, "silent: loop %d routing %d wet %d", lm, r, wm);
         }
+    }
+    {   // WEAVE: audible, repeatable at a fixed knob position, and it answers the knobs
+        auto weaveRun = [](double time, double modify) {
+            mood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.dryKill = true; c.p.time = time; c.p.modWet = modify;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 3, [](double t) {
+                const double ph = std::fmod(t, 1.0);
+                return ph < 0.75 ? 0.35 * std::sin(2 * mood::kPi * 330 * t) : 0.0;   // gated tone keeps the buffer fresh
+            });
+            return rms(o.L, 1.5, 3.0);
+        };
+        const double texture = weaveRun(0.5, 0.3), again = weaveRun(0.5, 0.3);
+        const double rhythm = weaveRun(0.5, 0.85), deep = weaveRun(0.95, 0.3);
+        CHECK(texture > 5e-3, "weave silent: %g", texture);
+        CHECK(std::fabs(texture - again) < 1e-9, "weave not repeatable: %g vs %g", texture, again);
+        CHECK(std::fabs(texture - rhythm) > 1e-4, "weave ignores MODIFY");
+        CHECK(std::fabs(texture - deep) > 1e-4, "weave ignores TIME");
+    }
+    {   // WEAVE stays bounded with the nastiest settings
+        mood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.0; c.p.spread = true;
+        c.prepare(FS); tap(c, 0);
+        auto o = render(c, 2, tone(196, 5));
+        bool bounded = true; for (float v : o.L) if (std::fabs(v) > 1.0f) bounded = false;
+        CHECK(finite(o.L) && finite(o.R) && bounded, "weave blew up");
     }
     {   // speed maps hit musical anchors
         CHECK(mood::speedMap(0.5) == 0.5 && mood::speedMap(1) == 4 && mood::speedMap(0) == -4, "speedMap");

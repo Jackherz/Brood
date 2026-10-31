@@ -32,10 +32,26 @@ juce::Font pixel(float size) {
 }
 
 constexpr int W = 900, H = 640;
-const char* kKnobSub[6][3] = {
-    {"decay", "delay", "refresh"}, {"dry / fx", "dry / fx", "dry / fx"}, {"slice", "loop length", "slice"},
-    {"smear", "feedback", "speed"}, {"sample rate", "sample rate", "sample rate"}, {"sensitivity", "speed", "stretch"},
+// One whispered sentence per knob per mode: enough to know which way to turn,
+// never quite enough to stop wondering. The exact value appears in the display
+// when you touch the knob.
+const char* kWhisper[6][4] = {
+    {"how long the room keeps breathing", "how far back the echo remembers",
+     "how wide a slice of time is borrowed", "how far back the threads reach"},
+    {"how much of what you hear is not here", "how much of what you hear is not here",
+     "how much of what you hear is not here", "how much of what you hear is not here"},
+    {"how much of the moment gets caught", "the size of the window that repeats",
+     "how wide each grain is stretched", "how much of the moment gets caught"},
+    {"how much the surface smears", "how much the echo wants to stay",
+     "which way, and how fast, time slides", "long cloth, or short clipped stitches"},
+    {"the heartbeat everything obeys", "the heartbeat everything obeys",
+     "the heartbeat everything obeys", "the heartbeat everything obeys"},
+    {"how softly it must speak to be caught", "which way the tape runs, and how fast",
+     "how far the grains drift from now", "how softly it must speak to be caught"},
 };
+
+// Which knob listens to which mode: 0 = wet modes, 1 = loop modes, 2 = shared.
+constexpr int kKnobMode[6] = {0, 2, 1, 0, 2, 1};
 }  // namespace
 
 // ───────── look and feel ─────────
@@ -112,10 +128,11 @@ MoodEditor::ThreeWay::ThreeWay(juce::RangedAudioParameter& p, juce::StringArray 
 }
 void MoodEditor::ThreeWay::paint(juce::Graphics& g) {
     const auto bounds = getLocalBounds();
-    const int row = bounds.getHeight() / 3;
+    const int count = juce::jmax(1, labels.size());
+    const int row = bounds.getHeight() / count;
     g.setColour(kPaper); g.fillRect(bounds);
     g.setColour(kInk); g.drawRect(bounds, 1);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < count; ++i) {
         const auto r = juce::Rectangle<int>(1, 1 + i * row, bounds.getWidth() - 2, row - 1);
         if (i == index) { g.setColour(kInk); g.fillRect(r); }
         else { g.setColour(kLine); if (i > 0) g.drawHorizontalLine(i * row, 0.f, static_cast<float>(getWidth())); }
@@ -124,7 +141,8 @@ void MoodEditor::ThreeWay::paint(juce::Graphics& g) {
     }
 }
 void MoodEditor::ThreeWay::mouseDown(const juce::MouseEvent& e) {
-    const int next = juce::jlimit(0, 2, e.y * 3 / juce::jmax(1, getHeight()));
+    const int count = juce::jmax(1, labels.size());
+    const int next = juce::jlimit(0, count - 1, e.y * count / juce::jmax(1, getHeight()));
     attach.setValueAsCompleteGesture(static_cast<float>(next));
 }
 
@@ -197,7 +215,7 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
             repaint(pedalArea);
         };
     };
-    wetMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("wetMode"), juce::StringArray{"Reverb", "Delay", "Slip"}, modeChanged("WET MODE", "wetMode"));
+    wetMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("wetMode"), juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, modeChanged("WET MODE", "wetMode"));
     routing = std::make_unique<ThreeWay>(*proc.apvts.getParameter("routing"), juce::StringArray{"In", "In + Loop", "Loop"}, modeChanged("ROUTING", "routing"));
     loopMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("loopMode"), juce::StringArray{"Env", "Tape", "Stretch"}, modeChanged("LOOP MODE", "loopMode"));
     for (auto* t : {wetMode.get(), routing.get(), loopMode.get()}) addAndMakeVisible(*t);
@@ -306,7 +324,7 @@ void MoodEditor::resized() {
         knobs[static_cast<size_t>(i)].slider->setBounds(juce::Rectangle<int>(104, 104).withCentre({cx[i % 3], pedalArea.getY() + (row == 0 ? 172 : 394)}));
     }
     const int ty = pedalArea.getY() + 282;
-    wetMode->setBounds(cx[0] - 48, ty - 36, 130, 72);
+    wetMode->setBounds(cx[0] - 48, ty - 44, 130, 88);   // four wet modes now
     routing->setBounds(cx[1] - 48, ty - 36, 130, 72);
     loopMode->setBounds(cx[2] - 48, ty - 36, 130, 72);
     const int fy = pedalArea.getBottom() - 52;
@@ -369,11 +387,13 @@ void MoodEditor::paint(juce::Graphics& g) {
         g.setColour(kInk); g.setFont(font(17));
         g.drawText(knobs[i].label, kb.withY(kb.getY() - 21).withHeight(18), juce::Justification::centred);
         g.setColour(kMuted); g.setFont(font(13));
-        const int mode = i == 5 || i == 2 ? lm : wm;
-        juce::String sub = kKnobSub[i][mode];
-        if (i == 3) sub += "  /  WET";
-        if (i == 5) sub += "  /  LOOP";
-        g.drawText(sub.toUpperCase(), kb.withY(kb.getBottom() - 4).withHeight(16).withSizeKeepingCentre(160, 16), juce::Justification::centred);
+        const int mode = kKnobMode[i] == 0 ? wm : kKnobMode[i] == 1 ? lm : 0;
+        juce::String whisper = kWhisper[i][juce::jlimit(0, 3, mode)];
+        if (i == 3) whisper += "  /  wet";
+        if (i == 5) whisper += "  /  loop";
+        g.setFont(font(13));
+        g.drawText(whisper, kb.withY(kb.getBottom() - 2).withHeight(18).withSizeKeepingCentre(230, 18),
+                   juce::Justification::centred);
     }
     g.setColour(kInk); g.setFont(font(16));
     g.drawText("WET", ledWet.getX() - 63, ledWet.getY() - 1, 54, 18, juce::Justification::centredRight);

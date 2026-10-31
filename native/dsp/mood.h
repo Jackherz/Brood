@@ -21,6 +21,8 @@ constexpr double kClockMaxHz = 64000.0;
 constexpr double kCoreFs = 64000.0;
 constexpr double kDelayMaxSec = 2.1;
 constexpr double kSlipBufSec = 5.5;
+constexpr double kWeaveBufSec = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
+constexpr double kWeavePitch[] = {0, 7, -5, 12, -12, 4, -17, 19};   // root-sympathetic intervals, semitones
 
 inline double clampd(double x, double a, double b) { return x < a ? a : x > b ? b : x; }
 inline double expMap(double t, double a, double b) { return a * std::pow(b / a, t); }
@@ -235,13 +237,79 @@ struct Slip {
     }
 };
 
+
+// ──────────────────────────── Wet channel: WEAVE ───────────────────────
+// Re-sampler in the spirit of the Fieldtone Weaver: keep a few seconds of what
+// just happened, then let three threads read it back at once. Each thread has
+// its own pitch, direction, grain size and dropout, all rolled from one seeded
+// pattern. TIME chooses how far back the threads may reach; MODIFY walks the
+// pattern from long overlapping cloth (texture) into short clipped stitches
+// (rhythm). The pattern is re-rolled only when the integer position of the knobs
+// changes, so the same knob position always draws the same fabric — chance, but
+// repeatable, and no undo. Mirrors the JS Weave class in src/mood-worklet.js.
+struct Weave {
+    struct Thread { double pos = 0, ph = 0, rate = 1, pan = 0, amp = 1; int dir = 1; };
+    std::vector<float> buf; int w = 0;
+    uint32_t rng = 0x5eed; int seedKey = -1;
+    Thread th[3];
+    double fs = 48000;
+    void init(double sr) {
+        fs = sr;
+        buf.assign(static_cast<size_t>(std::ceil(kWeaveBufSec * fs)), 0.f);
+        w = 0; rng = 0x5eed; seedKey = -1;
+        static constexpr double pan[3] = {-0.7, 0, 0.7};
+        for (int i = 0; i < 3; ++i) th[i] = Thread{-fs * (0.25 + 0.3 * i), i / 3.0, 1, pan[i], 1, 1};
+    }
+    double rand01() { rng = rng * 1103515245u + 12345u; return rng / 4294967296.0; }
+    void reroll(int key, double reachSec) {
+        if (key == seedKey) return;
+        seedKey = key;
+        for (auto& t : th) {
+            const int semis = static_cast<int>(kWeavePitch[static_cast<int>(rand01() * 8)]);
+            t.rate = std::pow(2.0, semis / 12.0);
+            t.dir = rand01() < 0.3 ? -1 : 1;
+            t.amp = rand01() < 0.85 ? 1.0 : 0.45;
+            t.pos = w - fs * (0.15 + rand01() * 0.85 * std::max(0.2, reachSec));
+        }
+    }
+    // out[0], out[1] are left/right.
+    void tick(double input, double reachSec, double modify, bool frozen, double* out) {
+        const int n = static_cast<int>(buf.size());
+        if (!frozen) { buf[static_cast<size_t>(w)] = static_cast<float>(input); if (++w >= n) w = 0; }
+        const int key = static_cast<int>(std::floor(clampd(reachSec, 0, 3) * 8)) * 16 +
+                        static_cast<int>(std::floor(clampd(modify, 0, 1) * 16));
+        reroll(key, reachSec);
+
+        const double grain = std::max(64.0, expMap(1 - clampd(modify, 0, 1), 0.02, 0.55) * fs);
+        const double chance = 0.55 * clampd(modify, 0, 1);
+        double l = 0, r = 0;
+        for (auto& t : th) {
+            t.ph += 1 / grain;
+            if (t.ph >= 1) {
+                t.ph -= 1;
+                // A new stitch: maybe move somewhere else in the cloth, maybe not.
+                if (rand01() < 0.45) t.pos = w - fs * (0.12 + rand01() * std::max(0.2, reachSec));
+                // Dropouts are partial, so a thread thins out instead of vanishing.
+                t.amp = rand01() < chance * 0.35 ? 0.0 : 0.45 + 0.55 * rand01();
+            }
+            const double win = std::sin(t.ph * kPi);
+            const double v = readFrac(buf, t.pos) * win * win * t.amp;
+            t.pos += t.rate * t.dir;
+            const double a = (t.pan + 1) * kPi / 4;
+            l += v * std::cos(a);
+            r += v * std::sin(a);
+        }
+        out[0] = l * 0.7; out[1] = r * 0.7;
+    }
+};
+
 // ─────────────────────────────── Core ─────────────────────────────────
 enum class LoopState { Off, Play };
 enum class LoopLed { Off, Play, Rec, Dub };
 
 struct Params {
     double time = 0.5, mix = 0.5, length = 0.75, modWet = 0.5, clock = 1, modLoop = 0.5;
-    int wetMode = 0, routing = 0, loopMode = 0;   // reverb/delay/slip, in/in+loop/loop, env/tape/stretch
+    int wetMode = 0, routing = 0, loopMode = 0;   // reverb/delay/slip/weave, in/in+loop/loop, env/tape/stretch
     bool trails = false, dryKill = false, latch = false, spread = false, smooth = false;
     double balance = 0.5;
 };
@@ -262,9 +330,9 @@ public:
         hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1;
         aa = reconL = reconR = LowPass4{};
         prev[0] = prev[1] = cur[0] = cur[1] = 0;
-        reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs);
+        reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs); weave.init(kCoreFs);
         wetOn = freeze = wetMomentary = false;
-        wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = 0;
+        wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
         loopDirect = 1;
@@ -412,9 +480,9 @@ private:
     LowPass4 aa, reconL, reconR;
     double prev[2] = {0, 0}, cur[2] = {0, 0};
 
-    Reverb reverb; Delay delay; Slip slip;
+    Reverb reverb; Delay delay; Slip slip; Weave weave;
     bool wetOn = false, freeze = false, wetMomentary = false;
-    double wetIn = 0, wetOut = 0, modeGain[3] = {1, 0, 0};
+    double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
     Allpass decor[2];
     double loopDirect = 1;
 
@@ -535,7 +603,7 @@ private:
         const double outT = wetOn || p.trails ? 1.0 : 0.0;
         wetIn += (inT - wetIn) * 0.003;
         wetOut += (outT - wetOut) * 0.003;
-        for (int k = 0; k < 3; ++k) modeGain[k] += ((p.wetMode == k ? 1.0 : 0.0) - modeGain[k]) * 0.002;
+        for (int k = 0; k < 4; ++k) modeGain[k] += ((p.wetMode == k ? 1.0 : 0.0) - modeGain[k]) * 0.002;
 
         const double wIn = wetSrc * wetIn;
         double wl = 0, wr = 0;
@@ -547,6 +615,11 @@ private:
         double mono = 0;
         if (modeGain[1] > 1e-4) mono += delay.tick(wIn, expMap(s.time, 0.02 * kCoreFs, 2 * kCoreFs), s.modWet, freeze) * modeGain[1];
         if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(s.time, 0.05 * kCoreFs, 1.5 * kCoreFs), slipSpeedMap(s.modWet), freeze) * modeGain[2];
+        if (modeGain[3] > 1e-4) {
+            double o[2];
+            weave.tick(wIn, 0.2 + s.time * 2.6, s.modWet, freeze, o);
+            wl += o[0] * modeGain[3]; wr += o[1] * modeGain[3];
+        }
         wl += mono;
         wr += p.spread ? decor[1].run(decor[0].run(mono)) : mono;
         if (p.spread) {

@@ -27,6 +27,8 @@ const CORE_FS = 64000;       // buffer timings are defined at the pedal’s 64 k
 const CLOCK_STEPS = [2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000];
 const DELAY_MAX_SEC = 2.1;
 const SLIP_BUF_SEC = 5.5;
+const WEAVE_BUF_SEC = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
+const WEAVE_PITCH = [0, 7, -5, 12, -12, 4, -17, 19];   // root-sympathetic intervals, semitones
 const clockHz = (knob, smooth = false) => smooth
   ? expMap(clamp(knob, 0, 1), CLOCK_MIN_HZ, CLOCK_MAX_HZ)
   : CLOCK_STEPS[Math.round(clamp(knob, 0, 1) * (CLOCK_STEPS.length - 1))];
@@ -247,6 +249,77 @@ class Slip {
   }
 }
 
+
+// ──────────────────────────── Wet channel: WEAVE ───────────────────────
+// Re-sampler in the spirit of the Fieldtone Weaver: keep a few seconds of what
+// just happened, then let three threads read it back at once. Each thread has
+// its own pitch, direction, grain size and dropout, all rolled from one seeded
+// pattern. TIME chooses how far back the threads may reach; MODIFY walks the
+// pattern from long overlapping cloth (texture) into short clipped stitches
+// (rhythm). The pattern is re-rolled only when the integer position of the knobs
+// changes, so the same knob position always draws the same fabric — chance, but
+// repeatable, and no undo.
+class Weave {
+  constructor(fs) {
+    this.fs = fs;
+    this.buf = new Float32Array(Math.ceil(WEAVE_BUF_SEC * fs));
+    this.w = 0;
+    this.rng = 0x5eed;
+    this.seedKey = -1;
+    this.threads = [0, 1, 2].map((_, i) => ({
+      pos: -fs * (0.25 + 0.3 * i), ph: i / 3, rate: 1, dir: 1, pan: [-0.7, 0, 0.7][i], amp: 1,
+    }));
+  }
+  rand01() {
+    this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0;
+    return this.rng / 4294967296;
+  }
+  // One roll per knob position: rate, direction and dropout are drawn here.
+  reroll(key, reachSec) {
+    if (key === this.seedKey) return;
+    this.seedKey = key;
+    for (const th of this.threads) {
+      const semis = WEAVE_PITCH[Math.floor(this.rand01() * WEAVE_PITCH.length)];
+      th.rate = Math.pow(2, semis / 12);
+      th.dir = this.rand01() < 0.3 ? -1 : 1;
+      th.amp = this.rand01() < 0.85 ? 1 : 0.45;
+      th.pos = this.w - this.fs * (0.15 + this.rand01() * 0.85 * Math.max(0.2, reachSec));
+    }
+  }
+  tick(input, reachSec, modify, frozen) {
+    const n = this.buf.length;
+    if (!frozen) {
+      this.buf[this.w] = input;
+      if (++this.w >= n) this.w = 0;
+    }
+    const key = Math.floor(clamp(reachSec, 0, 3) * 8) * 16 + Math.floor(clamp(modify, 0, 1) * 16);
+    this.reroll(key, reachSec);
+
+    const grain = Math.max(64, expMap(1 - clamp(modify, 0, 1), 0.02, 0.55) * this.fs);
+    const chance = 0.55 * clamp(modify, 0, 1);   // more rhythm, more holes
+    let l = 0, r = 0;
+    for (const th of this.threads) {
+      th.ph += 1 / grain;
+      if (th.ph >= 1) {
+        th.ph -= 1;
+        // A new stitch: maybe move somewhere else in the cloth, maybe not.
+        if (this.rand01() < 0.45) {
+          th.pos = this.w - this.fs * (0.12 + this.rand01() * Math.max(0.2, reachSec));
+        }
+        // Dropouts are partial, so a thread thins out instead of vanishing.
+        th.amp = this.rand01() < chance * 0.35 ? 0 : 0.45 + 0.55 * this.rand01();
+      }
+      const win = Math.sin(th.ph * Math.PI);
+      const v = readFrac(this.buf, th.pos) * win * win * th.amp;
+      th.pos += th.rate * th.dir;
+      const a = (th.pan + 1) * Math.PI / 4;
+      l += v * Math.cos(a);
+      r += v * Math.sin(a);
+    }
+    return [l * 0.7, r * 0.7];
+  }
+}
+
 // ─────────────────────────────── Core ─────────────────────────────────
 class MoodCore {
   constructor(fs) {
@@ -272,11 +345,12 @@ class MoodCore {
     this.reverb = new Reverb(CORE_FS);
     this.delay = new Delay(CORE_FS);
     this.slip = new Slip(CORE_FS);
+    this.weave = new Weave(CORE_FS);
     this.wetOn = false;
     this.freeze = false;
     this.wetMomentary = false;
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
-    this.modeGain = [1, 0, 0];                  // crossfade between wet modes
+    this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
     this.decor = [new Allpass(Math.round(113 * CORE_FS / 48000), 0.6), new Allpass(Math.round(337 * CORE_FS / 48000), 0.6)];
     this.loopDirect = 1;
 
@@ -485,7 +559,7 @@ class MoodCore {
     const outT = wetOn || p.trails ? 1 : 0;
     this.wetIn += (inT - this.wetIn) * 0.003;
     this.wetOut += (outT - this.wetOut) * 0.003;
-    for (let k = 0; k < 3; k++) this.modeGain[k] += ((p.wetMode === k ? 1 : 0) - this.modeGain[k]) * 0.002;
+    for (let k = 0; k < 4; k++) this.modeGain[k] += ((p.wetMode === k ? 1 : 0) - this.modeGain[k]) * 0.002;
 
     const freeze = this.freeze;
     const wIn = wetSrc * this.wetIn;
@@ -502,6 +576,10 @@ class MoodCore {
     }
     if (this.modeGain[2] > 1e-4) {
       mono += this.slip.tick(wIn, expMap(s.time, 0.05 * fs, 1.5 * fs), slipSpeedMap(s.modWet), freeze) * this.modeGain[2];
+    }
+    if (this.modeGain[3] > 1e-4) {
+      const o = this.weave.tick(wIn, 0.2 + s.time * 2.6, s.modWet, freeze);
+      wl += o[0] * this.modeGain[3]; wr += o[1] * this.modeGain[3];
     }
     wl += mono;
     wr += p.spread ? this.decor[1].run(this.decor[0].run(mono)) : mono;

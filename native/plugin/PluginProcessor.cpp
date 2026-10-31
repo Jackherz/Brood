@@ -32,7 +32,7 @@ MoodProcessor::MoodProcessor()
                   juce::AudioParameterFloatAttributes().withStringFromValueFunction(
                       [this, id](float v, int) { return describe(id, v); })));
           }
-          layout.add(std::make_unique<APC>(juce::ParameterID("wetMode", 1), "Wet mode", juce::StringArray{"Reverb", "Delay", "Slip"}, 0));
+          layout.add(std::make_unique<APC>(juce::ParameterID("wetMode", 1), "Wet mode", juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, 0));
           layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In + Loop", "Loop"}, 1));
           layout.add(std::make_unique<APC>(juce::ParameterID("loopMode", 1), "Loop mode", juce::StringArray{"Env", "Tape", "Stretch"}, 1));
           layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Dip: Trails", false));
@@ -67,6 +67,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     if (id == "time") {
         if (wetMode == 0) return v > 0.985f ? juce::String("decay infinite") : "decay " + fmtTime(mood::expMap(v, 0.4, 25) / c);
         if (wetMode == 1) return "delay " + fmtTime(mood::expMap(v, 0.02, 2) / c);
+        if (wetMode == 3) return "memory " + fmtTime(0.2 + v * 2.6);
         return "refresh " + fmtTime(mood::expMap(v, 0.05, 1.5) / c);
     }
     if (id == "mix") {
@@ -82,6 +83,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     if (id == "modWet") {
         if (wetMode == 0) return "smear " + pct(v);
         if (wetMode == 1) return "feedback " + pct(v);
+        if (wetMode == 3) return v < 0.34 ? "long cloth " + pct(v) : "short stitches " + pct(v);
         return "speed " + fmtSpeed(mood::slipSpeedMap(v));
     }
     if (id == "clock") {

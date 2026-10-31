@@ -289,3 +289,32 @@ test('listening history includes wet ambience and overdubs use clean input', () 
   };
   assert.ok(run(true) > run(false) + 0.1, 'wet delay is captured by the listening looper');
 });
+
+test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => {
+  const run = (time, modify) => {
+    const core = new MoodCore(FS);
+    core.setParam('wetMode', 3); core.setParam('mix', 1); core.setParam('dryKill', 1);
+    core.setParam('time', time); core.setParam('modWet', modify);
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    // A gated tone keeps the memory fresh, like a guitarist playing.
+    const { L } = render(core, 3, (t) => (t % 1 < 0.75 ? 0.35 * Math.sin(2 * Math.PI * 330 * t) : 0));
+    return rms(L, 1.5, 3);
+  };
+  const texture = run(0.5, 0.3);
+  assert.ok(texture > 0.005, `weave should be audible, got ${texture}`);
+  assert.ok(Math.abs(texture - run(0.5, 0.3)) < 1e-12, 'same knob position, same fabric');
+  assert.ok(Math.abs(texture - run(0.5, 0.85)) > 1e-4, 'MODIFY changes texture into rhythm');
+  assert.ok(Math.abs(texture - run(0.95, 0.3)) > 1e-4, 'TIME changes how far back the threads reach');
+});
+
+test('WEAVE stays bounded at the extremes', () => {
+  const core = new MoodCore(FS);
+  core.setParam('wetMode', 3); core.setParam('mix', 1); core.setParam('modWet', 1);
+  core.setParam('time', 1); core.setParam('clock', 0); core.setParam('spread', 1);
+  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  const { L, R } = render(core, 2, tone(196, 5));
+  for (let i = 0; i < L.length; i++) {
+    assert.ok(Number.isFinite(L[i]) && Number.isFinite(R[i]), 'finite');
+    assert.ok(Math.abs(L[i]) <= 1 && Math.abs(R[i]) <= 1, 'bounded');
+  }
+});

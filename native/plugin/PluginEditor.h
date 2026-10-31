@@ -19,6 +19,7 @@ public:
         void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
         void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
     };
+    // Segmented selector for 2..N choices; the wet channel now has four modes.
     struct ThreeWay : juce::Component {
         ThreeWay(juce::RangedAudioParameter& p, juce::StringArray labels, std::function<void()> onChange);
         void paint(juce::Graphics&) override;

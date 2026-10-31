@@ -263,6 +263,10 @@ the effect. Changes are applied at audio-block boundaries:
 | --- | --- |
 | 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
+
+CC 21 keeps the pedal's three-mode mapping exactly, so a hardware MOOD controller
+never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
+by automating the `wetMode` parameter (value 3) instead.
 | 73–76, 78 | Spread, Dry Kill, Trails, Latch, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
 | 105 | Wet freeze (`0` off, `1–127` on) |
@@ -272,12 +276,43 @@ mode, MISO, Classic, Bounce/Sweep ramping and the remaining hardware DIP switche
 or hidden-menu features are not implemented. Automatable native parameters are
 available to the host; the wet/loop footswitch parameters are momentary controls.
 
+## The whispers
+
+Every knob carries a sentence rather than a label. It should tell you which way to
+turn without telling you what is inside — the mechanism stays a little hidden, the
+consequence does not. The exact value is shown beside the knob as you move it, and
+the field guide in the browser version lists the current mode's set.
+
+| Knob | Reverb | Delay | Slip | Weave |
+| --- | --- | --- | --- | --- |
+| TIME | how long the room keeps breathing | how far back the echo remembers | how wide a slice of time is borrowed | how far back the threads reach |
+| MODIFY | how much the surface smears | how much the echo wants to stay | which way, and how fast, time slides | long cloth, or short clipped stitches |
+
+| Knob | Env | Tape | Stretch |
+| --- | --- | --- | --- |
+| LENGTH | how much of the moment gets caught | the size of the window that repeats | how wide each grain is stretched |
+| MODIFY | how softly it must speak to be caught | which way the tape runs, and how fast | how far the grains drift from now |
+
+Shared: **MIX** — *how much of what you hear is not here*; **CLOCK** — *the
+heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to hear*.
+
 ## Sound model
 
-- Wet modes: **Reverb**, **Delay** and **Slip**; loop modes: **Env**, **Tape**
-  and **Stretch**. Three-way routing selects input, input + loop, or loop for the
+- Wet modes: **Reverb**, **Delay**, **Slip** and **Weave**; loop modes: **Env**,
+  **Tape** and **Stretch**. Three-way routing selects input, input + loop, or loop for the
   wet side. When the loop is listening, its recent history includes active wet
   audio; overdubs use the clean input.
+- **WEAVE** is an addition, not a MOOD mode: a re-sampler in the spirit of the
+  [Fieldtone Weaver](https://fieldtone.co). Three threads read a three-second
+  memory at once, each with its own pitch (drawn from a root-sympathetic set of
+  intervals), direction, grain size and dropout. TIME sets how far back the
+  threads may reach; MODIFY walks the fabric from long overlapping cloth
+  (texture) into short clipped stitches (rhythm), adding holes as it goes. The
+  pattern is re-rolled from a seeded generator whenever the integer position of
+  TIME or MODIFY changes, so a given knob position always draws the same fabric
+  — chance you can return to, and no undo. Weaver's fixed capture window,
+  Texture/Rhythm switch, root-aligned pitch set and per-element levels are the
+  reference; its microphone, trigger outputs and CV are not modelled.
 - CLOCK selects 2–64 kHz steps, changing pitch, timing, bandwidth and loop
   capacity together. **SMOOTH** makes the clock continuous. The fixed 64,000
   sample history holds approximately 1–32 seconds depending on clock rate.

@@ -23,14 +23,40 @@ const PRESETS = [
   { name: 'MELT AWAY', subtitle: 'a slow-motion memory', params: { ...BASE, time: 0.67, mix: 0.58, length: 0.35, modWet: 0.75, clock: 0.7, modLoop: 0.57, wetMode: 0, routing: 2, loopMode: 2 } },
 ];
 const KNOB_DEFAULTS = { time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66 };
-const WET = ['REVERB', 'DELAY', 'SLIP'];
+const WET = ['REVERB', 'DELAY', 'SLIP', 'WEAVE'];
 const LOOP = ['ENV', 'TAPE', 'STRETCH'];
 const ROUTE = ['IN', 'BOTH', 'LOOP'];
-const DESCRIPTIONS = {
-  time: ['DECAY / SIZE', 'DELAY TIME', 'SAMPLE SIZE'],
-  modWet: ['SMEAR', 'FEEDBACK', 'SPEED / DIR'],
-  length: ['SLICE SIZE', 'LOOP LENGTH', 'SLICE SIZE'],
-  modLoop: ['SENSITIVITY', 'SPEED / DIR', 'STRETCH'],
+// Whispered hints, not labels. Each says roughly which way to turn without
+// giving away the mechanism, so there is still something to discover — and the
+// exact value appears in the readout beside the knob.
+const WHISPERS = {
+  time: [
+    'how long the room keeps breathing',
+    'how far back the echo remembers',
+    'how wide a slice of time is borrowed',
+    'how far back the threads reach',
+  ],
+  modWet: [
+    'how much the surface smears',
+    'how much the echo wants to stay',
+    'which way, and how fast, time slides',
+    'long cloth, or short clipped stitches',
+  ],
+  length: [
+    'how much of the moment gets caught',
+    'the size of the window that repeats',
+    'how wide each grain is stretched',
+  ],
+  modLoop: [
+    'how softly it must speak to be caught',
+    'which way the tape runs, and how fast',
+    'how far the grains drift from now',
+  ],
+};
+const SHARED_WHISPER = {
+  mix: 'how much of what you hear is not here',
+  clock: 'the heartbeat everything obeys',
+  routing: 'what the wet side is allowed to hear',
 };
 
 function safeRead(key) {
@@ -44,7 +70,8 @@ function sanitize(input) {
   if (!input || typeof input !== 'object') return out;
   for (const key of Object.keys(out)) {
     if (!Number.isFinite(input[key])) continue;
-    if (['wetMode', 'routing', 'loopMode'].includes(key)) out[key] = Math.round(clamp(input[key], 0, 2));
+    if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
+    else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
     else if (['trails', 'dryKill', 'latch', 'spread', 'smooth'].includes(key)) out[key] = input[key] ? 1 : 0;
     else out[key] = clamp(input[key]);
   }
@@ -56,11 +83,13 @@ function describe(id, p) {
   const ratio = rate / 64;
   if (id === 'clock') return `${rate.toFixed(rate < 10 && p.smooth ? 1 : 0)} kHz`;
   if (id === 'time') {
+    if (p.wetMode === 3) return `${timeText(0.2 + v * 2.6)} BACK`;
     if (p.wetMode === 0) return v > 0.985 ? 'INFINITE' : timeText(expMap(v, 0.4, 25) / ratio);
     return timeText(expMap(v, p.wetMode === 1 ? 0.02 : 0.05, p.wetMode === 1 ? 2 : 1.5) / ratio);
   }
   if (id === 'length' && p.loopMode === 1) return timeText((64 / rate) * expMap(v, 0.02, 1));
   if (id === 'length') return timeText(expMap(v, 0.01, p.loopMode === 0 ? 1 : 0.5) / ratio);
+  if (id === 'modWet' && p.wetMode === 3) return v < 0.34 ? 'LONG CLOTH' : v < 0.7 ? 'MIXED' : 'STITCHES';
   if (id === 'modWet' && p.wetMode === 2) {
     const magnitude = Math.pow(2, Math.round((-1 + 2 * Math.abs(v - 0.5) * 2) * 12) / 12);
     return `${v < 0.5 ? 'REV' : 'FWD'} ${magnitude.toFixed(2)}×`;
@@ -152,7 +181,8 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false }
         <g transform={`rotate(${-135 + value * 270} 60 60)`}><rect className="knob-pointer" x="57" y="32" width="6" height="22"/><rect className="knob-center" x="57" y="57" width="6" height="6"/></g>
       </svg>
     </div>
-    <div className="knob-caption"><span>{sub}</span><b>{describe(id, params)}</b></div>
+    <p className="knob-whisper">{sub}</p>
+    <div className="knob-caption"><b>{describe(id, params)}</b></div>
   </div>;
 }
 
@@ -383,23 +413,29 @@ function App() {
           <div className="control-columns">
             <div className="channel-column wet-column">
               <div className="column-title"><span className="pixel-icon">✳</span><div><strong>WET CHANNEL</strong><small>SPACE &amp; TIME</small></div><span className="column-no">A</span></div>
-              <Knob id="time" title="TIME" sub={DESCRIPTIONS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}/>
               <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)}/>
-              <Knob id="modWet" title="MODIFY" sub={DESCRIPTIONS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch}/>
+              <div className="knob-row">
+                <Knob id="time" title="TIME" sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch}/>
+              </div>
               <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
             </div>
             <div className="channel-column global-column">
               <div className="column-title"><span className="pixel-icon globe-icon">◎</span><div><strong>THE IN-BETWEEN</strong><small>SHARED CONTROLS</small></div><span className="column-no">✦</span></div>
-              <Knob id="mix" title="MIX" sub="DRY / EFFECT" value={params.mix} params={params} onChange={update} onTouch={touch}/>
+              <div className="knob-row">
+                <Knob id="mix" title="MIX" sub={SHARED_WHISPER.mix} value={params.mix} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="clock" title="CLOCK" sub={params.smooth ? 'the heartbeat, breathing freely' : SHARED_WHISPER.clock} value={params.clock} params={params} onChange={update} onTouch={touch} dark/>
+              </div>
               <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)}/>
-              <Knob id="clock" title="CLOCK" sub={params.smooth ? 'SMOOTH RATE' : 'STEPPED RATE'} value={params.clock} params={params} onChange={update} onTouch={touch} dark/>
               <div className="between-card"><div className="between-art"><span>IN</span><span className="between-dash">···▶</span><Spark size={18}/><span className="between-dash">▶···</span><span>OUT</span></div><p>ONE CLOCK. TWO WORLDS.</p></div>
             </div>
             <div className="channel-column loop-column">
               <div className="column-title"><span className="pixel-icon">◉</span><div><strong>MICRO-LOOPER</strong><small>MEMORY &amp; MOTION</small></div><span className="column-no">B</span></div>
-              <Knob id="length" title="LENGTH" sub={DESCRIPTIONS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch}/>
               <ModeSelector label="LOOP MODE" options={LOOP} value={params.loopMode} onChange={(v) => update('loopMode', v)}/>
-              <Knob id="modLoop" title="MODIFY" sub={DESCRIPTIONS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch}/>
+              <div className="knob-row">
+                <Knob id="length" title="LENGTH" sub={WHISPERS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="modLoop" title="MODIFY" sub={WHISPERS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch}/>
+              </div>
               <Footswitch kind="loop" active={loopActive} state={loopStatus} running={running} onGesture={gesture}/>
             </div>
           </div>
@@ -442,7 +478,20 @@ function App() {
     <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL MOOD MKII–INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div>
     {guideOpen && <section className="guide layout-width" aria-label="Field guide">
       <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
-      <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay or slip. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div></div>
+      <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div></div>
+      <div className="guide-whispers">
+        <b>WHAT AM I TURNING?</b>
+        <p className="guide-whispers-note">Every knob whispers rather than explains. These are the whispers for the modes you have selected; the readout beside each knob gives the exact value.</p>
+        <dl>
+          <div><dt>TIME <span>/ {WET[params.wetMode]}</span></dt><dd>{WHISPERS.time[params.wetMode]}</dd></div>
+          <div><dt>MODIFY <span>/ {WET[params.wetMode]}</span></dt><dd>{WHISPERS.modWet[params.wetMode]}</dd></div>
+          <div><dt>LENGTH <span>/ {LOOP[params.loopMode]}</span></dt><dd>{WHISPERS.length[params.loopMode]}</dd></div>
+          <div><dt>MODIFY <span>/ {LOOP[params.loopMode]}</span></dt><dd>{WHISPERS.modLoop[params.loopMode]}</dd></div>
+          <div><dt>MIX <span>/ shared</span></dt><dd>{SHARED_WHISPER.mix}</dd></div>
+          <div><dt>CLOCK <span>/ shared</span></dt><dd>{SHARED_WHISPER.clock}</dd></div>
+          <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
+        </dl>
+      </div>
       <div className="guide-disclaimer">This is an independent approximation, not the original firmware and not affiliated with Chase Bliss. Some hardware features are not implemented. <a href="https://www.chasebliss.com/mood-mkii" target="_blank" rel="noreferrer">About the original pedal ↗</a></div>
     </section>}
   </div>;
