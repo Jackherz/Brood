@@ -1,3 +1,4 @@
+#include <cmath>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
@@ -40,6 +41,7 @@ MoodProcessor::MoodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("latch", 1), "Dip: Latch", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("spread", 1), "Dip: Spread", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Dip: Smooth clock", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Dip: Tempo sync", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
           return layout;
@@ -66,7 +68,12 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     const double c = hz / mood::kCoreFs;
     if (id == "time") {
         if (wetMode == 0) return v > 0.985f ? juce::String("decay infinite") : "decay " + fmtTime(mood::expMap(v, 0.4, 25) / c);
-        if (wetMode == 1) return "delay " + fmtTime(mood::expMap(v, 0.02, 2) / c);
+        if (wetMode == 1) {
+            const auto* sy = apvts.getRawParameterValue("sync");
+            if (sy != nullptr && sy->load() > 0.5f)
+                return juce::String(mood::syncLabel(v)) + " · " + fmtTime(mood::syncSeconds(hostBpm_.load(), v));
+            return "delay " + fmtTime(mood::expMap(v, 0.02, 2) / c);
+        }
         if (wetMode == 3) return "memory " + fmtTime(0.2 + v * 2.6);
         return "refresh " + fmtTime(mood::expMap(v, 0.05, 1.5) / c);
     }
@@ -162,6 +169,8 @@ void MoodProcessor::pullParams() {
     p.loopMode = juce::roundToInt(param("loopMode"));
     p.trails = param("trails") > 0.5f; p.dryKill = param("dryKill") > 0.5f; p.latch = param("latch") > 0.5f;
     p.spread = param("spread") > 0.5f; p.smooth = param("smooth") > 0.5f;
+    p.sync = param("sync") > 0.5f;
+    p.bpm = hostBpm_.load();
     coreRight_.p = p;
 }
 
@@ -188,6 +197,20 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int n = buffer.getNumSamples();
     const int nIn = getTotalNumInputChannels(), nOut = getTotalNumOutputChannels();
     if (buffer.getNumChannels() < 1 || n == 0 || nOut < 1) { buffer.clear(); return; }
+
+    // DAW tempo for the sync dip. Static tempo, tempo ramps and offline renders
+    // all reduce to "the bpm at this block"; if the host offers none, the last
+    // known value stands (120 BPM until told otherwise).
+    if (auto* playHead = getPlayHead()) {
+        if (const auto position = playHead->getPosition()) {
+            if (const auto bpm = position->getBpm()) {
+                if (std::isfinite(*bpm) && *bpm > 5.0 && *bpm < 400.0) {
+                    hostBpm_.store(static_cast<float>(*bpm));
+                    ui.bpm.store(static_cast<float>(*bpm));
+                }
+            }
+        }
+    }
 
     // A useful subset of the MOOD MKII CC map. Changes are applied at block
     // boundaries; hosts can also automate every front-panel parameter directly.

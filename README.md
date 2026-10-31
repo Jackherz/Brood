@@ -271,6 +271,9 @@ by automating the `wetMode` parameter (value 3) instead.
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
 | 105 | Wet freeze (`0` off, `1–127` on) |
 
+Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
+it on in the editor.
+
 The browser version does not receive MIDI. MIDI clock/sync, expression, synth
 mode, MISO, Classic, Bounce/Sweep ramping and the remaining hardware DIP switches
 or hidden-menu features are not implemented. Automatable native parameters are
@@ -313,9 +316,21 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   — chance you can return to, and no undo. Weaver's fixed capture window,
   Texture/Rhythm switch, root-aligned pitch set and per-element levels are the
   reference; its microphone, trigger outputs and CV are not modelled.
+- **TEMPO SYNC** (the `SYNC` switch) turns the delay's TIME knob into a musical
+  division: 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/4D, 1/2, 1/1. In the
+  plugin the tempo comes from the DAW's playhead, every block, so tempo changes
+  are followed; in the browser you set it on the TEMPO field. The division is
+  real time, converted into core ticks at the current clock, so the echo stays on
+  the beat when CLOCK moves. The readout shows the division and its milliseconds
+  (a whole note at 120 BPM is 2 s, which the 2.1 s delay buffer clamps to 1.995 s).
 - CLOCK selects 2–64 kHz steps, changing pitch, timing, bandwidth and loop
   capacity together. **SMOOTH** makes the clock continuous. The fixed 64,000
   sample history holds approximately 1–32 seconds depending on clock rate.
+- **WET / LOOP** is a crossfade, not two independent gains, and the loop's direct
+  path is only ducked by as much as the wet path is audible. Earlier versions
+  hard-muted the direct loop whenever the wet channel was on with routing BOTH or
+  LOOP, so a balance fully to LOOP went silent; that is fixed and covered by
+  tests in both implementations.
 - **TRAILS**, **DRY KILL**, **LATCH**, **SPREAD** and wet/loop balance are
   modelled. Stereo input is kept separate with SPREAD off. The exact stereo
   movement, filters, transient response, control curves, reverb and grains differ

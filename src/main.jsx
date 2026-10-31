@@ -8,12 +8,25 @@ const clockSteps = [2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
 const clockKhz = (v, smooth) => smooth ? 2 * Math.pow(32, v) : clockSteps[Math.round(v * 10)];
 const expMap = (t, a, b) => a * Math.pow(b / a, t);
 const percent = (v) => `${Math.round(v * 100)}%`;
+
+// Tempo-sync divisions. Duplicated from src/mood-worklet.js because an
+// AudioWorklet script cannot import an ES module; test/dsp.test.js asserts the
+// two copies agree, so they cannot drift apart silently.
+const SYNC_DIVISIONS = [
+  { beats: 1 / 8, label: '1/32' }, { beats: 1 / 6, label: '1/16T' }, { beats: 1 / 4, label: '1/16' },
+  { beats: 1 / 3, label: '1/8T' }, { beats: 1 / 2, label: '1/8' }, { beats: 3 / 4, label: '1/8D' },
+  { beats: 1, label: '1/4' }, { beats: 3 / 2, label: '1/4D' }, { beats: 2, label: '1/2' }, { beats: 4, label: '1/1' },
+];
+const syncIndex = (knob) => Math.round(clamp(knob) * (SYNC_DIVISIONS.length - 1));
+const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
+const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, 2.1 * 0.95);
 const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
 
 const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
+  sync: 0, bpm: 120,
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', params: BASE },
@@ -72,7 +85,8 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth', 'sync'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
   return out;
@@ -83,6 +97,7 @@ function describe(id, p) {
   const ratio = rate / 64;
   if (id === 'clock') return `${rate.toFixed(rate < 10 && p.smooth ? 1 : 0)} kHz`;
   if (id === 'time') {
+    if (p.sync && p.wetMode === 1) return `${syncLabel(v)} · ${timeText(syncSeconds(p.bpm, v))}`;
     if (p.wetMode === 3) return `${timeText(0.2 + v * 2.6)} BACK`;
     if (p.wetMode === 0) return v > 0.985 ? 'INFINITE' : timeText(expMap(v, 0.4, 25) / ratio);
     return timeText(expMap(v, p.wetMode === 1 ? 0.02 : 0.05, p.wetMode === 1 ? 2 : 1.5) / ratio);
@@ -465,8 +480,14 @@ function App() {
             {notice && <div className="notice" role="status">✳ {notice}</div>}
             <div className="side-rule dip-heading"><span>THE LITTLE SWITCHES</span><span>ON ↑</span></div>
             <div className="dips">
-              {[['trails', 'TRAILS'], ['spread', 'SPREAD'], ['latch', 'LATCH'], ['dryKill', 'DRY KILL'], ['smooth', 'SMOOTH']].map(([id, label]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)}/>)}
+              {[['trails', 'TRAILS'], ['spread', 'SPREAD'], ['latch', 'LATCH'], ['dryKill', 'DRY KILL'], ['smooth', 'SMOOTH'], ['sync', 'SYNC']].map(([id, label]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)}/>)}
             </div>
+            <label className={`level-row tempo-row ${params.sync ? 'live' : ''}`}>
+              <span>TEMPO {params.sync ? '· SYNCED' : ''}</span>
+              <input aria-label="Tempo in BPM" type="number" min="40" max="300" step="1" value={params.bpm}
+                onChange={(e) => update('bpm', clamp(Math.round(Number(e.target.value) || 120), 40, 300))}/>
+              <b>BPM</b>
+            </label>
             <label className="level-row balance-row"><span>WET / LOOP</span><input aria-label="Wet and loop balance" type="range" min="0" max="1" step="0.01" value={params.balance} onChange={(e) => update('balance', Number(e.target.value))}/><b>{Math.round(params.balance * 100)}</b></label>
             <div className="side-note"><Heart size={15}/><span>GOOD THINGS HAPPEN<br/>WHEN YOU GET LOST.</span><Spark size={14}/></div>
           </div>
@@ -478,7 +499,8 @@ function App() {
     <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL MOOD MKII–INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div>
     {guideOpen && <section className="guide layout-width" aria-label="Field guide">
       <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
-      <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div></div>
+      <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div>
+        <div><b>05 / KEEP THE BEAT</b><p>Switch SYNC on and the delay stops being a length of time and becomes a musical division — 1/32 to a whole note, triplets and dotted notes included. The plugin follows your DAW's tempo automatically; here you set it yourself. The knob's readout shows the division and the milliseconds it lands on.</p></div></div>
       <div className="guide-whispers">
         <b>WHAT AM I TURNING?</b>
         <p className="guide-whispers-note">Every knob whispers rather than explains. These are the whispers for the modes you have selected; the readout beside each knob gives the exact value.</p>

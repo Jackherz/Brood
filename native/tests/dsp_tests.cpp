@@ -1,6 +1,7 @@
 // Property tests for the C++ core. Behavioural equivalence with the JS reference
 // is covered separately by tests/parity (bit-for-bit within float rounding).
 #include <cmath>
+#include <string>
 #include <cstdio>
 #include <functional>
 #include <vector>
@@ -104,6 +105,33 @@ int main() {
         auto o = render(c, 2, tone(196, 5));
         bool bounded = true; for (float v : o.L) if (std::fabs(v) > 1.0f) bounded = false;
         CHECK(finite(o.L) && finite(o.R) && bounded, "weave blew up");
+    }
+    {   // tempo sync puts the echo on the divisiuon, independent of the clock
+        auto echoAt = [](double time, double bpm, double clock) {
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.5;
+            c.p.sync = true; c.p.bpm = bpm; c.p.time = time; c.p.clock = clock;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 3, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
+            size_t at = 0; float best = 0;
+            for (size_t i = static_cast<size_t>(FS) + 64; i < o.L.size(); ++i)
+                if (std::fabs(o.L[i]) > best) { best = std::fabs(o.L[i]); at = i; }
+            return at / FS - 1.0;
+        };
+        CHECK(std::fabs(echoAt(2.0 / 3, 120, 1) - 0.5) < 0.01, "sync 1/4 @120 = %.3f s", echoAt(2.0 / 3, 120, 1));
+        CHECK(std::fabs(echoAt(2.0 / 3, 90, 1) - 2.0 / 3) < 0.01, "sync 1/4 @90 = %.3f s", echoAt(2.0 / 3, 90, 1));
+        CHECK(std::fabs(echoAt(1.0 / 3, 120, 1) - 1.0 / 6) < 0.01, "sync 1/8T @120 = %.3f s", echoAt(1.0 / 3, 120, 1));
+        CHECK(std::fabs(echoAt(2.0 / 3, 120, 0.4) - 0.5) < 0.01, "sync ignores the clock");
+        CHECK(std::string(mood::syncLabel(2.0 / 3)) == "1/4", "sync label");
+    }
+    {   // balance fully to LOOP always returns the loop, whatever the routing
+        for (int r = 0; r < 3; ++r) {
+            mood::Core c; c.p.routing = r; c.p.balance = 1; c.p.mix = 1; c.p.loopMode = 1;
+            c.prepare(FS); tap(c, 0);
+            render(c, 1.2, tone(220, 5), [&](mood::Core& cc, long b) { if (b == blk(1.0)) tap(cc, 1); });
+            auto o = render(c, 1, [](double) { return 0.0; });
+            const double level = rms(o.L, 0.2, 0.9);
+            CHECK(level > 0.05, "routing %d: loop silent at balance 100%% (rms %.4f)", r, level);
+        }
     }
     {   // speed maps hit musical anchors
         CHECK(mood::speedMap(0.5) == 0.5 && mood::speedMap(1) == 4 && mood::speedMap(0) == -4, "speedMap");

@@ -24,6 +24,7 @@ constexpr double kSlipBufSec = 5.5;
 constexpr double kWeaveBufSec = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
 constexpr double kWeavePitch[] = {0, 7, -5, 12, -12, 4, -17, 19};   // root-sympathetic intervals, semitones
 
+
 inline double clampd(double x, double a, double b) { return x < a ? a : x > b ? b : x; }
 inline double expMap(double t, double a, double b) { return a * std::pow(b / a, t); }
 inline double clockHz(double knob, bool smooth = false) {
@@ -35,6 +36,21 @@ inline double clockHz(double knob, bool smooth = false) {
 inline double sgn(double x) { return x > 0 ? 1.0 : x < 0 ? -1.0 : 0.0; }
 inline double jsRound(double x) { return std::floor(x + 0.5); }
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles
+
+// Tempo sync for time-based effects. The knob becomes a musical division
+// instead of a free time; the host supplies the tempo in the plugin and the
+// front panel supplies it in the browser. Mirrors SYNC_DIVISIONS in the JS.
+struct SyncDivision { double beats; const char* label; };
+constexpr SyncDivision kSyncDivisions[] = {
+    {1.0 / 8, "1/32"}, {1.0 / 6, "1/16T"}, {1.0 / 4, "1/16"}, {1.0 / 3, "1/8T"}, {1.0 / 2, "1/8"},
+    {3.0 / 4, "1/8D"}, {1.0, "1/4"}, {3.0 / 2, "1/4D"}, {2.0, "1/2"}, {4.0, "1/1"},
+};
+constexpr int kSyncCount = static_cast<int>(sizeof(kSyncDivisions) / sizeof(kSyncDivisions[0]));
+inline int syncIndex(double knob) { return static_cast<int>(jsRound(clampd(knob, 0, 1) * (kSyncCount - 1))); }
+inline const char* syncLabel(double knob) { return kSyncDivisions[syncIndex(knob)].label; }
+inline double syncSeconds(double bpm, double knob) {
+    return clampd(kSyncDivisions[syncIndex(knob)].beats * 60.0 / clampd(bpm, 20, 300), 0.01, kDelayMaxSec * 0.95);
+}
 
 // Tape follows octave steps, reverse on the left / forward on the right.
 inline double speedMap(double m, double /* legacy snap parameter */ = 0) {
@@ -311,7 +327,8 @@ struct Params {
     double time = 0.5, mix = 0.5, length = 0.75, modWet = 0.5, clock = 1, modLoop = 0.5;
     int wetMode = 0, routing = 0, loopMode = 0;   // reverb/delay/slip/weave, in/in+loop/loop, env/tape/stretch
     bool trails = false, dryKill = false, latch = false, spread = false, smooth = false;
-    double balance = 0.5;
+    bool sync = false;
+    double balance = 0.5, bpm = 120.0;
 };
 
 struct State {
@@ -613,7 +630,13 @@ private:
             wl += o[0] * modeGain[0]; wr += o[1] * modeGain[0];
         }
         double mono = 0;
-        if (modeGain[1] > 1e-4) mono += delay.tick(wIn, expMap(s.time, 0.02 * kCoreFs, 2 * kCoreFs), s.modWet, freeze) * modeGain[1];
+        if (modeGain[1] > 1e-4) {
+            // Synced: the division is real seconds, converted into core ticks at the
+            // current clock so the echoed note stays on the beat at any clock setting.
+            double delayTicks = expMap(s.time, 0.02 * kCoreFs, 2 * kCoreFs);
+            if (p.sync) delayTicks = clampd(syncSeconds(p.bpm, s.time) * clockRatio * fs, 1.0, kDelayMaxSec * kCoreFs * 0.95);
+            mono += delay.tick(wIn, delayTicks, s.modWet, freeze) * modeGain[1];
+        }
         if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(s.time, 0.05 * kCoreFs, 1.5 * kCoreFs), slipSpeedMap(s.modWet), freeze) * modeGain[2];
         if (modeGain[3] > 1e-4) {
             double o[2];
@@ -635,10 +658,14 @@ private:
             if (histCount < static_cast<int>(hist.size())) ++histCount;
         }
 
-        const double directT = p.routing == 0 || !wetOn ? 1.0 : 0.0;
-        loopDirect += (directT - loopDirect) * 0.003;
+        // The loop is heard directly, except to the extent it is ALSO arriving
+        // through an active wet channel — that would double it. The ducking follows
+        // the wet level, so turning the balance to LOOP always restores the loop in
+        // full instead of silencing both sides.
         const double bal = s.balance;
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
+        const double directT = p.routing != 0 && wetOn ? 1.0 - wetLvl : 1.0;
+        loopDirect += (directT - loopDirect) * 0.003;
         const double ld = loopOut * loopDirect * loopLvl;
         prev[0] = cur[0]; prev[1] = cur[1];
         cur[0] = wl * wetLvl + ld;

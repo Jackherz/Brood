@@ -53,6 +53,7 @@ public:
         std::atomic<bool> wetOn { false }, freeze { false };
         std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 };
         std::atomic<float> pos { 0 }, clockHz { 48000 }, peakIn { 0 }, peakOut { 0 }, load { 0 };
+        std::atomic<float> bpm { 120.f };
         std::atomic<uint32_t> histCycles { 0 };
         std::atomic<uint32_t> waveVersion { 0 };
     } ui;
@@ -67,6 +68,7 @@ private:
 
     mood::Core core_, coreRight_;
     bool lastWetSw_ = false, lastLoopSw_ = false;
+    std::atomic<float> hostBpm_ { 120.f };   // last tempo the host reported
     std::atomic<int> restoreWet_ { -1 };
     std::vector<float> inputLeft_, inputRight_, scratchLeft_, scratchRight_;
     int dubBlocks_ = 0;

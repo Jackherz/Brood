@@ -1,0 +1,22 @@
+# TEMPO SYNC: the delay division follows bpm, and changes of bpm re-land the echo
+# on the beat. Also crosses the balance extreme that used to silence the loop.
+rate 48000
+seconds 6
+0 param wetMode 1
+0 param loopMode 1
+0 param routing 1
+0 param sync 1
+0 param bpm 120
+0 param modWet 0.6
+0 param time 0.6666667
+0 fs wet down
+2 fs wet up
+500 param bpm 90
+900 param time 0.3333333
+1200 param clock 0.6
+1400 param bpm 140
+500 fs loop down
+700 fs loop up
+1600 param balance 1
+1900 param balance 0.5
+2200 param sync 0

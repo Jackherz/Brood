@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, CORE_FS } = require('../src/mood-worklet.js');
+const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -317,4 +317,68 @@ test('WEAVE stays bounded at the extremes', () => {
     assert.ok(Number.isFinite(L[i]) && Number.isFinite(R[i]), 'finite');
     assert.ok(Math.abs(L[i]) <= 1 && Math.abs(R[i]) <= 1, 'bounded');
   }
+});
+
+test('tempo sync puts the delay on the musical division, at any clock', () => {
+  const echoAt = (time, bpm, clock) => {
+    const core = new MoodCore(FS);
+    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('dryKill', 1); core.setParam('modWet', 0.5);
+    core.setParam('sync', 1); core.setParam('bpm', bpm); core.setParam('time', time); core.setParam('clock', clock);
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    const n = FS * 3;
+    const click = new Float32Array(n); click[FS] = 0.8;
+    const L = new Float32Array(n), R = new Float32Array(n);
+    core.process(click, L, R, n);
+    let best = 0, at = 0;
+    for (let i = FS + 64; i < n; i++) if (Math.abs(L[i]) > best) { best = Math.abs(L[i]); at = i; }
+    return (at - FS) / FS;
+  };
+  // 1/4 at 120 BPM is 0.5 s; at 90 BPM it is 0.667 s; 1/8T at 120 is 0.167 s.
+  assert.ok(Math.abs(echoAt(2 / 3, 120, 1) - 0.5) < 0.01, '1/4 at 120 bpm');
+  assert.ok(Math.abs(echoAt(2 / 3, 90, 1) - 2 / 3) < 0.01, '1/4 at 90 bpm');
+  assert.ok(Math.abs(echoAt(1 / 3, 120, 1) - 1 / 6) < 0.01, '1/8T at 120 bpm');
+  // The clock changes the core rate, not the musical time.
+  assert.ok(Math.abs(echoAt(2 / 3, 120, 0.4) - 0.5) < 0.01, '1/4 at 120 bpm with a low clock');
+  assert.strictEqual(syncLabel(2 / 3), '1/4');
+});
+
+test('sync off leaves TIME as a free time', () => {
+  const core = new MoodCore(FS);
+  core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('dryKill', 1); core.setParam('modWet', 0.5);
+  core.setParam('sync', 0);
+  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  const n = FS * 2, click = new Float32Array(n); click[FS] = 0.8;
+  const L = new Float32Array(n), R = new Float32Array(n);
+  core.process(click, L, R, n);
+  let best = 0, at = 0;
+  for (let i = FS + 64; i < n; i++) if (Math.abs(L[i]) > best) { best = Math.abs(L[i]); at = i; }
+  assert.ok(Math.abs((at - FS) / FS - 0.2) < 0.02, 'free delay at the default knob');
+});
+
+test('balance at LOOP always returns the loop, whatever the routing', () => {
+  for (const routing of [0, 1, 2]) {
+    const core = new MoodCore(FS);
+    core.setParam('routing', routing); core.setParam('balance', 1); core.setParam('mix', 1); core.setParam('loopMode', 1);
+    render(core, 1.2, tone(220, 5));
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    const { L } = render(core, 1, () => 0);
+    // Silent input, loop playing, wet engaged, balance fully to LOOP: must be audible.
+    assert.ok(rms(L, 0.2, 0.9) > 0.05, `routing ${routing}: loop silent at balance 100% (rms ${rms(L, 0.2, 0.9)})`);
+  }
+});
+
+test('the tempo divisions in the UI and the worklet agree', () => {
+  // main.jsx keeps its own copy because an AudioWorklet cannot import ES modules;
+  // evaluate that copy and compare it with the worklet's table.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '../src/main.jsx'), 'utf8');
+  const start = src.indexOf('const SYNC_DIVISIONS');
+  const end = src.indexOf('const syncSeconds');
+  assert.ok(start > 0 && end > start, 'could not find the UI division table');
+  const body = `${src.slice(start, end)}\n return SYNC_DIVISIONS;`;
+  const ui = new Function('clamp', body)((v, a = 0, b = 1) => Math.min(b, Math.max(a, v)));
+  assert.deepStrictEqual(ui.map((d) => d.label), SYNC_DIVISIONS.map((d) => d.label));
+  assert.deepStrictEqual(ui.map((d) => d.beats), SYNC_DIVISIONS.map((d) => d.beats));
 });

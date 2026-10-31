@@ -29,6 +29,18 @@ const DELAY_MAX_SEC = 2.1;
 const SLIP_BUF_SEC = 5.5;
 const WEAVE_BUF_SEC = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
 const WEAVE_PITCH = [0, 7, -5, 12, -12, 4, -17, 19];   // root-sympathetic intervals, semitones
+
+// Tempo sync for time-based effects. The knob becomes a musical division
+// instead of a free time; the host supplies the tempo in the plugin and the
+// front panel supplies it in the browser.
+const SYNC_DIVISIONS = [
+  { beats: 1 / 8, label: '1/32' }, { beats: 1 / 6, label: '1/16T' }, { beats: 1 / 4, label: '1/16' },
+  { beats: 1 / 3, label: '1/8T' }, { beats: 1 / 2, label: '1/8' }, { beats: 3 / 4, label: '1/8D' },
+  { beats: 1, label: '1/4' }, { beats: 3 / 2, label: '1/4D' }, { beats: 2, label: '1/2' }, { beats: 4, label: '1/1' },
+];
+const syncIndex = (knob) => Math.round(clamp(knob, 0, 1) * (SYNC_DIVISIONS.length - 1));
+const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
+const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, DELAY_MAX_SEC * 0.95);
 const clockHz = (knob, smooth = false) => smooth
   ? expMap(clamp(knob, 0, 1), CLOCK_MIN_HZ, CLOCK_MAX_HZ)
   : CLOCK_STEPS[Math.round(clamp(knob, 0, 1) * (CLOCK_STEPS.length - 1))];
@@ -328,6 +340,7 @@ class MoodCore {
       time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5,
       wetMode: 0, routing: 0, loopMode: 0,
       trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
+      sync: 0, bpm: 120,
     };
     // host-rate smoothed knobs
     this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5 };
@@ -572,7 +585,11 @@ class MoodCore {
     }
     let mono = 0;
     if (this.modeGain[1] > 1e-4) {
-      mono += this.delay.tick(wIn, expMap(s.time, 0.02 * fs, 2 * fs), s.modWet, freeze) * this.modeGain[1];
+      // Synced: the division is real seconds, converted into core ticks at the
+      // current clock so the echoed note stays on the beat at any clock setting.
+      let delayTicks = expMap(s.time, 0.02 * fs, 2 * fs);
+      if (p.sync) delayTicks = clamp(syncSeconds(p.bpm, s.time) * this.clockRatio * this.fs, 1, DELAY_MAX_SEC * fs * 0.95);
+      mono += this.delay.tick(wIn, delayTicks, s.modWet, freeze) * this.modeGain[1];
     }
     if (this.modeGain[2] > 1e-4) {
       mono += this.slip.tick(wIn, expMap(s.time, 0.05 * fs, 1.5 * fs), slipSpeedMap(s.modWet), freeze) * this.modeGain[2];
@@ -597,11 +614,14 @@ class MoodCore {
       if (this.histCount < this.hist.length) this.histCount++;
     }
 
-    // loop heard directly unless it is routed through an active wet channel
-    const directT = p.routing === 0 || !wetOn ? 1 : 0;
-    this.loopDirect += (directT - this.loopDirect) * 0.003;
+    // The loop is heard directly, except to the extent it is ALSO arriving
+    // through an active wet channel — that would double it. The ducking follows
+    // the wet level, so turning the balance to LOOP always restores the loop in
+    // full instead of silencing both sides.
     const bal = s.balance;
     const wetLvl = Math.min(1, 2 * (1 - bal)), loopLvl = Math.min(1, 2 * bal);
+    const directT = p.routing !== 0 && wetOn ? 1 - wetLvl : 1;
+    this.loopDirect += (directT - this.loopDirect) * 0.003;
     const ld = loopOut * this.loopDirect * loopLvl;
     this.prev[0] = this.cur[0]; this.prev[1] = this.cur[1];
     this.cur[0] = wl * wetLvl + ld;
@@ -771,5 +791,5 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }

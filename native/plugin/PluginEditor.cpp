@@ -257,7 +257,9 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
     balance.onValueChange = [this] { touch("balance"); };
     addAndMakeVisible(balance);
     balanceAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "balance", balance);
-    const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"dryKill", "Dry kill"}, {"latch", "Latch"}, {"spread", "Spread"}, {"smooth", "Smooth"}};
+    const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"dryKill", "Dry"}, {"latch", "Latch"},
+                                                          {"spread", "Spread"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
+    // Six switches is tight: use the short labels the browser panel uses too.
     for (const auto& [id, label] : dipDefs) {
         Dip d { std::make_unique<juce::ToggleButton>(label), nullptr };
         const juce::String lab = label;
@@ -353,7 +355,7 @@ void MoodEditor::resized() {
     auto dipArea = side.removeFromTop(132).reduced(14, 10);
     dipArea.removeFromTop(18);
     auto dipRow = dipArea.removeFromTop(64);
-    const int dw = dipRow.getWidth() / 5;
+    const int dw = dipRow.getWidth() / static_cast<int>(dips.size());
     for (auto& d : dips) d.button->setBounds(dipRow.removeFromLeft(dw));
     dipArea.removeFromTop(4);
     balance.setBounds(dipArea.removeFromTop(24).withTrimmedLeft(66).withTrimmedRight(34));
