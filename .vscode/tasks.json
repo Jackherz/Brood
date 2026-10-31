@@ -1,0 +1,146 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Brood Mood: build + install",
+      "detail": "Builds the VST3 (and AU + standalone on macOS), then copies the bundles into your plug-in folders.",
+      "type": "shell",
+      "command": "bash scripts/build-plugin.sh --install",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Brood Mood: build only",
+      "detail": "Builds without installing anything.",
+      "type": "shell",
+      "command": "bash scripts/build-plugin.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Brood Mood: build universal + install",
+      "detail": "macOS only: one bundle containing arm64 and x86_64 slices.",
+      "type": "shell",
+      "command": "bash scripts/build-plugin.sh --install --universal",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Brood Mood: clean build + install",
+      "detail": "Deletes native/build first. Use after an interrupted build or a CMake settings change.",
+      "type": "shell",
+      "command": "bash scripts/build-plugin.sh --clean --install",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Brood Mood: doctor (DAW cannot see it?)",
+      "detail": "Checks the build, the plug-in folders, the signature and Ableton's own log. Changes nothing.",
+      "type": "shell",
+      "command": "bash scripts/diagnose-plugin.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Brood Mood: clean",
+      "detail": "Deletes native/build (the JUCE download is kept, Caches are not).",
+      "type": "shell",
+      "command": "rm -rf native/build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Brood Mood: run tests",
+      "detail": "Native DSP tests, then the JavaScript DSP suite.",
+      "type": "shell",
+      "command": "bash scripts/build-plugin.sh --test",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Brood Mood: open the standalone app",
+      "detail": "Builds, then launches the standalone version so you can play without a DAW.",
+      "type": "shell",
+      "command": "bash scripts/build-plugin.sh && open \"native/build/plugin/MoodEmu_artefacts/Release/Standalone/Brood Mood.app\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Brood Mood: start the browser version",
+      "detail": "Runs the React/WebAudio version at the URL printed by Vite.",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    }
+  ]
+}

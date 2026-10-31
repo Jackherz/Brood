@@ -1,0 +1,7 @@
+# A held recording longer than the 64k-sample ring must saturate at capacity
+rate 48000
+seconds 4
+0 param clock 1
+300 fs loop down
+1900 fs loop up
+2100 param length 0.4

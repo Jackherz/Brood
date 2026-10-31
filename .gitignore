@@ -1,0 +1,7 @@
+node_modules/
+dist/
+build/
+native/build/
+.DS_Store
+*.zip
+assets/fonts/*.ttf
