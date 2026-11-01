@@ -19,6 +19,8 @@ static void setParam(mood::Params& p, const std::string& n, double v) {
     else if (n == "trails") p.trails = v != 0; else if (n == "dryKill") p.dryKill = v != 0; else if (n == "latch") p.latch = v != 0;
     else if (n == "spread") p.spread = v != 0; else if (n == "smooth") p.smooth = v != 0; else if (n == "balance") p.balance = v;
     else if (n == "sync") p.sync = v != 0; else if (n == "bpm") p.bpm = v;
+    else if (n == "loopStart") p.loopStart = v; else if (n == "loopEnd") p.loopEnd = v;
+    else if (n == "memory") p.memory = v;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }
 }
 

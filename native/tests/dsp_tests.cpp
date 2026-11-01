@@ -60,7 +60,9 @@ int main() {
             mood::Core c; c.p.clock = knob; c.prepare(FS);
             const double secs = knob == 1.0 ? 1.0 : 32.0;
             render(c, secs + 0.5, tone(330, 100), [&](mood::Core& cc, long b) { if (b == blk(secs + 0.4)) tap(cc, 1); });
-            CHECK(c.capturedLength() == mood::kLoopSamples - 1, "clock %.0f: captured %d", knob, c.capturedLength());
+            // Capacity is in core samples, so 64 000 of them is 1 s at 64 kHz and 32 s at 2 kHz.
+            const double got = c.capturedLength() / mood::clockHz(knob);
+            CHECK(std::fabs(got - (knob == 1.0 ? 1.0 : 32.0)) < 0.01, "clock %.0f: captured %.3f s", knob, got);
         }
     }
     {   // hold records a fresh loop of the held length
@@ -105,6 +107,30 @@ int main() {
         auto o = render(c, 2, tone(196, 5));
         bool bounded = true; for (float v : o.L) if (std::fabs(v) > 1.0f) bounded = false;
         CHECK(finite(o.L) && finite(o.R) && bounded, "weave blew up");
+    }
+    {   // MEMORY raises the capture ceiling; 0 keeps the pedal's clock-derived rule
+        auto capturedSeconds = [](double memory, double clockKnob) {
+            mood::Core c; c.p.memory = memory; c.p.clock = clockKnob; c.prepare(FS);
+            render(c, 40, tone(330, 100), [&](mood::Core& cc, long b) { if (b == blk(39.0)) tap(cc, 1); });
+            return c.capturedLength() / mood::clockHz(clockKnob);
+        };
+        CHECK(std::fabs(capturedSeconds(0, 1) - 1.0) < 0.02, "pedal rule @64k = %.2f s", capturedSeconds(0, 1));
+        CHECK(std::fabs(capturedSeconds(0, 0) - 32.0) < 0.1, "pedal rule @2k = %.2f s", capturedSeconds(0, 0));
+        CHECK(std::fabs(capturedSeconds(1, 1) - 30.0) < 0.05, "memory max = %.2f s", capturedSeconds(1, 1));
+        CHECK(capturedSeconds(0.5, 1) > 4.0 && capturedSeconds(0.5, 1) < 7.0, "memory mid = %.2f s", capturedSeconds(0.5, 1));
+    }
+    {   // START/END trim the captured loop; an inverted pair still leaves a region
+        mood::Core c; c.prepare(FS); tap(c, 1);
+        render(c, 3, tone(330, 10), [&](mood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
+        const auto full = c.state();
+        CHECK(full.winStart == 0 && full.winLen == c.capturedLength(), "untrimmed window is the whole loop");
+        c.p.loopStart = 0.5; c.p.loopEnd = 1.0;
+        const auto half = c.state();
+        CHECK(std::abs(half.winStart - c.capturedLength() / 2) <= 1, "trim start %d of %d", half.winStart, c.capturedLength());
+        CHECK(std::abs(half.winLen - c.capturedLength() / 2) <= 1, "trim length %d", half.winLen);
+        c.p.loopStart = 0.9; c.p.loopEnd = 0.1;
+        const auto swapped = c.state();
+        CHECK(swapped.winLen > 0 && swapped.winLen < c.capturedLength(), "inverted trim yields a region");
     }
     {   // tempo sync puts the echo on the divisiuon, independent of the clock
         auto echoAt = [](double time, double bpm, double clock) {

@@ -21,12 +21,13 @@ const syncIndex = (knob) => Math.round(clamp(knob) * (SYNC_DIVISIONS.length - 1)
 const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
 const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, 2.1 * 0.95);
 const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
+const memoryText = (v) => v <= 0.001 ? 'PEDAL' : `${expMap(v, 1, 30).toFixed(1)}s`;
 
 const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
-  sync: 0, bpm: 120,
+  sync: 0, bpm: 120, memory: 0, loopStart: 0, loopEnd: 1,
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', params: BASE },
@@ -114,6 +115,9 @@ function describe(id, p) {
     return `${v < 0.5 ? 'REV' : 'FWD'} ${magnitude}×`;
   }
   if (id === 'modLoop' && p.loopMode === 2 && Math.abs(v - 0.5) < 0.03) return 'FROZEN';
+  if (id === 'memory') return v <= 0.001 ? `PEDAL · ${timeText(64 / rate)}` : `UP TO ${timeText(expMap(v, 1, 30))}`;
+  if (id === 'loopStart') return `FROM ${percent(v)} OF THE BUFFER`;
+  if (id === 'loopEnd') return `TO ${percent(v)} OF THE BUFFER`;
   return percent(v);
 }
 
@@ -286,21 +290,49 @@ function LoopWave({ wave, state }) {
     g.strokeStyle = '#d5d4cc'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(0, h / 2 + .5); g.lineTo(w, h / 2 + .5); g.stroke();
     if (wave?.peaks && state?.lsrc) {
-      const peaks = wave.peaks, start = state.winStart / state.lsrc;
-      g.fillStyle = '#e2e1d9'; g.fillRect(0, 0, start * w, h);
+      const peaks = wave.peaks;
+      const start = clamp(state.winStart / state.lsrc), end = clamp((state.winStart + state.winLen) / state.lsrc);
+      // Trimmed-away audio stays visible but recedes; the two edges are drawn as markers.
+      g.fillStyle = '#e6e5dd';
+      g.fillRect(0, 0, start * w, h);
+      g.fillRect(end * w, 0, w - end * w, h);
       for (let i = 0; i < peaks.length; i++) {
         const x = Math.floor(i / peaks.length * w), amplitude = Math.max(1, Math.min(1, peaks[i] * 2) * (h / 2 - 3));
-        g.fillStyle = i / peaks.length < start ? '#a6a69f' : '#151512';
+        const inside = i / peaks.length >= start && i / peaks.length < end;
+        g.fillStyle = inside ? '#151512' : '#b3b3ab';
         g.fillRect(x, Math.floor(h / 2 - amplitude), 2, Math.max(2, Math.floor(amplitude * 2)));
       }
+      g.fillStyle = '#151512';
+      g.fillRect(start * w, 0, 2, h);
+      g.fillRect(Math.max(0, end * w - 2), 0, 2, h);
       const playhead = clamp((state.winStart + state.pos) / state.lsrc) * w;
-      g.fillStyle = '#151512'; g.fillRect(playhead, 0, 2, h);
+      g.fillRect(playhead, 0, 2, h);
     } else {
       g.fillStyle = '#9a9a92';
       for (let x = 6; x < w; x += 12) g.fillRect(x, h / 2, 2, 2);
     }
   }, [wave, state]);
   return <canvas ref={canvas} width="620" height="46" aria-label={wave ? 'Captured loop waveform' : 'No loop captured yet'} />;
+}
+
+function TrimStrip({ params, onChange }) {
+  const controls = [
+    ['memory', 'MEMORY', memoryText(params.memory), 'how much of the recent past the looper may keep'],
+    ['loopStart', 'START', `${Math.round(params.loopStart * 100)}%`, 'where the memory begins to play back'],
+    ['loopEnd', 'END', `${Math.round(params.loopEnd * 100)}%`, 'where it lets the moment go'],
+  ];
+  return <div className="trim-strip" role="group" aria-label="Loop trim">
+    <span className="trim-title">TRIM<br/>THE<br/>MOMENT</span>
+    <div className="trim-row">
+      {controls.map(([id, label, value, hint]) => (
+        <label key={id} className="trim-control" title={hint}>
+          <span>{label}</span>
+          <input type="range" min="0" max="1" step="0.005" value={params[id]} aria-label={`${label}: ${hint}`} onChange={(event) => onChange(id, Number(event.target.value))}/>
+          <b>{value}</b>
+        </label>
+      ))}
+    </div>
+  </div>;
 }
 
 function Dip({ label, checked, onClick }) {
@@ -357,7 +389,7 @@ function App() {
   const patches = userPatch ? [...PRESETS, { name: 'YOUR PATCH', subtitle: 'saved on this device', params: userPatch }] : PRESETS;
   const loadPatch = (index) => {
     const n = (index + patches.length) % patches.length;
-    setPreset(n); setParams({ ...patches[n].params }); setNotice(`Loaded ${patches[n].name.toLowerCase()}.`);
+    setPreset(n); setParams(sanitize(patches[n].params)); setNotice(`Loaded ${patches[n].name.toLowerCase()}.`);
   };
   const savePatch = () => {
     const saved = sanitize(params);
@@ -459,6 +491,7 @@ function App() {
             <div className="loop-wave"><LoopWave wave={wave} state={state}/>{!wave && <span>YOUR LITTLE MOMENTS LIVE HERE_</span>}</div>
             <div className="capture-end"><Eyes/><span>LISTEN<br/>CLOSER.</span></div>
           </div>
+          <TrimStrip params={params} onChange={update}/>
         </section>
 
         <aside className="side-panel" aria-label="Audio input and options">
@@ -512,6 +545,8 @@ function App() {
           <div><dt>MIX <span>/ shared</span></dt><dd>{SHARED_WHISPER.mix}</dd></div>
           <div><dt>CLOCK <span>/ shared</span></dt><dd>{SHARED_WHISPER.clock}</dd></div>
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
+          <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
+          <div><dt>START / END <span>/ loop trim</span></dt><dd>The two edges of what you kept. Move START in and you begin later in the moment; pull END back and you let go sooner. Everything outside the pair still shows in the waveform, dimmed, so you can hear where you were.</dd></div>
         </dl>
       </div>
       <div className="guide-disclaimer">This is an independent approximation, not the original firmware and not affiliated with Chase Bliss. Some hardware features are not implemented. <a href="https://www.chasebliss.com/mood-mkii" target="_blank" rel="noreferrer">About the original pedal ↗</a></div>

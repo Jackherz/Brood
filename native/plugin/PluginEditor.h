@@ -67,12 +67,25 @@ private:
     juce::TextButton loadButton { "Load file..." };
     juce::Slider inputGain;
     juce::Slider balance;
+    // Loop edit: capture ceiling, and the trim markers that decide what plays.
+    juce::Slider memory, loopStart, loopEnd;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, startAtt, endAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::vector<Dip> dips;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> pedalArea, lcdArea, ledWet, ledLoop, meterArea;
+    // All of these are in DESIGN coordinates (the 900x640 panel); view maps them
+    // into the real window. Paint and layout both work in that space.
+    juce::Rectangle<int> pedalArea, lcdArea, ledWet, ledLoop, meterArea, loopArea;
+    juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
+    juce::Rectangle<int> inputGainDesign, balanceDesign;
+    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopStartDesign, loopEndDesign;
+    // The panel is drawn at a fixed design size and scaled to the window, so the
+    // pixel-art proportions survive any window the host gives us.
+    float viewScale = 1.f;
+    juce::AffineTransform view;
+    void repaintDesign(const juce::Rectangle<int>& designArea) { repaint(designArea.transformedBy(view)); }
     juce::String lcdLabel { "READY" }, lcdValue { "Tap L to loop, A for wet" }, lastTouched;
     juce::String lcdMeta;
     bool ledWetOn = false, ledLoopOn = false, blink = false;

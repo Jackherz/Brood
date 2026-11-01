@@ -192,7 +192,8 @@ test('a hold longer than loop capacity captures the newest full buffer', () => {
     [blk(1.8)]: (c) => c.footswitch('loop', 'up'),
   });
   assert.equal(core.state().loop, 'play');
-  assert.equal(core.lsrc, 63999);
+  // Capacity is counted in core samples: 64 000 of them is 1 s at 64 kHz.
+  assert.equal(core.lsrc, 64000);
 });
 
 test('tap while playing stops the loop; hold while playing overdubs', () => {
@@ -228,7 +229,7 @@ test('loop buffer length is set by the clock (fixed sample count)', () => {
     render(core, secs + 0.5, tone(330, 100), {
       [blk(secs + 0.4)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); },
     });
-    assert.strictEqual(core.lsrc, 63999, `clock ${knob}`);
+    assert.ok(Math.abs(core.lsrc / clockHz(knob) - secs) < 0.02, `clock ${knob}`);
   }
 });
 
@@ -381,4 +382,38 @@ test('the tempo divisions in the UI and the worklet agree', () => {
   const ui = new Function('clamp', body)((v, a = 0, b = 1) => Math.min(b, Math.max(a, v)));
   assert.deepStrictEqual(ui.map((d) => d.label), SYNC_DIVISIONS.map((d) => d.label));
   assert.deepStrictEqual(ui.map((d) => d.beats), SYNC_DIVISIONS.map((d) => d.beats));
+});
+
+test('LOOP MEMORY raises the capture ceiling, 0 keeps the pedal rule', () => {
+  const capturedSeconds = (memory, clock) => {
+    const core = new MoodCore(FS);
+    core.setParam('memory', memory); core.setParam('clock', clock);
+    render(core, 36, () => 0.1);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    return core.lsrc / clockHz(clock);
+  };
+  assert.ok(Math.abs(capturedSeconds(0, 1) - 1) < 0.02, '1 s at 64 kHz');
+  assert.ok(Math.abs(capturedSeconds(0, 0) - 32) < 0.2, '32 s at 2 kHz');
+  assert.ok(Math.abs(capturedSeconds(1, 1) - 30) < 0.05, '30 s ceiling');
+  assert.ok(capturedSeconds(0.5, 1) > 4 && capturedSeconds(0.5, 1) < 7, 'mid memory');
+  // MEMORY can never exceed the 30 s promise, even at the lowest clock.
+  assert.ok(capturedSeconds(1, 0) <= 30.05, 'never longer than the ceiling');
+});
+
+test('LOOP START and END trim the region that plays', () => {
+  const core = new MoodCore(FS);
+  render(core, 3, () => 0.2);
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  const full = core.state();
+  assert.strictEqual(full.winStart, 0);
+  assert.strictEqual(full.winLen, core.lsrc);
+  core.setParam('loopStart', 0.5); core.setParam('loopEnd', 1);
+  render(core, 0.1, () => 0);
+  const half = core.state();
+  assert.ok(Math.abs(half.winStart - core.lsrc / 2) <= 1, 'starts at the marker');
+  assert.ok(Math.abs(half.winLen - core.lsrc / 2) <= 1, 'plays only the marked part');
+  core.setParam('loopStart', 0.9); core.setParam('loopEnd', 0.1);
+  render(core, 0.1, () => 0);
+  const swapped = core.state();
+  assert.ok(swapped.winLen > 0 && swapped.winLen < core.lsrc, 'inverted markers still leave a region');
 });

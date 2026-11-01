@@ -20,7 +20,11 @@ const expMap = (t, a, b) => a * Math.pow(b / a, t);
 const HOLD_SEC = 0.35;        // footswitch hold threshold
 // Micro-looper buffer is a fixed number of samples, so CLOCK sets loop length:
 // 64 000 samples = 1 s at 64 kHz … 32 s at 2 kHz (MKII doubled the MKI's 0.5–16 s).
-const LOOP_SAMPLES = 64000;
+const LOOP_SAMPLES = 64000;      // pedal capacity, in core samples (1 s @ 64 kHz … 32 s @ 2 kHz)
+// The buffer is allocated for the longest loop the panel allows; MEMORY caps how
+// much of it a capture may use, so the pedal default still applies at 0.
+const MAX_LOOP_SECONDS = 32;
+const MAX_LOOP_SAMPLES = LOOP_SAMPLES * MAX_LOOP_SECONDS;
 const CLOCK_MIN_HZ = 2000;
 const CLOCK_MAX_HZ = 64000;
 const CORE_FS = 64000;       // buffer timings are defined at the pedal’s 64 kHz clock
@@ -341,6 +345,7 @@ class MoodCore {
       wetMode: 0, routing: 0, loopMode: 0,
       trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
+      loopStart: 0, loopEnd: 1, memory: 0,
     };
     // host-rate smoothed knobs
     this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5 };
@@ -368,7 +373,7 @@ class MoodCore {
     this.loopDirect = 1;
 
     // loop channel
-    const nLoop = LOOP_SAMPLES;
+    const nLoop = MAX_LOOP_SAMPLES;
     this.histCycles = 0;
     this.hist = new Float32Array(nLoop);
     this.histW = 0;
@@ -445,8 +450,16 @@ class MoodCore {
   }
 
   // Copy the most recent n samples of history into the loop buffer and play.
+  // How much history a capture may use, in core samples. MEMORY 0 keeps the
+  // pedal's clock-derived capacity; above that it is 1–30 s of real time.
+  maxCaptureSamples() {
+    const clock = clockHz(this.s.clock, this.p.smooth);
+    const user = this.p.memory > 0.001 ? expMap(clamp(this.p.memory), 1, 30) * clock : LOOP_SAMPLES;
+    return Math.min(MAX_LOOP_SAMPLES - 1, Math.max(64, Math.min(user, MAX_LOOP_SECONDS * clock)));
+  }
+
   capture(n) {
-    n = Math.min(n, this.hist.length - 1, this.histCount);
+    n = Math.min(n, this.hist.length - 1, this.histCount, this.maxCaptureSamples());
     if (n < 64) return;
     const N = this.hist.length;
     let r = this.histW - n; if (r < 0) r += N;
@@ -466,10 +479,18 @@ class MoodCore {
 
   // Loop region being played. In TAPE, LENGTH trims the loop to its most recent
   // part; in ENV and STRETCH LENGTH sets slice size, so the whole capture plays.
+  // Playback region of the captured loop: START/END trim the capture, then TAPE
+  // length takes its window from the tail of that region.
   loopWindow() {
-    if (this.p.loopMode !== 1) return { W: Math.max(64, this.lsrc), start: 0 };
-    const W = Math.max(64, Math.floor(this.lsrc * expMap(this.s.length, 0.02, 1)));
-    return { W, start: this.lsrc - W };
+    const a = Math.min(clamp(this.p.loopStart), 0.98);
+    const b = Math.max(clamp(this.p.loopEnd), 0.02);
+    let r0 = Math.floor(this.lsrc * Math.min(a, b));
+    let len = Math.floor(this.lsrc * Math.max(a, b)) - r0;
+    if (!(len > 0) || len < 64) { r0 = 0; len = Math.max(64, this.lsrc); }
+    len = Math.min(len, this.lsrc - r0);
+    if (this.p.loopMode !== 1) return { W: Math.max(64, len), start: r0 };
+    const W = Math.max(64, Math.floor(len * expMap(this.s.length, 0.02, 1)));
+    return { W, start: r0 + len - W };
   }
 
   rand() { this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0; return this.rng / 4294967296; }

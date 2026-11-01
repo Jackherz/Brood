@@ -42,6 +42,14 @@ MoodProcessor::MoodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("spread", 1), "Dip: Spread", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Dip: Smooth clock", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Dip: Tempo sync", false));
+          auto loopParam = [this](const char* id, const char* name, float def) {
+              return std::make_unique<APF>(juce::ParameterID(id, 1), name, juce::NormalisableRange<float>(0.f, 1.f), def,
+                  juce::AudioParameterFloatAttributes().withStringFromValueFunction(
+                      [this, id = juce::String(id)](float v, int) { return describe(id, v); }));
+          };
+          layout.add(loopParam("memory", "Loop memory", 0.f));
+          layout.add(loopParam("loopStart", "Loop start", 0.f));
+          layout.add(loopParam("loopEnd", "Loop end", 1.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
           return layout;
@@ -102,6 +110,12 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         return "stretch " + fmtSpeed(mood::stretchMap(v)) + ", same pitch";
     }
     if (id == "balance") return "wet " + pct(std::min(1.0, 2.0 * (1 - v))) + " / loop " + pct(std::min(1.0, 2.0 * v));
+    if (id == "memory") {
+        if (v <= 0.001f) return "pedal " + fmtTime(mood::kLoopSamples / hz);
+        return "up to " + fmtTime(mood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
+    }
+    if (id == "loopStart") return "from " + pct(v);
+    if (id == "loopEnd") return "to " + pct(v);
     return juce::String(v, 3);
 }
 
@@ -170,6 +184,7 @@ void MoodProcessor::pullParams() {
     p.trails = param("trails") > 0.5f; p.dryKill = param("dryKill") > 0.5f; p.latch = param("latch") > 0.5f;
     p.spread = param("spread") > 0.5f; p.smooth = param("smooth") > 0.5f;
     p.sync = param("sync") > 0.5f;
+    p.memory = param("memory"); p.loopStart = param("loopStart"); p.loopEnd = param("loopEnd");
     p.bpm = hostBpm_.load();
     coreRight_.p = p;
 }
@@ -235,6 +250,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
             else if (cc == 105) midiFreeze = value != 0;
+            else if (cc == 20) { if (auto* parameter = apvts.getParameter("memory")) parameter->setValueNotifyingHost(value / 127.f); }
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }
     }

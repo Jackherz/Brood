@@ -70,14 +70,17 @@ MoodEditor::KnobLook::KnobLook() {
 }
 
 void MoodEditor::KnobLook::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider& slider) {
-    const auto area = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h)).reduced(13);
+    // Proportional so the knob looks the same at every window size: the tick marks
+    // used to sit a fixed distance outside a shrinking face and got clipped.
+    const float u = std::min(static_cast<float>(w), static_cast<float>(h)) / 104.f;
+    const auto area = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h)).reduced(13.f * u);
     const float r = std::min(area.getWidth(), area.getHeight()) / 2;
     const auto c = area.getCentre();
     g.setColour(kInk);
     for (int i = 0; i <= 20; ++i) {
         const float a = a0 + (a1 - a0) * static_cast<float>(i) / 20.f;
-        const float r1 = r + (i % 5 == 0 ? 3.f : 5.f), r2 = r + 9.f;
-        g.drawLine(c.x + r1 * std::sin(a), c.y - r1 * std::cos(a), c.x + r2 * std::sin(a), c.y - r2 * std::cos(a), i % 5 == 0 ? 1.7f : 1.f);
+        const float r1 = r + (i % 5 == 0 ? 3.f : 5.f) * u, r2 = r + 9.f * u;
+        g.drawLine(c.x + r1 * std::sin(a), c.y - r1 * std::cos(a), c.x + r2 * std::sin(a), c.y - r2 * std::cos(a), (i % 5 == 0 ? 1.7f : 1.f) * u);
     }
     auto stepped = [](juce::Point<float> centre, float rad) {
         juce::Path p;
@@ -95,30 +98,35 @@ void MoodEditor::KnobLook::drawRotarySlider(juce::Graphics& g, int x, int y, int
         p.lineTo(centre.x-a, centre.y-b); p.closeSubPath(); return p;
     };
     const bool dark = slider.getTitle().equalsIgnoreCase("CLOCK");
-    auto shadow = stepped(c.translated(2, 3), r);
+    auto shadow = stepped(c.translated(2.f * u, 3.f * u), r);
     g.setColour(kInk); g.fillPath(shadow);
     auto face = stepped(c, r);
     g.setColour(dark ? kInk : kPaper); g.fillPath(face);
-    g.setColour(kInk); g.strokePath(face, juce::PathStrokeType(2));
+    g.setColour(kInk); g.strokePath(face, juce::PathStrokeType(2.f * u));
     auto inner = stepped(c, r * 0.80f);
     g.setColour(dark ? juce::Colour(0xff292924) : juce::Colour(0xffecebe3)); g.fillPath(inner);
-    g.setColour(dark ? kPaper : kInk); g.strokePath(inner, juce::PathStrokeType(1.2f));
+    g.setColour(dark ? kPaper : kInk); g.strokePath(inner, juce::PathStrokeType(1.2f * u));
     juce::Path pointer;
-    pointer.addRectangle(-2.5f, -r * 0.72f, 5.f, r * 0.47f);
-    pointer.addRectangle(-2.f, -2.f, 4.f, 4.f);
+    pointer.addRectangle(-2.5f * u, -r * 0.72f, 5.f * u, r * 0.47f);
+    pointer.addRectangle(-2.f * u, -2.f * u, 4.f * u, 4.f * u);
     const float angle = a0 + pos * (a1 - a0);
     g.fillPath(pointer, juce::AffineTransform::rotation(angle).translated(c));
 }
 
 void MoodEditor::KnobLook::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool, bool) {
-    const auto bounds = b.getLocalBounds().toFloat();
-    const auto sw = juce::Rectangle<float>(18, 32).withCentre({bounds.getCentreX(), 19});
+    // One sixth of the 292 px switch row: drawing in that design slot and scaling
+    // keeps the switch and its name together at any window size. The name is fitted
+    // because "SPREAD" and "SMOOTH" are wider than the slot at full size.
+    const float u = b.getWidth() / (292.f / 6.f);
+    g.addTransform(juce::AffineTransform::scale(u));
+    const auto bounds = juce::Rectangle<float>(0, 0, 292.f / 6.f, b.getHeight() / u);
+    const auto sw = juce::Rectangle<float>(18, 32).withCentre({bounds.getCentreX(), 20});
     g.setColour(kInk); g.fillRect(sw);
     const auto handle = juce::Rectangle<float>(12, 11).withCentre({sw.getCentreX(), b.getToggleState() ? sw.getY()+8 : sw.getBottom()-8});
     g.setColour(kPaper); g.fillRect(handle);
     if (b.hasKeyboardFocus(true)) { g.setColour(kMuted); g.drawRect(sw.expanded(3), 1.5f); }
-    g.setColour(kInk); g.setFont(font(14));
-    g.drawText(b.getButtonText().toUpperCase(), bounds.withTop(40), juce::Justification::centredTop);
+    g.setColour(kInk); g.setFont(font(12));
+    g.drawFittedText(b.getButtonText().toUpperCase(), bounds.withTop(40).withHeight(15).toNearestInt(), juce::Justification::centredTop, 1);
 }
 
 // ───────── 3-way toggle ─────────
@@ -127,7 +135,10 @@ MoodEditor::ThreeWay::ThreeWay(juce::RangedAudioParameter& p, juce::StringArray 
     attach.sendInitialUpdate();
 }
 void MoodEditor::ThreeWay::paint(juce::Graphics& g) {
-    const auto bounds = getLocalBounds();
+    // Drawn at the design width and scaled, so the labels grow with the window.
+    const float s = getWidth() / 130.f;
+    g.addTransform(juce::AffineTransform::scale(s));
+    const auto bounds = juce::Rectangle<float>(0, 0, 130.f, getHeight() / s).toNearestInt();
     const int count = juce::jmax(1, labels.size());
     const int row = bounds.getHeight() / count;
     g.setColour(kPaper); g.fillRect(bounds);
@@ -155,7 +166,9 @@ void MoodEditor::Footswitch::press(bool down) {
     repaint();
 }
 void MoodEditor::Footswitch::paint(juce::Graphics& g) {
-    auto r = getLocalBounds().reduced(3);
+    const float s = getWidth() / 84.f;
+    g.addTransform(juce::AffineTransform::scale(s));
+    auto r = juce::Rectangle<int>(0, 0, 84, juce::roundToInt(getHeight() / s)).reduced(3);
     g.setColour(kInk); g.fillRect(r.translated(3, 3));
     g.setColour(isDown ? kPanel : kPaper); g.fillRect(r);
     g.setColour(kInk); g.drawRect(r, 1);
@@ -168,7 +181,9 @@ void MoodEditor::Footswitch::paint(juce::Graphics& g) {
 
 // ───────── loop display ─────────
 void MoodEditor::LoopView::paint(juce::Graphics& g) {
-    const auto b = getLocalBounds().toFloat();
+    const float sc = getWidth() / 292.f;
+    g.addTransform(juce::AffineTransform::scale(sc));
+    const auto b = juce::Rectangle<float>(0, 0, 292.f, getHeight() / sc);
     g.setColour(kPaper); g.fillRect(b);
     g.setColour(kInk); g.drawRect(b, 1);
     const int lsrc = proc.ui.lsrc.load();
@@ -177,13 +192,20 @@ void MoodEditor::LoopView::paint(juce::Graphics& g) {
         g.drawText("LISTENING FOR LITTLE MOMENTS_", b, juce::Justification::centred);
         return;
     }
-    const float ws = proc.ui.winStart.load() / static_cast<float>(lsrc);
-    g.setColour(juce::Colour(0xffe4e3db)); g.fillRect(b.withWidth(ws * b.getWidth()));
+    const int start = proc.ui.winStart.load(), len = proc.ui.winLen.load();
+    const float xs = start / static_cast<float>(lsrc), xe = (start + len) / static_cast<float>(lsrc);
+    // Everything outside the trim is dimmed, so START/END are visible at a glance.
+    g.setColour(juce::Colour(0xffdcdcd2));
+    g.fillRect(b.withWidth(xs * b.getWidth()));
+    g.fillRect(b.withLeft(b.getX() + xe * b.getWidth()));
+    g.setColour(kInk);
+    g.fillRect(b.getX() + xs * b.getWidth(), b.getY(), 1.5f, b.getHeight());
+    g.fillRect(b.getX() + xe * b.getWidth() - 1.5f, b.getY(), 1.5f, b.getHeight());
     const int n = MoodProcessor::kWaveBins;
     const float bw = b.getWidth() / n, mid = b.getCentreY();
     for (int i = 0; i < n; ++i) {
         const float a = std::min(1.f, wave[static_cast<size_t>(i)] * 1.6f) * (b.getHeight() / 2 - 4);
-        g.setColour(i / static_cast<float>(n) >= ws ? kInk : kLine);
+        g.setColour(i / static_cast<float>(n) >= xs && i / static_cast<float>(n) < xe ? kInk : kLine);
         g.fillRect(b.getX() + i * bw, mid - a, std::max(1.f, bw - 0.4f), 2 * a + 1);
     }
     const float px = b.getX() + (proc.ui.winStart.load() + proc.ui.pos.load()) / lsrc * b.getWidth();
@@ -212,7 +234,7 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         return [this, label, id] {
             auto* prm = proc.apvts.getParameter(id);
             if (lastTouched.isNotEmpty() || isVisible()) showReadout(label, prm->getCurrentValueAsText().toLowerCase());
-            repaint(pedalArea);
+            repaintDesign(pedalArea);
         };
     };
     wetMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("wetMode"), juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, modeChanged("WET MODE", "wetMode"));
@@ -257,6 +279,19 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
     balance.onValueChange = [this] { touch("balance"); };
     addAndMakeVisible(balance);
     balanceAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "balance", balance);
+    auto loopSlider = [this](juce::Slider& sl, const char* id, const char* name) {
+        sl.setSliderStyle(juce::Slider::LinearHorizontal);
+        sl.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        sl.setTitle(name);
+        sl.onValueChange = [this, id] { touch(id); };
+        addAndMakeVisible(sl);
+    };
+    loopSlider(memory, "memory", "Loop memory");
+    loopSlider(loopStart, "loopStart", "Loop start");
+    loopSlider(loopEnd, "loopEnd", "Loop end");
+    memoryAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "memory", memory);
+    startAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopStart", loopStart);
+    endAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopEnd", loopEnd);
     const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"dryKill", "Dry"}, {"latch", "Latch"},
                                                           {"spread", "Spread"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
     // Six switches is tight: use the short labels the browser panel uses too.
@@ -295,6 +330,9 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
     };
     addAndMakeVisible(presetBox);
     setWantsKeyboardFocus(true);
+    setResizable(true, true);
+    setResizeLimits(675, 480, 1800, 1280);   // 900x640 design size, 0.75x to 2x
+    getConstrainer()->setFixedAspectRatio(static_cast<double>(W) / H);
     setSize(W, H);
     startTimerHz(30);
 }
@@ -309,29 +347,43 @@ void MoodEditor::touch(const juce::String& id) {
     lastTouched = id;
     const juce::String label = id == "modWet" ? "MODIFY (WET)" : id == "modLoop" ? "MODIFY (LOOP)" : id.toUpperCase();
     showReadout(label, proc.describe(id));
-    if (id == "clock") repaint(pedalArea);
+    if (id == "clock") repaintDesign(pedalArea);
 }
 
 void MoodEditor::showReadout(const juce::String& label, const juce::String& value) {
     if (label == lcdLabel && value == lcdValue) return;
     lcdLabel = label; lcdValue = value;
-    repaint(lcdArea);
+    repaintDesign(lcdArea);
 }
 
 void MoodEditor::resized() {
+    // Everything is laid out in design coordinates (900x640) and mapped into the
+    // window by one transform, so the panel scales instead of reflowing and no
+    // text can slide over its neighbour when the window is resized.
+    viewScale = std::min(getWidth() / static_cast<float>(W), getHeight() / static_cast<float>(H));
+    view = juce::AffineTransform::scale(viewScale)
+               .translated((getWidth() - W * viewScale) * 0.5f, (getHeight() - H * viewScale) * 0.5f);
+    auto place = [this](juce::Component& c, const juce::Rectangle<int>& design) { c.setBounds(design.transformedBy(view)); };
+
     pedalArea = {20, 20, 520, 600};
     const int cx[3] = {pedalArea.getX() + 95, pedalArea.getCentreX(), pedalArea.getRight() - 95};
     for (int i = 0; i < 6; ++i) {
         const int row = i / 3;
-        knobs[static_cast<size_t>(i)].slider->setBounds(juce::Rectangle<int>(104, 104).withCentre({cx[i % 3], pedalArea.getY() + (row == 0 ? 172 : 394)}));
+        knobDesign[i] = juce::Rectangle<int>(104, 104).withCentre({cx[i % 3], pedalArea.getY() + (row == 0 ? 172 : 394)});
+        place(*knobs[static_cast<size_t>(i)].slider, knobDesign[i]);
     }
     const int ty = pedalArea.getY() + 282;
-    wetMode->setBounds(cx[0] - 48, ty - 44, 130, 88);   // four wet modes now
-    routing->setBounds(cx[1] - 48, ty - 36, 130, 72);
-    loopMode->setBounds(cx[2] - 48, ty - 36, 130, 72);
+    wetModeDesign = {cx[0] - 48, ty - 44, 130, 88};   // four wet modes
+    routingDesign = {cx[1] - 48, ty - 36, 130, 72};
+    loopModeDesign = {cx[2] - 48, ty - 36, 130, 72};
+    place(*wetMode, wetModeDesign);
+    place(*routing, routingDesign);
+    place(*loopMode, loopModeDesign);
     const int fy = pedalArea.getBottom() - 52;
-    fsWet->setBounds(juce::Rectangle<int>(84, 84).withCentre({cx[0] + 20, fy}));
-    fsLoop->setBounds(juce::Rectangle<int>(84, 84).withCentre({cx[2] - 20, fy}));
+    fsWetDesign = juce::Rectangle<int>(84, 84).withCentre({cx[0] + 20, fy});
+    fsLoopDesign = juce::Rectangle<int>(84, 84).withCentre({cx[2] - 20, fy});
+    place(*fsWet, fsWetDesign);
+    place(*fsLoop, fsLoopDesign);
     ledWet = juce::Rectangle<int>(14, 14).withCentre({cx[0] + 20, fy - 56});
     ledLoop = juce::Rectangle<int>(14, 14).withCentre({cx[2] - 20, fy - 56});
 
@@ -341,29 +393,43 @@ void MoodEditor::resized() {
     auto src = side.removeFromTop(118).reduced(14, 10);
     src.removeFromTop(18);
     auto r1 = src.removeFromTop(28);
-    sourceBox.setBounds(r1.removeFromLeft(170));
+    place(sourceBox, r1.removeFromLeft(170));
     r1.removeFromLeft(8);
-    loadButton.setBounds(r1);
+    place(loadButton, r1);
     src.removeFromTop(8);
-    inputGain.setBounds(src.removeFromTop(22).withTrimmedLeft(52));
+    inputGainDesign = src.removeFromTop(22).withTrimmedLeft(52);
+    place(inputGain, inputGainDesign);
     meterArea = src.removeFromTop(22).translated(0, 2);
+
     side.removeFromTop(14);
-    auto lv = side.removeFromTop(118).reduced(14, 10);
-    lv.removeFromTop(18);
-    loopView.setBounds(lv);
-    side.removeFromTop(14);
-    auto dipArea = side.removeFromTop(132).reduced(14, 10);
+    loopArea = side.removeFromTop(150);
+    auto inner = loopArea.reduced(14, 10);
+    inner.removeFromTop(18);
+    auto wave = inner.removeFromTop(52);
+    place(loopView, wave);
+    inner.removeFromTop(2);
+    memoryDesign = inner.removeFromTop(19).withTrimmedLeft(58).withTrimmedRight(40);
+    loopStartDesign = inner.removeFromTop(19).withTrimmedLeft(42).withTrimmedRight(40);
+    loopEndDesign = inner.removeFromTop(19).withTrimmedLeft(30).withTrimmedRight(40);
+    place(memory, memoryDesign);
+    place(loopStart, loopStartDesign);
+    place(loopEnd, loopEndDesign);
+
+    side.removeFromTop(12);
+    auto dipArea = side.removeFromTop(112).reduced(14, 10);
     dipArea.removeFromTop(18);
-    auto dipRow = dipArea.removeFromTop(64);
-    const int dw = dipRow.getWidth() / static_cast<int>(dips.size());
-    for (auto& d : dips) d.button->setBounds(dipRow.removeFromLeft(dw));
+    auto dipRow = dipArea.removeFromTop(58);
+    const int dw = dipRow.getWidth() / juce::jmax(1, static_cast<int>(dips.size()));
+    for (auto& d : dips) place(*d.button, dipRow.removeFromLeft(dw));
     dipArea.removeFromTop(4);
-    balance.setBounds(dipArea.removeFromTop(24).withTrimmedLeft(66).withTrimmedRight(34));
-    presetBox.setBounds(574, 556, 292, 26);
+    balanceDesign = dipArea.removeFromTop(22).withTrimmedLeft(66).withTrimmedRight(34);
+    place(balance, balanceDesign);
+    place(presetBox, {574, 556, 292, 26});
 }
 
 void MoodEditor::paint(juce::Graphics& g) {
     g.fillAll(kBoard);
+    g.addTransform(view);   // draw in design coordinates; the window scales it
     auto pa = pedalArea;
     g.setColour(kInk); g.fillRect(pa.translated(4, 4));
     g.setColour(kPaper); g.fillRect(pa);
@@ -385,7 +451,7 @@ void MoodEditor::paint(juce::Graphics& g) {
     const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
     for (size_t i = 0; i < knobs.size(); ++i) {
-        const auto kb = knobs[i].slider->getBounds();
+        const auto kb = knobDesign[i];
         g.setColour(kInk); g.setFont(font(17));
         g.drawText(knobs[i].label, kb.withY(kb.getY() - 21).withHeight(18), juce::Justification::centred);
         g.setColour(kMuted); g.setFont(font(13));
@@ -394,8 +460,10 @@ void MoodEditor::paint(juce::Graphics& g) {
         if (i == 3) whisper += "  /  wet";
         if (i == 5) whisper += "  /  loop";
         g.setFont(font(13));
-        g.drawText(whisper, kb.withY(kb.getBottom() - 2).withHeight(18).withSizeKeepingCentre(230, 18),
-                   juce::Justification::centred);
+        // One column wide, wrapped to two lines: a long whisper previously ran
+        // into the next knob's caption.
+        g.drawFittedText(whisper, kb.withY(kb.getBottom() - 2).withHeight(20).withSizeKeepingCentre(150, 20),
+                         juce::Justification::centred, 2);
     }
     g.setColour(kInk); g.setFont(font(16));
     g.drawText("WET", ledWet.getX() - 63, ledWet.getY() - 1, 54, 18, juce::Justification::centredRight);
@@ -418,14 +486,32 @@ void MoodEditor::paint(juce::Graphics& g) {
         g.setFont(font(16)); g.drawText(title, head.reduced(10, 0), juce::Justification::centredLeft);
     };
     panel({560, 126, 320, 118}, "01  /  INPUT SOURCE");
-    panel({560, 258, 320, 118}, "02  /  LOOP MEMORY");
-    panel({560, 390, 320, 132}, "03  /  THE LITTLE SWITCHES");
+    panel({560, 258, 320, 150}, "02  /  LOOP MEMORY");   // same rects resized() fills
+    panel({560, 420, 320, 112}, "03  /  THE LITTLE SWITCHES");
     g.setColour(kInk); g.setFont(font(14));
-    g.drawText("LEVEL", 574, inputGain.getY(), 50, inputGain.getHeight(), juce::Justification::centredLeft);
-    g.drawText("BALANCE", 574, balance.getY(), 64, balance.getHeight(), juce::Justification::centredLeft);
-    g.setColour(kMuted); g.setFont(font(13));
-    g.drawText("WET", balance.getX() - 26, balance.getY(), 24, balance.getHeight(), juce::Justification::centredRight);
-    g.drawText("LOOP", balance.getRight() + 4, balance.getY(), 34, balance.getHeight(), juce::Justification::centredLeft);
+    g.drawText("LEVEL", 574, inputGainDesign.getY(), 50, inputGainDesign.getHeight(), juce::Justification::centredLeft);
+    // One label for the row: "BALANCE" plus its two end names did not fit and
+    // overlapped in the 320 px side column.
+    g.drawText("WET / LOOP", 574, balanceDesign.getY(), 66, balanceDesign.getHeight(), juce::Justification::centredLeft);
+    g.setColour(kInk); g.setFont(font(13));
+    g.drawText("MEMORY", 574, memoryDesign.getY(), 54, memoryDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("START", 574, loopStartDesign.getY(), 38, loopStartDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("END", 574, loopEndDesign.getY(), 26, loopEndDesign.getHeight(), juce::Justification::centredLeft);
+    g.setColour(kMuted); g.setFont(font(12));
+    // Short readouts for the narrow column; the full wording lives in the host's
+    // parameter display (that is what Ableton shows in its own inspector).
+    auto readout = [&](const char* id, juce::Rectangle<int> r, bool percent) {
+        const auto* v = proc.apvts.getRawParameterValue(id);
+        if (v == nullptr) return;
+        juce::String txt;
+        if (percent) txt = juce::String(juce::roundToInt(v->load() * 100.f)) + "%";
+        else if (v->load() <= 0.001f) txt = "PEDAL";
+        else txt = juce::String(mood::expMap(v->load(), 1, 30), 1) + "s";
+        g.drawText(txt, r, juce::Justification::centredRight);
+    };
+    readout("memory", memoryDesign.withX(memoryDesign.getRight() + 3).withWidth(38), false);
+    readout("loopStart", loopStartDesign.withX(loopStartDesign.getRight() + 3).withWidth(34), true);
+    readout("loopEnd", loopEndDesign.withX(loopEndDesign.getRight() + 3).withWidth(34), true);
     g.setColour(kInk); g.setFont(font(15)); g.drawText("*  PATCH SELECTOR", 574, 532, 292, 18, juce::Justification::centredLeft);
     g.setColour(kMuted); g.setFont(font(13));
     g.drawFittedText("UNOFFICIAL MOOD-INSPIRED STUDY / NOT AFFILIATED WITH CHASE BLISS", 574, 590, 292, 30, juce::Justification::centredLeft, 2);
@@ -457,8 +543,8 @@ void MoodEditor::timerCallback() {
     const int led = ui.loopLed.load();   // 0 off, 1 play, 2 rec, 3 dub
     const bool wetOn = ui.wetOn.load() && !(ui.freeze.load() && !blink);
     const bool loopOn = led == 1 || ((led == 2 || led == 3) && blink) || (led == 0 && now < flashUntil);
-    if (wetOn != ledWetOn) { ledWetOn = wetOn; repaint(ledWet.expanded(8)); }
-    if (loopOn != ledLoopOn) { ledLoopOn = loopOn; repaint(ledLoop.expanded(8)); }
+    if (wetOn != ledWetOn) { ledWetOn = wetOn; repaintDesign(ledWet.expanded(8)); }
+    if (loopOn != ledLoopOn) { ledLoopOn = loopOn; repaintDesign(ledLoop.expanded(8)); }
     if (led != lastLoopLed) {
         const char* msg[] = {nullptr, "playing", "recording...", "overdubbing..."};
         if (msg[led] != nullptr) showReadout("LOOP", msg[led]);
@@ -466,15 +552,15 @@ void MoodEditor::timerCallback() {
         lastLoopLed = led;
     }
     const float mi = ui.peakIn.load(), mo = ui.peakOut.load();
-    if (std::fabs(mi - meterIn) > 1e-3f || std::fabs(mo - meterOut) > 1e-3f) { meterIn = mi; meterOut = mo; repaint(meterArea.expanded(2)); }
+    if (std::fabs(mi - meterIn) > 1e-3f || std::fabs(mo - meterOut) > 1e-3f) { meterIn = mi; meterOut = mo; repaintDesign(meterArea.expanded(2)); }
     const int lsrc = ui.lsrc.load();
     const juce::String meta = juce::String(ui.clockHz.load() / 1000.f, 1) + " kHz    "
         + (lsrc > 0 ? "loop " + juce::String(ui.winLen.load() / ui.clockHz.load(), 2) + " s" : juce::String("no loop"))
         + "    cpu " + juce::String(ui.load.load(), 1) + "%";
-    if (meta != lcdMeta) { lcdMeta = meta; repaint(lcdArea); }
+    if (meta != lcdMeta) { lcdMeta = meta; repaintDesign(lcdArea); }
     if (lastTouched.isNotEmpty() && lcdLabel != "LOOP" && lcdLabel != "DIP" && lcdLabel != "INPUT" && lcdLabel != "PATCH") {
         const juce::String v = proc.describe(lastTouched);   // follows automation and mode changes
-        if (v != lcdValue && lcdLabel.isNotEmpty()) { lcdValue = v; repaint(lcdArea); }
+        if (v != lcdValue && lcdLabel.isNotEmpty()) { lcdValue = v; repaintDesign(lcdArea); }
     }
     const uint32_t ver = ui.waveVersion.load();
     if (ver != loopView.version && proc.copyWave(loopView.wave)) loopView.version = ver;

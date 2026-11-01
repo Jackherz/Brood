@@ -15,7 +15,12 @@ namespace mood {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTau = 2.0 * kPi;
 constexpr double kHoldSec = 0.35;          // footswitch hold threshold
-constexpr int kLoopSamples = 64000;        // fixed: CLOCK sets loop length (1 s @ 64 kHz … 32 s @ 2 kHz)
+constexpr int kLoopSamples = 64000;        // pedal capacity: CLOCK sets loop length (1 s @ 64 kHz … 32 s @ 2 kHz)
+// The buffer is allocated for the longest loop the panel allows; MEMORY caps how
+// much of it a capture may use, so the pedal default still applies at 0. Two
+// cores (stereo) therefore hold about 33 MB of loop memory.
+constexpr int kMaxLoopSeconds = 32;
+constexpr int kMaxLoopSamples = kLoopSamples * kMaxLoopSeconds;
 constexpr double kClockMinHz = 2000.0;
 constexpr double kClockMaxHz = 64000.0;
 constexpr double kCoreFs = 64000.0;
@@ -329,6 +334,7 @@ struct Params {
     bool trails = false, dryKill = false, latch = false, spread = false, smooth = false;
     bool sync = false;
     double balance = 0.5, bpm = 120.0;
+    double loopStart = 0, loopEnd = 1, memory = 0;   // playback trim + capture ceiling
 };
 
 struct State {
@@ -353,7 +359,7 @@ public:
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
         loopDirect = 1;
-        hist.assign(kLoopSamples, 0.f); loopBuf.assign(kLoopSamples, 0.f);
+        hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f);
         histW = histCount = 0; histCycles = 0; lsrc = 0;
         loopState = LoopState::Off; overdub = false;
         loopGain = 0; loopPos = 0; tapeSpeed = 1; stretchSpeed = 0;
@@ -519,8 +525,16 @@ private:
 
     double rand01() { rng = rng * 1103515245u + 12345u; return rng / 4294967296.0; }
 
+    // How much history a capture may use, in core samples. MEMORY 0 keeps the
+    // pedal's clock-derived capacity; above that it is 1–30 s of real time.
+    int maxCaptureSamples() const {
+        const double clock = clockHz(s.clock, p.smooth);
+        const double user = p.memory > 0.001 ? expMap(clampd(p.memory, 0, 1), 1, 30) * clock : kLoopSamples;
+        return static_cast<int>(std::min<double>(kMaxLoopSamples - 1, std::max(64.0, std::min(user, kMaxLoopSeconds * clock))));
+    }
+
     void capture(int n) {
-        n = std::min({n, static_cast<int>(hist.size()) - 1, histCount});
+        n = std::min({n, static_cast<int>(hist.size()) - 1, histCount, maxCaptureSamples()});
         if (n < 64) return;
         const int N = static_cast<int>(hist.size());
         int r = histW - n; if (r < 0) r += N;
@@ -533,10 +547,18 @@ private:
         loopWaveDirty = true;
     }
 
+    // Playback region of the captured loop: START/END trim the capture, then TAPE
+    // length takes its window from the tail of that region.
     Window loopWindow() const {
-        if (p.loopMode != 1) return {std::max(64, lsrc), 0};
-        const int W = std::max(64, static_cast<int>(std::floor(lsrc * expMap(s.length, 0.02, 1))));
-        return {W, lsrc - W};
+        const double a = std::min(clampd(p.loopStart, 0, 1), 0.98);
+        const double b = std::max(clampd(p.loopEnd, 0, 1), 0.02);
+        int r0 = static_cast<int>(std::floor(lsrc * std::min(a, b)));
+        int len = static_cast<int>(std::floor(lsrc * std::max(a, b))) - r0;
+        if (len <= 0 || len < 64) { r0 = 0; len = std::max(64, lsrc); }
+        len = std::min(len, lsrc - r0);
+        if (p.loopMode != 1) return {std::max(64, len), r0};
+        const int W = std::max(64, static_cast<int>(std::floor(len * expMap(s.length, 0.02, 1))));
+        return {W, r0 + len - W};
     }
 
     double loopTick(double x) {
