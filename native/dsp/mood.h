@@ -416,7 +416,7 @@ public:
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         grain[0] = {0, 0}; grain[1] = {0.5, 0};
         rng = 22222;
-        toneL = toneR = 0; wowPh = 0; toneC = 0;
+        toneL = toneR = 0; wowPh = 0;
         fsWet = FsWet{}; fsLoop = FsLoop{};
         engaged = 0; peakIn = peakOut = 0;
         loopWaveDirty = false;
@@ -638,7 +638,8 @@ private:
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
     // Moving START moves the read head, and a jump is a click. These three carry a
     // short crossfade from where the loop was playing to where it now begins.
-    double startA = 0, startB = 0, startFade = 1;
+    int startA = 0, startB = 0;                // whole samples: never fractional
+    double startFade = 1;
     int startLen = -1;
     double env = 0, envHold = 0, envMix = 0, sliceStart = 0, slicePh = 0;
     bool envGate = false;
@@ -647,7 +648,7 @@ private:
     FsWet fsWet; FsLoop fsLoop;
     double engaged = 0, peakIn = 0, peakOut = 0;
     bool loopWaveDirty = false;
-    double toneL = 0, toneR = 0, wowPh = 0, toneC = 0;   // hidden-option state
+    double toneL = 0, toneR = 0, wowPh = 0;   // hidden-option state
 
     // Two generators, each with its own phase and its own seeded stream (never the
     // shared rng: STRETCH grains and CLASSIC hiss draw from that one).
@@ -718,9 +719,12 @@ private:
     }
 
     // One-pole coefficient for the TONE hi-cut; the blend amount is the caller's.
-    double toneCoeff() {
-        if (toneC == 0) toneC = 1 - std::exp((-kTau * kToneHz) / kCoreFs);
-        return toneC;
+    // It is built from constants only, so it is worked out once. (It used to be
+    // cached behind a `toneC == 0` test, which is an equality test on a float:
+    // a sentinel that only works by luck of rounding.)
+    static double toneCoeff() {
+        static const double c = 1 - std::exp((-kTau * kToneHz) / kCoreFs);
+        return c;
     }
 
     // How much history a capture may use, in core samples. MEMORY 0 keeps the
@@ -887,7 +891,7 @@ private:
             const double keep = 0.97 * (1 - clampd(s.fade, 0, 1));
             int q = static_cast<int>(jsMod(std::floor(mode == 1 ? loopPos : pos), Wd)); if (q < 0) q += W;
             // Overdubs land in the window as it is headed for, not as it was.
-            const int wi = std::min(len - 1, std::max(0, static_cast<int>(std::lround(startB)) + q));
+            const int wi = std::min(len - 1, std::max(0, startB + q));
             float& cell = loopBuf[static_cast<size_t>(wi)];
             cell = static_cast<float>(cell * keep + x);
         }

@@ -38,7 +38,10 @@ juce::Font pixel(float size) {
 // never a blur. Rules carry the structure — ink for frames, hairline grey for
 // grouping — and the only textures are a 2 px halftone band and a 20 px dot
 // grid, both built from the paper's own colour so the cream/ink palette holds.
-constexpr int kSp1 = 4, kSp2 = 8, kSp3 = 16, kSp4 = 24, kSp5 = 32;
+// The steps of that scale this layout actually spends. They are declared one at a
+// time so that a step the panel does not use is never a warning — 16 and 32 are
+// part of the sheet, not of this editor, and arrive here the day a cell needs them.
+constexpr int kSp1 = 4, kSp2 = 8, kSp4 = 24;
 const juce::Colour kGrid { 0xffe4e2d6 };      // the dot grid under the paper
 const juce::Colour kHalftone { 0xffc2c1b6 };  // the hatched band on a panel head
 juce::Font capFont() { return font(11); }

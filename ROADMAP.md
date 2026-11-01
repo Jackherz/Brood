@@ -54,7 +54,11 @@ policy, and a parity harness per model.
   by both cores and both editors, covered by a round-trip test over every stop.
   The cell also steps from anywhere inside it (only the painted back arrow steps
   back), and OFF is named OFF — the engine's word — instead of STILL, drawn as an
-  outline against the solid block of a running ramp.
+  outline against the solid block of a running ramp. The round also cleared the
+  four warnings a clang build printed: the TONE coefficient is a constant worked
+  out once instead of a lazily cached float with an `== 0` sentinel, START's two
+  read heads are whole samples rather than doubles compared for equality, and the
+  editor's spacing tokens now declare only the steps the layout spends.
 
 - Round 13: **START is back.** It had been removed because END was dragging the
   start around with it; with END fixed to the end only, a start trim is the piece
