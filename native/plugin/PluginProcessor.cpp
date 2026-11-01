@@ -43,9 +43,12 @@ MoodProcessor::MoodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Dip: Smooth clock", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Dip: Tempo sync", false));
           auto loopParam = [this](const char* id, const char* name, float def) {
+              // The capture gets its own name: reusing "id" here shadows the
+              // parameter of the same name (clang's -Wshadow-uncaptured-local).
+              const juce::String paramId(id);
               return std::make_unique<APF>(juce::ParameterID(id, 1), name, juce::NormalisableRange<float>(0.f, 1.f), def,
                   juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-                      [this, id = juce::String(id)](float v, int) { return describe(id, v); }));
+                      [this, paramId](float v, int) { return describe(paramId, v); }));
           };
           layout.add(loopParam("memory", "Loop memory", 0.f));
           layout.add(loopParam("loopStart", "Loop start", 0.f));
@@ -250,8 +253,8 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     // DAW tempo for the sync dip. Static tempo, tempo ramps and offline renders
     // all reduce to "the bpm at this block"; if the host offers none, the last
     // known value stands (120 BPM until told otherwise).
-    if (auto* playHead = getPlayHead()) {
-        if (const auto position = playHead->getPosition()) {
+    if (auto* head = getPlayHead()) {   // not "playHead": that shadows AudioProcessor's own
+        if (const auto position = head->getPosition()) {
             if (const auto bpm = position->getBpm()) {
                 if (std::isfinite(*bpm) && *bpm > 5.0 && *bpm < 400.0) {
                     hostBpm_.store(static_cast<float>(*bpm));

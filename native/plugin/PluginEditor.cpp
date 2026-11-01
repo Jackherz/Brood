@@ -629,13 +629,14 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.setColour(kMuted); g.setFont(font(13));
     g.drawText("ONE CLOCK. TWO WORLDS.", pedalArea.getCentreX() - 80, pedalArea.getBottom() - 50, 160, 20, juce::Justification::centred);
 
-    auto panel = [&](juce::Rectangle<int> r, const char* title) {
+    // "heading", not "title": the window title above already owns that name.
+    auto panel = [&](juce::Rectangle<int> r, const char* heading) {
         g.setColour(kPaper); g.fillRect(r);
         g.setColour(kInk); g.drawRect(r, 1);
         auto head = r.removeFromTop(24);
         g.setColour(kPanel); g.fillRect(head);
         g.setColour(kInk); g.drawHorizontalLine(head.getBottom(), static_cast<float>(head.getX()), static_cast<float>(head.getRight()));
-        g.setFont(font(16)); g.drawText(title, head.reduced(10, 0), juce::Justification::centredLeft);
+        g.setFont(font(16)); g.drawText(heading, head.reduced(10, 0), juce::Justification::centredLeft);
     };
     panel(srcArea, "01  /  INPUT SOURCE");
     panel(loopArea, "02  /  LOOP MEMORY");   // same rects resized() fills
