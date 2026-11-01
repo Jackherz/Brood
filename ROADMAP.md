@@ -13,6 +13,36 @@ that makes it musical rather than merely moving:
 - **DIRECT MICRO-LOOP blend** — how much of the *unprocessed* loop reaches the
   output, mixed in beside the wet side.
 
+## Parked: the pedal playground (noted 2026-11-01)
+
+The direction being considered is not a third pedal emulation but a **Chase Bliss /
+modular effect-pedal playground**: one instrument that wears several pedal models,
+sharing the engine, the parity harness and the design sheet. Research is in
+[docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md); nothing below is scheduled.
+
+- **blooper** — parked for now, by decision. Reverse and smooth/stepped speed,
+  stopper, loop filter and one-shot are cheap because the blocks already exist;
+  eight layers of undo and additive mode are the two hard pieces, and layers lose
+  to the save budget (a full take is ~3.7 MB base64 per core; eight layers would
+  put tens of MB into every autosave). Skip the 16-loop library and blooper's own
+  MIDI map.
+- **Habit** — the most feasible of the three, two to three rounds. An
+  always-recording reel feeding a 60 s delay with a second read head is mostly
+  `hist`, `Delay` and the existing capture path; the costs are a three-minute
+  buffer (46 MB per core at the 64 kHz clock, halved as int16, or shared because
+  Habit is mono) and a reel that must stay out of the saved state.
+- **Bad Mood** — four to six rounds, and the one that fights our own rules. Relay
+  and Glue are nearly free, Flip and Burst are a week each, Soup wants an FFT that
+  is bit-identical in both cores, Radio is five loopers in one knob. It also opens
+  a second layer of meaning on every knob ("Hidden Options"), which is the menu
+  diving we removed on purpose — so it needs a written rule for secondary controls
+  before any DSP. It also reinstates Latch, Dry Kill and Spread at dip level, which
+  round 11 removed.
+
+If the playground is picked up, the groundwork that pays for itself first is: a
+pedal contract, panels as data instead of two hand-coded layouts, a state budget
+policy, and a parity harness per model.
+
 ## Done
 
 - Round 12: one design sheet for both panels. Spacing, type and elevation are

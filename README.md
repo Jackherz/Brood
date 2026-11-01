@@ -478,3 +478,10 @@ Project code is GPLv3, including portions adapted from MoodEmu. JUCE 8 has
 separate AGPLv3/commercial licensing, and the bundled fonts use the SIL Open
 Font License. See [LICENSE](LICENSE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and details.
+
+## Where this could go
+
+This is one pedal, emulated carefully. Turning it into a small playground of Chase
+Bliss–style pedals — blooper, Habit, Bad Mood — is researched but not scheduled;
+the feasibility notes, the RAM and save-size numbers, and the architectural work
+that would come first are in [docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md).
