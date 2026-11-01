@@ -324,7 +324,7 @@ void MoodEditor::ThreeWay::mouseDown(const juce::MouseEvent& e) {
 // ───────── ramp destination stepper ─────────
 MoodEditor::Stepper::Stepper(juce::RangedAudioParameter& p, juce::String caption, juce::StringArray l, std::function<void()> onChange)
     : param(p), cap(std::move(caption)), names(std::move(l)),
-      attach(p, [this](float v) { index = juce::jlimit(0, juce::jmax(0, names.size() - 1), juce::roundToInt(v)); repaint(); if (changed) changed(); }),
+      attach(p, [this](float v) { index = mood::rampIndexOfValue(v, count()); repaint(); if (changed) changed(); }),
       changed(std::move(onChange)) {
     attach.sendInitialUpdate();
     setTitle(cap);
@@ -341,7 +341,7 @@ void MoodEditor::Stepper::paint(juce::Graphics& g) {
     g.setColour(hot ? juce::Colour(0xfff1efe6) : kPaper); g.fillRect(body);
     g.setColour(kInk); g.drawRect(body, 2);
     auto inner = body.reduced(2, 2);
-    const int arrow = juce::jlimit(12, 20, inner.getWidth() / 6);
+    const int arrow = arrowWidth();
     auto tri = [&](juce::Rectangle<int> zone, bool right) {
         g.setColour(hot ? kInk : juce::Colour(0xff8b8b80)); g.fillRect(zone);
         juce::Path t;
@@ -355,16 +355,32 @@ void MoodEditor::Stepper::paint(juce::Graphics& g) {
     g.setFont(font(11)); g.setColour(kMuted);
     const int capW = juce::jmin(inner.getWidth() / 2, 42);
     g.drawFittedText(cap, inner.removeFromLeft(capW), juce::Justification::centredLeft, 1);
+    // OFF is drawn as an outline and ON as a solid block, so which one you are
+    // looking at needs no legend: a filled display means the tide is running.
     auto value = inner.withTrimmedLeft(2);
-    g.setColour(kInk); g.fillRect(value);
-    g.setFont(font(13)); g.setColour(kPaper);
-    g.drawFittedText(index >= 0 && index < names.size() ? names[index] : juce::String(), value.reduced(2, 0), juce::Justification::centred, 1);
+    const bool on = index > 0;
+    const juce::String shown = index >= 0 && index < names.size() ? names[index] : juce::String();
+    if (on) {
+        g.setColour(kInk); g.fillRect(value);
+        g.setColour(kPaper);
+        g.setFont(font(13));
+        g.drawFittedText(shown, value.reduced(2, 0), juce::Justification::centred, 1);
+    } else {
+        g.setColour(kPaper); g.fillRect(value);
+        g.setColour(kMuted); g.drawRect(value, 1);
+        g.setFont(font(13));
+        g.drawFittedText(shown, value.reduced(2, 0), juce::Justification::centred, 1);
+    }
+}
+void MoodEditor::Stepper::step(int by) {
+    const int next = ((index + by) % count() + count()) % count();
+    attach.setValueAsCompleteGesture(static_cast<float>(mood::rampValueOfIndex(next, count())));
 }
 void MoodEditor::Stepper::mouseDown(const juce::MouseEvent& e) {
-    const int count = juce::jmax(1, names.size());
-    const int step = e.x < getWidth() / 6 ? -1 : 1;
-    const int next = (index + step + count) % count;
-    attach.setValueAsCompleteGesture(static_cast<float>(next));
+    // Anywhere on the cell steps forward; only the painted back-arrow steps back.
+    // The hit zone is the arrow that is drawn, so the picture and the behaviour
+    // are the same thing.
+    step(e.x < arrowWidth() + 2 ? -1 : 1);
 }
 
 // ───────── footswitch ─────────
@@ -519,8 +535,8 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
             if (lastTouched.isNotEmpty() || isVisible()) showReadout(label, prm->getCurrentValueAsText().toLowerCase());
         };
     };
-    rampWet = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWet"), "WET", juce::StringArray{"STILL", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("RAMP / WET", "rampWet"));
-    rampLoop = std::make_unique<Stepper>(*proc.apvts.getParameter("rampLoop"), "LOOP", juce::StringArray{"STILL", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("RAMP / LOOP", "rampLoop"));
+    rampWet = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWet"), "WET", juce::StringArray{"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("RAMP / WET", "rampWet"));
+    rampLoop = std::make_unique<Stepper>(*proc.apvts.getParameter("rampLoop"), "LOOP", juce::StringArray{"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("RAMP / LOOP", "rampLoop"));
     rampWave = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWave"), "SHAPE", juce::StringArray{"TRI", "SQR", "SIN", "RND", "SMTH"}, rampChanged("RAMP SHAPE", "rampWave"));
     for (auto* st : {rampWet.get(), rampLoop.get(), rampWave.get()}) addAndMakeVisible(*st);
     rampRate.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -766,9 +782,9 @@ void MoodEditor::rebuildHoverHelp() {
     static const char* dipNames[] = {"TRAILS", "SMOOTH", "SYNC"};
     for (size_t i = 0; i < dips.size() && i < 3; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
 
-    add(rampWetDesign, "RAMP / WET", "press to step through what the first tide turns: time, mix, length, modify, clock or balance. STILL leaves it alone.");
-    add(rampLoopDesign, "RAMP / LOOP", "press to step through what the second tide turns. MODIFY means this side's own. STILL leaves it alone.");
-    add(rampWaveDesign, "RAMP SHAPE", "press to step through the shapes: triangle, square, sine, random, smooth random.");
+    add(rampWetDesign, "RAMP / WET", "click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. off leaves the knob alone, and a filled display means the tide is running.");
+    add(rampLoopDesign, "RAMP / LOOP", "click anywhere to step the second tide through the same list; its modify means this channel's own. off leaves the knob alone, and a filled display means the tide is running.");
+    add(rampWaveDesign, "RAMP SHAPE", "click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.");
     add(rampRateDesign, "RAMP RATE", "how slowly the tide turns. both sides share it, so they stay in step with each other.");
     static const char* rampSwitchText[] = {
         "the swing sits above the knob instead of either side of it.",

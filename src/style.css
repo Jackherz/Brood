@@ -259,6 +259,9 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: va
 .stepper button:focus-visible { outline: 2px solid #181815; outline-offset: 1px; }
 .stepper-cap { color: #66665e; white-space: nowrap; }
 .stepper b { font: 12px 'Terminal', monospace; color: #faf9f3; background: #181815; text-align: center; padding: 3px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* On and off are drawn, not tinted: a filled display means the tide runs. */
+.stepper.off b { color: #77776f; background: #faf9f3; box-shadow: inset 0 0 0 1px #b9b8ad; }
+.stepper.off { background: #f6f5ee; }
 .rate-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 5px; height: 26px; margin: 0; padding: 0 5px; border: 1px solid #181815; background: #faf9f3; color: #77776f; font: 11px 'Terminal', monospace; white-space: nowrap; }
 .rate-row input[type="range"] { height: 12px; }
 .rate-row b { color: #181815; font: 11px 'Terminal', monospace; }

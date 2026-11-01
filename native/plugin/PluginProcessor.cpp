@@ -143,7 +143,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
                         v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
     if (id == "rampWet" || id == "rampLoop") {
         const int t = mood::rampTargetIndex(v);
-        return t == 0 ? juce::String("still") : juce::String(mood::kRampTargets[t]).toLowerCase();
+        return juce::String(mood::kRampTargets[t]).toLowerCase();     // "off" at the bottom of the list
     }
     if (id == "rampWave") return juce::String(mood::kRampWaves[mood::rampWaveIndex(v)]).toLowerCase();
     if (id == "rampSpeed") return fmtTime(1.0 / mood::rampHertz(v)) + " a turn";

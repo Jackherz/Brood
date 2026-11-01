@@ -49,6 +49,13 @@ public:
         Stepper(juce::RangedAudioParameter& p, juce::String caption, juce::StringArray names, std::function<void()> onChange);
         void paint(juce::Graphics&) override;
         void mouseDown(const juce::MouseEvent&) override;
+        // The parameter is a normalised 0..1 float with `names.size()` stops, so
+        // index in and index out both have to go through the same conversion. Using
+        // the index as the value was the bug that left only OFF and the first entry
+        // reachable, and pointed the engine at the wrong knob.
+        int count() const { return juce::jmax(2, names.size()); }
+        int arrowWidth() const { return juce::jlimit(12, 20, juce::jmax(1, getWidth() - 6) / 6); }
+        void step(int by);
         juce::RangedAudioParameter& param;
         juce::String cap;
         juce::StringArray names;

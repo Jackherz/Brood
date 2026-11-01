@@ -684,6 +684,25 @@ test('RAMPS destinations and waveforms are the documented lists', () => {
   assert.deepStrictEqual([0, 1].map(rampWaveIndex), [0, 4]);
 });
 
+test('every ramp stop survives the index <-> value round trip', () => {
+  // The ramp parameters are plain 0..1 floats with `count` stops. The plugin
+  // editor used to hand the index straight to the parameter, so only "off" and
+  // the first entry were reachable; this pins the conversion the engine and
+  // both editors share: value = index / (count - 1).
+  const cases = [[RAMP_TARGETS, rampTargetIndex], [RAMP_WAVES, rampWaveIndex]];
+  for (const [names, indexOf] of cases) {
+    const n = names.length;
+    for (let i = 0; i < n; i++) {
+      const v = i / (n - 1);
+      assert.strictEqual(indexOf(v), i, `${names[i]} (${i}/${n - 1}) reads back as ${i}`);
+    }
+    assert.deepStrictEqual([0, 1].map(indexOf), [0, n - 1], `${n} stops span 0..1`);
+  }
+  assert.strictEqual(rampTargetIndex(-4), 0, 'below 0 clamps to off');
+  assert.strictEqual(rampTargetIndex(4), 6, 'above 1 clamps to balance');
+  assert.strictEqual(RAMP_TARGETS[0], 'OFF', 'the first ramp target is off');
+});
+
 test('a ramp moves its control and stops where the knob says', () => {
   const still = rampTrace({ rampWet: 0, time: 0.6 }, 2);
   assert.ok(Math.abs(still[still.length - 1] - 0.6) < 1e-6, 'off is the knob, untouched');

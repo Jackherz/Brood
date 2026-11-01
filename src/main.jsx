@@ -25,7 +25,7 @@ const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} 
 // far left (the pedal's own buffer) up to half a minute at the right.
 const memoryText = (v) => v <= 0.001 ? 'PEDAL' : `${expMap(v, 1, 30).toFixed(1)}s`;
 // The ramp engine, mirrored from src/mood-worklet.js.
-const RAMP_TARGETS = ['STILL', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE'];
+const RAMP_TARGETS = ['OFF', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE'];
 const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
 const rampIndex = (v, names) => Math.round(clamp(v) * (names.length - 1));
 const rampValue = (index, names) => names.length < 2 ? 0 : index / (names.length - 1);
@@ -406,8 +406,12 @@ function HoodPanel({ params, onChange, help }) {
 function Stepper({ label, names, value, onChange, hint, help }) {
   const index = rampIndex(value, names);
   const step = (d) => onChange(rampValue((index + d + names.length) % names.length, names));
-  return <div className="stepper" role="group" aria-label={`${label}: ${names[index]}. ${hint}`}
-    title={`${label}: ${names[index]} — click to step through the list`} onClick={() => step(1)} {...(help || {})}>
+  // Anywhere on the cell steps forward — the arrows are the same gesture with a
+  // direction, not the only live part of it. A filled display means the tide is
+  // running; OFF is drawn as an outline so on and off cannot be confused.
+  return <div className={`stepper ${names[index] === 'OFF' ? 'off' : 'on'}`} role="group"
+    aria-label={`${label}: ${names[index]}. ${hint}`}
+    title={`${label}: ${names[index]} — click anywhere to step, ◀ to step back`} onClick={() => step(1)} {...(help || {})}>
     <button type="button" aria-label={`previous ${label}`} onClick={(event) => { event.stopPropagation(); step(-1); }}>◀</button>
     <span className="stepper-cap">{label}</span>
     <b aria-live="polite">{names[index]}</b>
@@ -420,12 +424,12 @@ function RampPanel({ params, onChange, help }) {
   return <div className="ramp-panel">
     <div className="side-rule ramp-heading"><span>THE RAMPS</span><span>CLICK A CELL TO STEP</span></div>
     <div className="ramp-grid">
-      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="click to step through what the first tide turns"
-        help={help('RAMP / WET', 'press to choose which knob the first tide turns by itself: time, mix, length, modify, clock or balance. STILL leaves it alone.')}/>
-      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="click to step through what the second tide turns"
-        help={help('RAMP / LOOP', 'press to choose which knob the second tide turns. MODIFY means this side\u2019s own modify. STILL leaves it alone.')}/>
-      <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="click to step through the shapes"
-        help={help('RAMP SHAPE', 'press to choose the shape of the tide: triangle, square, sine, random, smooth random.')}/>
+      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="click anywhere to step what the first tide turns"
+        help={help('RAMP / WET', 'click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
+      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="click anywhere to step what the second tide turns"
+        help={help('RAMP / LOOP', 'click anywhere to step the second tide through the same list; its MODIFY means this channel\u2019s own. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
+      <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="click anywhere to step the shape"
+        help={help('RAMP SHAPE', 'click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.')}/>
       <label className="rate-row" {...help('RAMP RATE', 'how slowly the tide turns. both sides share it, so they stay in step.')}><span>RATE</span>
         <input aria-label="Ramp speed" type="range" min="0" max="1" step="0.005" value={params.rampSpeed} onChange={(event) => onChange('rampSpeed', Number(event.target.value))}/>
         <b>{rampHint(params.rampSpeed)}</b>

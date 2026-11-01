@@ -59,8 +59,20 @@ constexpr int kRampTargetCount = 7;
 constexpr int kRampWaveCount = 5;
 inline const char* const kRampTargets[kRampTargetCount] = {"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"};
 inline const char* const kRampWaves[kRampWaveCount] = {"TRI", "SQR", "SIN", "RND", "SMTH"};
-inline int rampTargetIndex(double k) { return static_cast<int>(jsRound(clampd(k, 0, 1) * (kRampTargetCount - 1))); }
-inline int rampWaveIndex(double k) { return static_cast<int>(jsRound(clampd(k, 0, 1) * (kRampWaveCount - 1))); }
+// Index ↔ normalised value. The parameters are plain 0..1 floats with `count`
+// stops, and this is the only place that conversion lives: the engine, the
+// parameter readouts and the editor's stepper cells all go through it. Treating
+// the index as the value (which the editor did until round 14) left only the first
+// two entries reachable and pointed the engine at the wrong knob entirely.
+inline int rampIndexOfValue(double v, int count) {
+    return static_cast<int>(jsRound(clampd(v, 0, 1) * (count - 1)));
+}
+inline double rampValueOfIndex(int i, int count) {
+    if (count < 2) return 0.0;
+    return clampd(i, 0, count - 1) / static_cast<double>(count - 1);
+}
+inline int rampTargetIndex(double k) { return rampIndexOfValue(k, kRampTargetCount); }
+inline int rampWaveIndex(double k) { return rampIndexOfValue(k, kRampWaveCount); }
 inline double rampHertz(double k) { return expMap(clampd(k, 0, 1), 0.05, 8); }   // one cycle every 20 s … eight a second
 constexpr double kRampDepth = 0.5;
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles

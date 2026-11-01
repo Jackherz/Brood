@@ -625,6 +625,30 @@ int main() {
         const double worst = step(jump.L, 0.05, 0.4);
         CHECK(worst < std::max(0.02, quiet * 4), "one big move stays smooth (worst step %.4f vs %.4f still)", worst, quiet);
     }
+    {   // The ramp cells' index <-> value conversion. The editor used to write the
+        // index straight into a 0..1 parameter, so only "off" and the first entry
+        // were reachable and the engine was pointed at the last knob instead. Every
+        // stop must survive the round trip, and the values must run 0..1 in order.
+        for (int count : {mood::kRampTargetCount, mood::kRampWaveCount}) {
+            for (int i = 0; i < count; ++i) {
+                const double v = mood::rampValueOfIndex(i, count);
+                CHECK(mood::rampIndexOfValue(v, count) == i, "count %d: index %d survives the round trip (v=%.3f)", count, i, v);
+                CHECK(v >= 0.0 && v <= 1.0, "count %d: index %d stays inside 0..1", count, i);
+                CHECK(i == 0 || v > mood::rampValueOfIndex(i - 1, count), "count %d: index %d is above index %d", count, i, i - 1);
+            }
+            CHECK(mood::rampValueOfIndex(0.0, count) == 0.0, "count %d: the first stop is 0", count);
+            CHECK(mood::rampValueOfIndex(count - 1, count) == 1.0, "count %d: the last stop is 1", count);
+            CHECK(mood::rampIndexOfValue(0.0, count) == 0, "count %d: 0 reads as the first stop", count);
+            CHECK(mood::rampIndexOfValue(1.0, count) == count - 1, "count %d: 1 reads as the last stop", count);
+            CHECK(mood::rampIndexOfValue(-3.0, count) == 0, "count %d: below 0 clamps to the first stop", count);
+            CHECK(mood::rampIndexOfValue(9.0, count) == count - 1, "count %d: above 1 clamps to the last stop", count);
+        }
+        CHECK(mood::rampValueOfIndex(6, 1) == 0.0, "a single-entry list has one value");
+        CHECK(std::string(mood::kRampTargets[0]) == "OFF", "the first ramp target is off");
+        CHECK(mood::rampIndexOfValue(mood::rampValueOfIndex(6, mood::kRampTargetCount), mood::kRampTargetCount) == 6, "BALANCE is reachable");
+        CHECK(mood::rampIndexOfValue(mood::rampValueOfIndex(4, mood::kRampWaveCount), mood::kRampWaveCount) == 4, "all five shapes are reachable");
+        CHECK(mood::rampTargetIndex(1.0) == 6, "a full ramp knob reads as BALANCE");
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

@@ -435,17 +435,19 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   restores MK I manners: a noisy clock that hisses most at low settings, a loop
   that never sits still (wow and flutter), and a reverb that rings far longer.
 - **THE RAMPS** are the pedal's function generators, one per channel, and the
-  reason it is more than four effects. Each side has a destination — TIME, MIX,
-  LENGTH, MODIFY (that channel's own modify knob), CLOCK or BALANCE — and a
-  generator writes into it, added on top of where the knob sits and rebuilt from
-  the knob every sample. Five shapes (triangle, square, sine, random, smooth
+  reason it is more than four effects. Each side has a destination — OFF, then
+  TIME, MIX, LENGTH, MODIFY (that channel's own modify knob), CLOCK or BALANCE —
+  and a generator writes into it, added on top of where the knob sits and rebuilt
+  from the knob every sample. **OFF** is the first stop and the pedal's own name
+  for it, so there is no separate "still" word to mistake for a setting: an OFF
+  cell is drawn as an empty frame, a running one as a filled display. Five shapes (triangle, square, sine, random, smooth
   random), one rate for both sides, from one cycle every twenty seconds up to
   eight a second. **UNI** keeps the swing above the knob instead of either side
   of it; **BOUNCE** reflects the phase so it never snaps back; **SWEEP** drops the
   shape and climbs, restarting from the bottom. In the editor the two destination
-  cells step with their arrows or by clicking them anywhere (they are drawn as
-  buttons: frame, hard shadow, arrow blocks, value in a display), the rate is the
-  RATE slider and the three switches sit in the same panel — on the pedal these
+  cells step from anywhere on the cell — only the painted back arrow steps back —
+  and every cell offers its full list, so the readout and the hover text name
+  exactly the stops that exist. The rate is the RATE slider and the three switches sit in the same panel — on the pedal these
   are the dips, so the editor is the comfortable place to reach them. Hovering a
   cell in the editor writes what pressing it will do into the readout.
 - **TRAILS**, **SMOOTH**, **SYNC** and wet/loop balance are modelled. WIDTH, the

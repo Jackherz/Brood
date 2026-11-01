@@ -45,6 +45,17 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 14: **the ramp cells step properly, and STILL is OFF.** The destination
+  cells handed their option index straight to a 0..1 parameter, which clamped
+  every stop above the first onto 1 — so WET and LOOP only ever offered OFF and
+  TIME, SHAPE only TRI and SQR, a click landed on the wrong knob, and a value the
+  user had chosen could read back as something else on the next redraw. The
+  conversion is now one function (`rampIndexOfValue` / `rampValueOfIndex`) shared
+  by both cores and both editors, covered by a round-trip test over every stop.
+  The cell also steps from anywhere inside it (only the painted back arrow steps
+  back), and OFF is named OFF — the engine's word — instead of STILL, drawn as an
+  outline against the solid block of a running ramp.
+
 - Round 13: **START is back.** It had been removed because END was dragging the
   start around with it; with END fixed to the end only, a start trim is the piece
   ENV and STRETCH were missing — until now those modes could only ever hear the
