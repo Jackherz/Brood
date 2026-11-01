@@ -307,10 +307,26 @@ EOF
   if [ "$OS" = macos ] && command -v auval >/dev/null 2>&1 && [ "$DRY_RUN" = 0 ]; then
     echo
     echo "==> Validating the Audio Unit with auval (this also catches signing issues)"
-    if auval -v aufx BrMd Broo >/tmp/brood-auval.log 2>&1; then
-      echo "    auval: AU loads and passes validation."
-    else
-      echo "    auval reported a problem; see /tmp/brood-auval.log" >&2
+    # An Audio Unit is published under the type it really registers as. This plug-in
+    # asks for MIDI input, so macOS files it as a *music effect* (`aumf`), not a plain
+    # effect (`aufx`) — validating against the wrong type fails every time, which
+    # looks exactly like a broken plug-in. So ask the registry what it filed first.
+    AU_TRIPLE=$(auval -a 2>/dev/null | awk '$2 == "BrMd" { print $1, $2, $3; exit }' || true)
+    AU_OK=0
+    for triple in ${AU_TRIPLE:-} "aumf BrMd Broo" "aufx BrMd Broo"; do
+      set -- $triple
+      [ -n "${1:-}" ] || continue
+      if auval -v "$1" "$2" "$3" >/tmp/brood-auval.log 2>&1; then
+        echo "    auval: $1 $2 $3 loads and passes validation."
+        AU_OK=1
+        break
+      fi
+    done
+    if [ "$AU_OK" = 0 ]; then
+      echo "    auval could not validate the AU; the lines that matter:" >&2
+      grep -iE 'error|fail|cannot|not found' /tmp/brood-auval.log 2>/dev/null | head -8 | sed 's/^/      /' >&2 || true
+      echo "    full log: /tmp/brood-auval.log" >&2
+      echo "    the VST3 is unaffected — in Ableton, load the VST3" >&2
     fi
   fi
 fi

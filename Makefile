@@ -1,5 +1,6 @@
 # Brood Mood — short, copy-paste friendly entry points.
 #
+#   make update     pull the latest source, then build and install
 #   make install    build the VST3 (+ AU and standalone on macOS) and install it
 #   make doctor     check why a DAW cannot see the plug-in
 #   make build      build without installing
@@ -17,10 +18,16 @@ SHELL := /bin/bash
 SCRIPTS := scripts
 BUILD := native/build
 
-.PHONY: help install build universal run doctor doctor-fix clean test check web
+.PHONY: help update install build universal run doctor doctor-fix clean test check web
 
 help:
 	@awk 'NR <= 15 && /^#/' Makefile | sed 's/^# *//'
+
+# One command for "get the newest source and install it": the build prints the
+# commit it came from, so a stale checkout can never be mistaken for a stale bug.
+update:
+	@git -C "$(CURDIR)" pull --ff-only
+	@$(MAKE) --no-print-directory install
 
 install:
 	@bash $(SCRIPTS)/build-plugin.sh --install

@@ -216,12 +216,24 @@ fi
 # ---------------------------------------------------------------- 5. auval
 section "Audio Unit validation (auval)"
 if command -v auval >/dev/null 2>&1; then
-  out=$(auval -v aufx BrMd Broo 2>&1)
-  if printf '%s' "$out" | grep -q 'AU VALIDATION SUCCEEDED'; then
-    ok "auval: the plug-in loads and passes validation"
-  else
-    bad "auval did not succeed"
+  # The type has to match what macOS filed the component as: a plug-in that takes
+  # MIDI input is a music effect (aumf), not a plain effect (aufx).
+  registered=$(auval -a 2>/dev/null | awk '$2 == "BrMd" { print $1, $2, $3; exit }' || true)
+  passed=0
+  for triple in ${registered:-} "aumf BrMd Broo" "aufx BrMd Broo"; do
+    set -- $triple
+    [ -n "${1:-}" ] || continue
+    out=$(auval -v "$1" "$2" "$3" 2>&1)
+    if printf '%s' "$out" | grep -q 'AU VALIDATION SUCCEEDED'; then
+      ok "auval: the plug-in loads and passes validation ($1 $2 $3)"
+      passed=1
+      break
+    fi
+  done
+  if [ "$passed" = 0 ]; then
+    bad "auval did not succeed, and the component is not in the AU registry"
     printf '%s\n' "$out" | grep -iE 'error|fail|crash|cannot|not found' | head -8 | sed 's/^/        /'
+    info "if the AU folder has the bundle but auval cannot see it, run: killall -9 AudioComponentRegistrar"
     issue
   fi
 else
