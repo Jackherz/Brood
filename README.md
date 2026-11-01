@@ -506,3 +506,6 @@ pedals studied earlier — blooper, Habit, Bad Mood — are in
 
 None of it is scheduled. The cheapest three are Reverse Mode C, Clean and Generation
 Loss MKII, at roughly one round each because most of their blocks already exist here.
+The open-source code those pedals would lean on — panel definitions, DSP vocabulary,
+circuit models, granular engines — is catalogued with licences in
+[docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md).

@@ -6,6 +6,11 @@
 > 2026-11-01) and the three pedals already studied in depth. This file holds the
 > nine added to the list on 2026-11-01 — eight by Chase Bliss, one by Hologram
 > Electronics — with what each one would actually cost us.
+>
+> The open-source code that would help with each of them — the `pedalzombie` data
+> model for panels, DaisySP and Airwindows as a vocabulary of cheap blocks,
+> chowdsp_wdf for circuit models, Beads for granular, Faust for writing a block once
+> — is in [OPEN-SOURCE.md](OPEN-SOURCE.md), with licences and what each is *not*.
 
 ## How to read this
 

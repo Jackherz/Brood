@@ -281,7 +281,10 @@ If the playground is the direction, these come before any second pedal:
 2. **Panels as data, not as two hand-coded layouts.** The doubling of every UI
    change — `src/main.jsx` and `PluginEditor.cpp` — is the largest recurring cost in
    this project. A declarative panel description (cells, labels, ranges, whispers)
-   read by both sides would turn a round's UI work into an afternoon.
+   read by both sides would turn a round's UI work into an afternoon. An MIT-licensed
+   project has already built the data half of this for most of the pedals in
+   [PEDAL-SERIES.md](PEDAL-SERIES.md) — see `pedalzombie` in
+   [OPEN-SOURCE.md](OPEN-SOURCE.md).
 3. **A state budget policy.** Round 11 made saves carry audio. Before a second
    pedal arrives, write down what is saved, what is deliberately scratch, and what
    the size cap is — otherwise a reel or a layer stack quietly makes set files

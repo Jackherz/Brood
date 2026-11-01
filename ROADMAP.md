@@ -37,6 +37,11 @@ they contain rather than how hard they are, and Brothers AM is the fork in the r
 it is analogue, so shipping it means writing "model" instead of "clone". Nothing is
 scheduled.
 
+The open-source code that would do part of this work already exists, and is
+catalogued with its licences in [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) — most
+usefully `pedalzombie` (MIT), which already describes most of these pedals as data,
+and DaisySP / Airwindows / chowdsp_wdf / Beads as vocabulary for the blocks.
+
 - **blooper** — parked for now, by decision. Reverse and smooth/stepped speed,
   stopper, loop filter and one-shot are cheap because the blocks already exist;
   eight layers of undo and additive mode are the two hard pieces, and layers lose
