@@ -59,6 +59,7 @@ MoodProcessor::MoodProcessor()
           layout.add(loopParam("wetDiv", "Wet clock division", 0.f));
           layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("classic", 1), "Classic (MK I quirks)", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze (hold the wet side)", false));
           // The ramp engine: two generators, one per channel.
           layout.add(loopParam("rampWet", "Ramp: wet", 0.f));
           layout.add(loopParam("rampLoop", "Ramp: loop", 0.f));
@@ -132,6 +133,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         return "up to " + fmtTime(mood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
     }
     if (id == "loopEnd") return v >= 0.999f ? "the whole loop" : "plays " + pct(v);
+    if (id == "freeze") return v > 0.5f ? "held, ringing" : "moving";
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
     if (id == "width") return v < 0.49f ? "narrow " + pct(v * 2) : v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
@@ -217,6 +219,7 @@ void MoodProcessor::pullParams() {
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
     p.classic = param("classic") > 0.5f;
+    p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
     p.rampWet = param("rampWet"); p.rampLoop = param("rampLoop"); p.rampSpeed = param("rampSpeed");
     p.rampWave = param("rampWave");
     p.rampUni = param("rampUni") > 0.5f; p.bounce = param("bounce") > 0.5f; p.sweep = param("sweep") > 0.5f;
@@ -264,7 +267,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
 
     // A useful subset of the MOOD MKII CC map. Changes are applied at block
     // boundaries; hosts can also automate every front-panel parameter directly.
-    int midiWet = -1, midiLoop = -1, midiFreeze = -1;
+    int midiWet = -1, midiLoop = -1;
     for (const auto metadata : midi) {
         const auto message = metadata.getMessage();
         if (!message.isController()) continue;
@@ -284,13 +287,13 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
             else if (cc == 75) id = "trails"; else if (cc == 76) id = "latch"; else if (cc == 78) id = "smooth";
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
-            else if (cc == 105) midiFreeze = value != 0;
             else if (cc == 20) { if (auto* parameter = apvts.getParameter("rampSpeed")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 66) { if (auto* parameter = apvts.getParameter("bounce")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 67) { if (auto* parameter = apvts.getParameter("sweep")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 71) id = "classic";
+            else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }
     }
@@ -303,7 +306,6 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     if (restore >= 0 && core_.state().wetOn != (restore != 0)) tap(0);
     if (midiWet >= 0 && core_.state().wetOn != (midiWet != 0)) tap(0);
     if (midiLoop >= 0 && (core_.state().loop != mood::LoopLed::Off) != (midiLoop != 0)) tap(1);
-    if (midiFreeze >= 0) { core_.setFreeze(midiFreeze != 0); coreRight_.setFreeze(midiFreeze != 0); }
     const bool wetSw = param("wetSwitch") > 0.5f, loopSw = param("loopSwitch") > 0.5f;
     if (wetSw != lastWetSw_) { lastWetSw_ = wetSw; core_.footswitch(0, wetSw); coreRight_.footswitch(0, wetSw); }
     if (loopSw != lastLoopSw_) { lastLoopSw_ = loopSw; core_.footswitch(1, loopSw); coreRight_.footswitch(1, loopSw); }

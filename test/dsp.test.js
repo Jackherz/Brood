@@ -729,3 +729,103 @@ test('a TIME ramp makes the echo breathe', () => {
   const a = peakTime(L, 0.02, 1.2), b = peakTime(L, 1.6, 3.6);
   assert.ok(Math.abs(a - b) > 0.01, `the echo moves (${a.toFixed(3)} s then ${b.toFixed(3)} s)`);
 });
+
+test('LENGTH travels all the way back to the start of a 30 s capture', () => {
+  // A TAPE-mode capture with the memory window wide open must be able to put
+  // its window at the very beginning of the take, not just near it.
+  const core = new MoodCore(FS);
+  Object.assign(core.p, { loopMode: 1, memory: 1, loopEnd: 1 });   // TAPE
+  render(core, 30.5, tone(220, 1));
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  const len = core.lsrc;
+  assert.ok(len > 29 * FS, `the take is about 30 s (${(len / FS).toFixed(2)} s)`);
+  const starts = [1, 0.95, 0.75, 0.5, 0.25].map((v) => {
+    core.setParam('length', v);
+    render(core, 0.6, () => 0);          // let the smoothed knob settle
+    const w = core.loopWindow();
+    return { v, start: w.start / len, seconds: w.W / FS };
+  });
+  assert.ok(starts[0].start < 0.01, `LENGTH 1 starts at the beginning (${(starts[0].start * 100).toFixed(1)} %)`);
+  assert.ok(starts[0].seconds > 29, `and the window is the whole take (${starts[0].seconds.toFixed(2)} s)`);
+  // Travel is usable: each quarter turn of the knob moves the start by ~25 %.
+  for (let i = 1; i < starts.length; i++) assert.ok(starts[i].start > starts[i - 1].start, 'the start only moves forward');
+  assert.ok(Math.abs(starts[2].start - 0.245) < 0.02, `LENGTH 0.75 starts a quarter in (${(starts[2].start * 100).toFixed(1)} %)`);
+  assert.ok(Math.abs(starts[4].start - 0.735) < 0.02, `LENGTH 0.25 starts three quarters in (${(starts[4].start * 100).toFixed(1)} %)`);
+});
+
+test('re-taking a loop many times never splices a click in', () => {
+  // Every extra footswitch tap used to stitch another splice into the capture,
+  // because the history only advanced while the loop was off.
+  const slope = 0.4 * 2 * Math.PI * 100 / FS; // the natural step of a 100 Hz tone
+  const take = (taps) => {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { clock: 1, memory: 0.5, loopMode: 1, mix: 1, wetMode: 0, modLoop: 0.5, length: 0.8 });
+    let t = 0;
+    const step = (sec) => {
+      const n = Math.ceil((sec * FS) / BLOCK);
+      const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+      for (let b = 0; b < n; b++) {
+        for (let i = 0; i < BLOCK; i++) inp[i] = 0.4 * Math.sin(2 * Math.PI * 100 * ((t * BLOCK + i) / FS));
+        core.process(inp, oL, oR);
+        t++;
+      }
+    };
+    step(4);
+    for (let k = 0; k < taps; k++) {
+      core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); step(1.5);
+      core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); step(1.0);
+    }
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); step(0.2);
+    return core;
+  };
+  for (const taps of [1, 2, 4, 8]) {
+    const core = take(taps);
+    const buf = core.loopBuf;
+    assert.ok(finite(buf), `the capture stays finite after ${taps} tap(s)`);
+    const n = core.lsrc;
+    assert.ok(n > 64, `the capture has audio after ${taps} tap(s)`);
+    let worst = 0;
+    for (let i = 1; i < n; i++) worst = Math.max(worst, Math.abs(buf[i] - buf[i - 1]));
+    assert.ok(worst < slope * 1.4, `${taps} tap(s): the worst step inside the loop is the tone's own slope (${(worst / slope).toFixed(2)}x)`);
+  }
+});
+
+test('MEMORY window on a long listen is a whole number of samples', () => {
+  // A fractional capture length used to poison the loop with NaN after the
+  // memory window elapsed.
+  for (const memory of [0.15, 0.4, 0.5, 0.85]) {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { loopMode: 2, memory, mix: 0.7, modWet: 0.6 });
+    render(core, 9, tone(120, 99), { [blk(0)]: (c) => c.footswitch('loop', 'down'), [blk(0.05)]: (c) => c.footswitch('loop', 'up') });
+    assert.ok(Number.isInteger(core.maxCaptureSamples()), `MEMORY ${memory}: whole samples`);
+    assert.ok(Number.isInteger(core.lsrc), `MEMORY ${memory}: capture is a whole number of samples`);
+    assert.ok(finite(core.loopBuf), `MEMORY ${memory}: no NaN in the loop`);
+  }
+});
+
+test('FREEZE holds the wet tail without a held footswitch', () => {
+  const run = (freeze) => {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { wetMode: 0, time: 0.7, mix: 1, modWet: 0.8, clock: 0.9 });
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    render(core, 3, tone(300, 99));
+    if (freeze) core.setParam('freeze', 1);
+    const tail = render(core, 5, () => 0);
+    return { tail, state: core.state() };
+  };
+  const off = run(false), on = run(true);
+  const late = (o) => rms(o.tail.L, 3.5, 4.9);
+  assert.ok(late(on) > 20 * late(off), `FREEZE keeps ringing (${late(on).toFixed(4)} vs ${late(off).toFixed(4)})`);
+  assert.ok(on.state.freeze && on.state.wetOn, 'the state says the wet side is held');
+  assert.ok(!off.state.freeze, 'and it is not held when the switch is down');
+  // Releasing the switch lets the tail go again.
+  const core = new MoodCore(FS);
+  Object.assign(core.p, { wetMode: 0, time: 0.7, mix: 1, modWet: 0.8, clock: 0.9 });
+  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  render(core, 3, tone(300, 99));
+  core.setParam('freeze', 1);
+  const held = render(core, 2, () => 0);
+  core.setParam('freeze', 0);
+  const freed = render(core, 4, () => 0);
+  assert.ok(rms(held.L, 1.5, 1.9) > 5 * rms(freed.L, 3.5, 3.9), 'releasing FREEZE lets the tail decay');
+});

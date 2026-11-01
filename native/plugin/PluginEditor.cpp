@@ -422,6 +422,11 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         addAndMakeVisible(h.slider);
         h.att = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, hoodDefs[i].first, h.slider);
     }
+    hoodFreeze.setButtonText("FREEZE");
+    hoodFreeze.setTitle("Freeze the wet side");
+    hoodFreeze.onClick = [this] { showReadout("FREEZE", hoodFreeze.getToggleState() ? "held, ringing" : "moving"); };
+    addAndMakeVisible(hoodFreeze);
+    hoodFreezeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "freeze", hoodFreeze);
     hoodClassic.setButtonText("CLASSIC");
     hoodClassic.setTitle("Classic (MK I quirks)");
     hoodClassic.onClick = [this] { showReadout("CLASSIC", hoodClassic.getToggleState() ? "mk I manners, on" : "as built"); };
@@ -572,10 +577,11 @@ void MoodEditor::resized() {
     // slider is as wide as a trim row and stays easy to grab.
     hoodArea = {20, 636, 860, 56};
     const int hoodLeft = hoodArea.getX() + 118;
-    const int cell = (hoodArea.getRight() - 14 - hoodLeft - 5 * 8) / 6;
-    for (int i = 0; i < 6; ++i) hoodCellDesign[i] = {hoodLeft + i * (cell + 8), hoodArea.getY() + 4, cell, 48};
+    const int cell = (hoodArea.getRight() - 14 - hoodLeft - 6 * 8) / 7;
+    for (int i = 0; i < 7; ++i) hoodCellDesign[i] = {hoodLeft + i * (cell + 8), hoodArea.getY() + 4, cell, 48};
     for (size_t i = 0; i < hood.size(); ++i) place(hood[i].slider, hoodCellDesign[i].withY(hoodArea.getY() + 23).withHeight(22));
     place(hoodClassic, hoodCellDesign[5].withY(hoodArea.getY() + 23).withHeight(22));
+    place(hoodFreeze, hoodCellDesign[6].withY(hoodArea.getY() + 23).withHeight(22));
     place(presetBox, presetBoxDesign);
     rebuildHoverHelp();
 }
@@ -636,9 +642,10 @@ void MoodEditor::rebuildHoverHelp() {
         "the wet side runs on a divided clock, so the room and the echo stretch out.",
         "the loop runs on a divided clock: lower, longer, further from the other side.",
         "the MK I in the room: a noisy clock, a loop that never sits still.",
+        "the hold gesture without the holding: the wet side comes up frozen and rings on its own.",
     };
-    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV", "CLASSIC"};
-    for (int i = 0; i < 6; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
+    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV", "CLASSIC", "FREEZE"};
+    for (int i = 0; i < 7; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
 }
 
 void MoodEditor::paint(juce::Graphics& g) {
@@ -766,7 +773,7 @@ void MoodEditor::paint(juce::Graphics& g) {
     hoodText[2] = hv[2] < 0.49f ? "nar " + percent(hv[2] * 2) : hv[2] > 0.51f ? "wid " + percent((hv[2] - 0.5f) * 2) : "mid";
     hoodText[3] = juce::String(mood::divMap(hv[3])) + "x";
     hoodText[4] = juce::String(mood::divMap(hv[4])) + "x";
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
         const auto cellRect = hoodCellDesign[i];
         g.setColour(kInk); g.setFont(font(11));
         // Fitted, not clipped: "keeps 100%" is wider than half a cell at full size.

@@ -1,0 +1,20 @@
+# FREEZE: the wet side comes up by footswitch and is held by the FREEZE switch
+# instead of by a held foot. 375 blocks = 1 s at 48 kHz.
+rate 48000
+seconds 12
+0 param wetMode 0
+0 param time 0.7
+0 param mix 1
+0 param modWet 0.7
+0 param clock 0.9
+0 param freeze 0
+30 fs wet down
+31 fs wet up
+900 param freeze 1
+1500 param time 0.35
+1500 param modWet 0.3
+2400 param freeze 0
+2700 param wetMode 1
+3000 param freeze 1
+3300 param mix 0.45
+3600 param freeze 0

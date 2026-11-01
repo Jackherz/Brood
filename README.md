@@ -30,7 +30,9 @@ The demo is generated locally; selected files and microphone audio stay in your
 browser. For a production build, run `npm run build`.
 
 Drag a knob vertically, use the mouse wheel or arrow keys, or double-click to
-reset it. Tap **WET CHANNEL** to turn the effect on/off; hold it to freeze.
+reset it. Tap **WET CHANNEL** to turn the effect on/off; hold it to freeze, or
+throw the **FREEZE** switch under the hood to have the freeze arrive without a
+held foot — the wet side comes up held and rings on its own until you let it go.
 The looper is always listening: tap **MICRO-LOOPER** to capture the recent past,
 tap again to stop, or hold while playing to overdub. Holding while listening
 records a new loop for the duration of the hold, up to the buffer capacity.
@@ -283,7 +285,7 @@ the effect. Changes are applied at audio-block boundaries:
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
 | 73–76, 78 | Spread, Dry Kill, Trails, Latch, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
-| 105 | Wet freeze (`0` off, `1–127` on) |
+| 105 | Wet freeze — same as the FREEZE switch (`0` off, `1–127` on) |
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware MOOD controller
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
@@ -355,9 +357,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   exactly like the hardware. END then sets how much of that window sounds before
   it wraps: it only ever moves the loop's *end*. The start point belongs to
   LENGTH — in TAPE the loop window is the most recent part of the capture, so
-  turning LENGTH walks the start forward, exactly as the pedal does. (An earlier
-  version had a separate START trim, which meant END silently dragged the start
-  around with it; it is gone.) The waveform display dims everything outside the
+  turning LENGTH walks the start forward, exactly as the pedal does. At `1` the
+  window is the whole take, so LENGTH reaches the very beginning of a 30 s
+  capture; the travel is linear in the knob (each quarter turn moves the start a
+  quarter of the way in), which is what makes a long take usable rather than a
+  long wait on the last few seconds. (An earlier version had a separate START
+  trim, which meant END silently dragged the start around with it; it is gone.) The waveform display dims everything outside the
   window. Both cores allocate for the longest possible loop up front (about
   32 MB), so MEMORY never reallocates on the audio thread.
 - **WET / LOOP** is a crossfade, not two independent gains, and the loop's direct

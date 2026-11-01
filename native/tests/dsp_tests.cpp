@@ -352,6 +352,90 @@ int main() {
         CHECK(mood::speedMap(0.5) == 0.5 && mood::speedMap(1) == 4 && mood::speedMap(0) == -4, "speedMap");
         CHECK(mood::stretchMap(0.5) == 0 && mood::stretchMap(1) == 1 && mood::stretchMap(0) == -1, "stretchMap");
     }
+    {   // LENGTH reaches the very start of a 30 s capture, and travels evenly
+        mood::Core c; c.p.loopMode = 1; c.p.memory = 1; c.p.loopEnd = 1; c.prepare(FS);
+        render(c, 30.5, tone(220, 1));
+        c.footswitch(1, true); c.footswitch(1, false);
+        const int len = c.state().lsrc;
+        CHECK(len > static_cast<int>(29 * FS), "the take is about 30 s (%.2f s)", len / FS);
+        const double want[] = {0.0, 0.049, 0.245, 0.49, 0.735};
+        const double knob[] = {1.0, 0.95, 0.75, 0.5, 0.25};
+        for (int i = 0; i < 5; ++i) {
+            c.p.length = knob[i];
+            render(c, 0.6, [](double) { return 0.0; });   // let the smoothed knob settle
+            const auto st = c.state();
+            const double start = static_cast<double>(st.winStart) / len;
+            CHECK(std::fabs(start - want[i]) < 0.02, "LENGTH %.2f starts at %.1f %% (want %.1f %%)", knob[i], start * 100, want[i] * 100);
+        }
+        c.p.length = 1;
+        render(c, 0.6, [](double) { return 0.0; });
+        const auto all = c.state();
+        CHECK(all.winStart == 0 && all.winLen > static_cast<int>(29 * FS), "LENGTH 1 is the whole take from the start");
+    }
+    {   // Re-taking a loop many times must not splice a click into it
+        const double slope = 0.4 * 2 * mood::kPi * 100 / FS;
+        for (int taps : {1, 2, 4, 8}) {
+            mood::Core c; c.p.clock = 1; c.p.memory = 0.5; c.p.loopMode = 1; c.p.mix = 1;
+            c.p.wetMode = 0; c.p.modLoop = 0.5; c.p.length = 0.8; c.prepare(FS);
+            long t = 0;
+            auto play = [&](double secs) {
+                Out o;
+                const long n = std::lround(secs * FS / B);
+                o.L.resize(static_cast<size_t>(n * B)); o.R.resize(static_cast<size_t>(n * B));
+                for (long b = 0; b < n; ++b) {
+                    float x[B];
+                    for (int i = 0; i < B; ++i, ++t) x[i] = static_cast<float>(0.4 * std::sin(2 * mood::kPi * 100 * (static_cast<double>(t) / FS)));
+                    c.process(x, o.L.data() + b * B, o.R.data() + b * B, B);
+                }
+                return o;
+            };
+            play(4);
+            for (int k = 0; k < taps; ++k) {
+                c.footswitch(1, true); c.footswitch(1, false); play(1.5);
+                c.footswitch(1, true); c.footswitch(1, false); play(1.0);
+            }
+            c.footswitch(1, true); c.footswitch(1, false);
+            const Out o = play(0.2);
+            CHECK(finite(o.L), "%d tap(s): the loop stays finite", taps);
+            CHECK(c.capturedLength() > 64, "%d tap(s): the capture has audio", taps);
+            double worst = 0;
+            for (size_t i = static_cast<size_t>(4 * FS) + 1; i < o.L.size(); ++i) worst = std::max(worst, std::fabs(static_cast<double>(o.L[i] - o.L[i - 1])));
+            CHECK(worst < slope * 1.4, "%d tap(s): the worst step in the loop is the tone's own slope (%.2fx)", taps, worst / slope);
+        }
+    }
+    {   // The MEMORY window must be whole samples: a fractional one poisoned the loop with NaN
+        for (double memory : {0.15, 0.4, 0.5, 0.85}) {
+            mood::Core c; c.p.loopMode = 2; c.p.memory = memory; c.p.mix = 0.7; c.p.modWet = 0.6; c.prepare(FS);
+            render(c, 9, tone(120, 99));
+            c.footswitch(1, true); c.footswitch(1, false);
+            const Out o = render(c, 1, [](double) { return 0.0; });
+            CHECK(finite(o.L), "MEMORY %.2f: no NaN after the window elapses", memory);
+            // MAX_LOOP_SECONDS bounds the capture; whole samples keeps lsrc sane.
+            CHECK(c.capturedLength() > 64 && c.state().winLen > 0, "MEMORY %.2f: the capture is usable", memory);
+        }
+    }
+    {   // FREEZE holds the wet tail without a held footswitch, and lets go again
+        auto ring = [&](bool freezeSwitch) {
+            mood::Core c; c.p.wetMode = 0; c.p.time = 0.7; c.p.mix = 1; c.p.modWet = 0.8; c.p.clock = 0.9; c.prepare(FS);
+            c.footswitch(0, true); c.footswitch(0, false);
+            render(c, 3, tone(300, 99));
+            c.p.freezeLatch = freezeSwitch ? 1.0 : 0.0;
+            const Out tail = render(c, 5, [](double) { return 0.0; });
+            return std::pair<double, mood::State>(rms(tail.L, 3.5, 4.9), c.state());
+        };
+        const auto off = ring(false), on = ring(true);
+        CHECK(on.first > 20 * off.first, "FREEZE keeps ringing (%.4f vs %.4f)", on.first, off.first);
+        CHECK(on.second.freeze && on.second.wetOn, "the switch alone says the wet side is held");
+        CHECK(!off.second.freeze, "and it is not held when the switch is up");
+        mood::Core c; c.p.wetMode = 0; c.p.time = 0.7; c.p.mix = 1; c.p.modWet = 0.8; c.p.clock = 0.9; c.prepare(FS);
+        c.footswitch(0, true); c.footswitch(0, false);
+        render(c, 3, tone(300, 99));
+        c.p.freezeLatch = 1;
+        const Out held = render(c, 2, [](double) { return 0.0; });
+        c.p.freezeLatch = 0;
+        const Out freed = render(c, 4, [](double) { return 0.0; });
+        CHECK(rms(held.L, 1.5, 1.9) > 5 * rms(freed.L, 3.5, 3.9), "releasing FREEZE lets the tail decay");
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

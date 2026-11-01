@@ -223,6 +223,9 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
 .hood-panel { margin-top: 13px; }
 .hood-row { grid-template-columns: minmax(0, 62px) minmax(0,1fr) 70px; margin-top: 6px; }
 .hood-row b { color: #181815; }
+.hood-freeze { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #bebeb5; }
+.hood-freeze-copy { font: 11px/1.5 'Terminal', monospace; color: #66665e; }
+.hood-freeze-copy b { display: block; color: #181815; font: 12px/1.3 'Terminal', monospace; }
 .ramp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 6px; align-items: stretch; }
 .stepper { display: grid; grid-template-columns: 16px auto minmax(0,1fr) 16px; align-items: center; gap: 3px; height: 26px; padding: 0 2px; border: 1px solid #181815; background: #faf9f3; font: 11px 'Terminal', monospace; }
 .stepper button { border: 0; background: transparent; padding: 0; font: 10px 'Terminal', monospace; line-height: 1; color: #181815; height: 20px; }

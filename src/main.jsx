@@ -40,7 +40,7 @@ const BASE = {
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1,
-  tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0,
+  tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
   rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
 };
 const PRESETS = [
@@ -100,7 +100,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -139,6 +139,7 @@ function describe(id, p) {
   if (id === 'rampWave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES)];
   if (id === 'rampSpeed') return rampHint(v);
   if (id === 'rampUni' || id === 'bounce' || id === 'sweep') return v ? 'ON' : 'OFF';
+  if (id === 'freeze') return v ? 'HELD, RINGING' : 'MOVING';
   return percent(v);
 }
 
@@ -375,6 +376,12 @@ function HoodPanel({ params, onChange, help }) {
         <b>{describe(id, params)}</b>
       </label>
     ))}
+    {/* The hold gesture without the holding: the wet side comes up frozen. */}
+    <div className="hood-freeze">
+      <Dip label="FREEZE" checked={params.freeze} onClick={() => onChange('freeze', params.freeze ? 0 : 1)}
+        help={help('FREEZE', 'the hold gesture without the holding: the wet side comes up frozen and rings on its own.')}/>
+      <div className="hood-freeze-copy"><b>{describe('freeze', params)}</b>a hold you no longer have to hold.</div>
+    </div>
   </div>;
 }
 

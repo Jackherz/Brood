@@ -99,8 +99,8 @@ private:
     // there is no second page to dive into.
     struct HoodControl { juce::Slider slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
     std::array<HoodControl, 5> hood;   // tone, fade, width, wet division, loop division
-    juce::ToggleButton hoodClassic;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> hoodClassicAtt;
+    juce::ToggleButton hoodClassic, hoodFreeze;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> hoodClassicAtt, hoodFreezeAtt;
 
     // All of these are in DESIGN coordinates (the 900x640 panel); view maps them
     // into the real window. Paint and layout both work in that space.
@@ -108,7 +108,7 @@ private:
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopEndDesign;
-    juce::Rectangle<int> hoodArea, hoodCellDesign[6], dipCellDesign[6];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[7], dipCellDesign[6];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains

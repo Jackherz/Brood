@@ -23,7 +23,9 @@ that makes it musical rather than merely moving:
 - Four wet modes (reverb, delay, slip, weave) and three loop modes (env, tape,
   stretch), three-way routing, wet/loop balance.
 - DIP switches: trails, dry kill, latch, spread, smooth clock, tempo sync.
-- Loop memory up to 30 s, and END trims how much of the loop plays (the start point is LENGTH's, as on the pedal).
+- Loop memory up to 30 s, and END trims how much of the loop plays (the start point is LENGTH's, as on the pedal). LENGTH's travel is linear, so the window reaches the very start of a 30 s take.
+- A **FREEZE** switch: the held-footswitch freeze without holding the foot. The wet side comes up held, the reverb rings on its own, and letting the switch go releases the tail. Also on CC 105.
+- Click-free re-takes: the capture history advances while a loop is playing too, so catching a loop over and over never splices a step in, and the capture length is a whole number of samples (MEMORY could previously leave it fractional and poison the loop with NaN).
 - Hidden options: tone, fade, stereo width, wet and loop clock division, classic.
 - Host tempo sync for the delay (VST3/AU follows the DAW playhead).
 

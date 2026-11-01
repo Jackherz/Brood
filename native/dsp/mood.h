@@ -361,6 +361,7 @@ struct Params {
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
+    double freezeLatch = 0;                          // the FREEZE switch: wet up, held
     double rampWet = 0, rampLoop = 0;                // RAMPS destination per channel
     double rampSpeed = 0.45, rampWave = 0;           // rate and shape
     bool rampUni = false, bounce = false, sweep = false;
@@ -489,13 +490,14 @@ public:
                 const double mid = (el + er) * 0.5, side = (el - er) * 0.5 * (s.width * 2);
                 el = mid + side; er = mid - side;
             }
-            const double engagedT = wetOn || loopState == LoopState::Play ? 1.0 : 0.0;
+            const bool latchFreeze = p.freezeLatch > 0.5;   // the FREEZE switch, per sample
+            const double engagedT = wetOn || latchFreeze || loopState == LoopState::Play ? 1.0 : 0.0;
             engaged += (engagedT - engaged) * 0.001;
             const double dg = p.dryKill ? 0.0 : 1 - engaged * (1 - std::min(1.0, 2 * (1 - e.mix)));
             const double wg = std::min(1.0, 2 * e.mix);
             double l = dry * dg + el * wg;
             double r = dry * dg + er * wg;
-            const bool fullyBypassed = !p.dryKill && !p.trails && !wetOn && loopState == LoopState::Off && engaged < 1e-4;
+            const bool fullyBypassed = !p.dryKill && !p.trails && !wetOn && !latchFreeze && loopState == LoopState::Off && engaged < 1e-4;
             if (!fullyBypassed) { l = softClip(l); r = softClip(r); }
             outL[i] = static_cast<float>(l); outR[i] = static_cast<float>(r);
             pkOut = std::max(pkOut, std::max(std::fabs(l), std::fabs(r)));
@@ -510,7 +512,8 @@ public:
         if (fsLoop.active && fsLoop.held && !fsLoop.playing) led = LoopLed::Rec;
         else if (overdub && loopState == LoopState::Play) led = LoopLed::Dub;
         const Window win = lsrc > 0 ? loopWindow() : Window{0, 0};
-        return State{wetOn, freeze, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
+        const bool heldNow = p.freezeLatch > 0.5;
+        return State{wetOn || heldNow, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
                      static_cast<float>(peakIn), static_cast<float>(peakOut)};
     }
 
@@ -687,7 +690,11 @@ private:
         const double trim = clampd(p.loopEnd, 0.02, 1);
         if (p.loopMode != 1)
             return {std::max(64, static_cast<int>(std::floor(len * trim))), 0};
-        const int W0 = std::max(64, static_cast<int>(std::floor(len * expMap(e.length, 0.02, 1))));
+        // Linear in the fraction of the capture, so at 1 the window is everything
+        // and the start of a long recording is actually reachable; the exponential
+        // curve spent 95% of the knob's travel on the last few seconds.
+        // Rounded, not floored: at 1 the window is exactly the whole take.
+        const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * clampd(e.length, 0, 1)))));
         return {std::max(64, static_cast<int>(std::floor(W0 * trim))), len - W0};
     }
 
@@ -785,8 +792,13 @@ private:
     void coreTick(double x) {
         const double loopOut = loopTick(x);
         const double wetSrc = loopState != LoopState::Play ? x : p.routing == 0 ? x : p.routing == 1 ? x + loopOut : loopOut;
-        const double inT = wetOn ? 1.0 : 0.0;
-        const double outT = wetOn || p.trails ? 1.0 : 0.0;
+        // The FREEZE switch is the hold gesture without the holding: it brings the
+        // wet side up and freezes it, so a reverb can be left ringing on its own.
+        const bool held = p.freezeLatch > 0.5;
+        const bool wet = wetOn || held;
+        const bool frozen = freeze || held;
+        const double inT = wet ? 1.0 : 0.0;
+        const double outT = wet || p.trails ? 1.0 : 0.0;
         wetIn += (inT - wetIn) * 0.003;
         wetOut += (outT - wetOut) * 0.003;
         for (int k = 0; k < 4; ++k) modeGain[k] += ((p.wetMode == k ? 1.0 : 0.0) - modeGain[k]) * 0.002;
@@ -801,7 +813,7 @@ private:
         if (modeGain[0] > 1e-4) {
             // CLASSIC: the MK I reverb rings far longer than the MK II's.
             reverb.setDecay(expMap(e.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(e.time, 0.35, 1));
-            const double* o = reverb.tick(wIn, e.modWet, freeze, e.time > 0.985);
+            const double* o = reverb.tick(wIn, e.modWet, frozen, e.time > 0.985);
             wl += o[0] * modeGain[0]; wr += o[1] * modeGain[0];
         }
         double mono = 0;
@@ -811,12 +823,12 @@ private:
             double delayTicks = expMap(e.time, 0.02 * kCoreFs, 2 * kCoreFs);
             if (p.sync) delayTicks = clampd(syncSeconds(p.bpm, e.time) * clockRatio * fs, 1.0, kDelayMaxSec * kCoreFs * 0.95);
             delayTicks = clampd(delayTicks * wdiv, 1.0, kDelayMaxSec * kCoreFs * 0.95);
-            mono += delay.tick(wIn, delayTicks, e.modWet, freeze) * modeGain[1];
+            mono += delay.tick(wIn, delayTicks, e.modWet, frozen) * modeGain[1];
         }
-        if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(e.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(e.modWet), freeze) * modeGain[2];
+        if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(e.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(e.modWet), frozen) * modeGain[2];
         if (modeGain[3] > 1e-4) {
             double o[2];
-            weave.tick(wIn, std::min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, freeze, o);
+            weave.tick(wIn, std::min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, frozen, o);
             wl += o[0] * modeGain[3]; wr += o[1] * modeGain[3];
         }
         wl += mono;
@@ -835,12 +847,15 @@ private:
         }
         wl *= wetOut; wr *= wetOut;
 
-        // Catch wet effects while listening; overdubs still use clean input only.
-        if (loopState == LoopState::Off) {
-            hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (wl + wr) * 0.5));
-            if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
-            if (histCount < static_cast<int>(hist.size())) ++histCount;
-        }
+        // The history always advances, whether or not a loop is playing: pausing it
+        // left a splice in the buffer and every extra tap stitched in another one,
+        // which is what put clicks inside the next loop. While a loop plays only the
+        // dry input is recorded (feeding the loop back would be a feedback path);
+        // while listening the live wet channel is caught too, as before.
+        const bool listening = loopState == LoopState::Off;
+        hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (listening ? (wl + wr) * 0.5 : 0)));
+        if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
+        if (histCount < static_cast<int>(hist.size())) ++histCount;
 
         // The loop is heard directly, except to the extent it is ALSO arriving
         // through an active wet channel — that would double it. The ducking follows
@@ -848,7 +863,7 @@ private:
         // full instead of silencing both sides.
         const double bal = e.balance;
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
-        const double directT = p.routing != 0 && wetOn ? 1.0 - wetLvl : 1.0;
+        const double directT = p.routing != 0 && wet ? 1.0 - wetLvl : 1.0;
         loopDirect += (directT - loopDirect) * 0.003;
         const double ld = loopOut * loopDirect * loopLvl;
         prev[0] = cur[0]; prev[1] = cur[1];

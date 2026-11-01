@@ -365,7 +365,7 @@ class MoodCore {
       trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
       loopEnd: 1, memory: 0,
-      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0,
+      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
       rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
     };
     // host-rate smoothed knobs
@@ -487,14 +487,17 @@ class MoodCore {
   // Copy the most recent n samples of history into the loop buffer and play.
   // How much history a capture may use, in core samples. MEMORY 0 keeps the
   // pedal's clock-derived capacity; above that it is 1–30 s of real time.
+  // Floored to a whole sample: MEMORY is a real-time ceiling, so its sample count
+  // is fractional, and a fractional capture length made histW - n fractional,
+  // which read undefined out of the ring and filled the loop buffer with NaN.
   maxCaptureSamples() {
     const clock = clockHz(this.e.clock, this.p.smooth);
     const user = this.p.memory > 0.001 ? expMap(clamp(this.p.memory), 1, 30) * clock : LOOP_SAMPLES;
-    return Math.min(MAX_LOOP_SAMPLES - 1, Math.max(64, Math.min(user, MAX_LOOP_SECONDS * clock)));
+    return Math.floor(Math.min(MAX_LOOP_SAMPLES - 1, Math.max(64, Math.min(user, MAX_LOOP_SECONDS * clock))));
   }
 
   capture(n) {
-    n = Math.min(n, this.hist.length - 1, this.histCount, this.maxCaptureSamples());
+    n = Math.floor(Math.min(n, this.hist.length - 1, this.histCount, this.maxCaptureSamples()));
     if (n < 64) return;
     const N = this.hist.length;
     let r = this.histW - n; if (r < 0) r += N;
@@ -521,7 +524,12 @@ class MoodCore {
     const len = Math.max(64, this.lsrc);
     const trim = clamp(this.p.loopEnd, 0.02, 1);
     if (this.p.loopMode !== 1) return { W: Math.max(64, Math.floor(len * trim)), start: 0 };
-    const W0 = Math.max(64, Math.floor(len * expMap(this.e.length, 0.02, 1)));
+    // Linear in the fraction of the capture: at 1 the window is everything, so
+    // the start of a long recording is actually reachable. The old exponential
+    // curve spent 95% of the knob's travel on the last few seconds.
+    // Rounded, not floored: at 1 the window is exactly the whole take, so the
+    // start is sample 0 rather than one sample late.
+    const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(this.e.length))));
     return { W: Math.max(64, Math.floor(W0 * trim)), start: len - W0 };
   }
 
@@ -707,14 +715,17 @@ class MoodCore {
 
     // Routing only changes the wet input when the loop is playing.
     const wetSrc = this.loopState !== 'play' ? x : p.routing === 0 ? x : p.routing === 1 ? x + loopOut : loopOut;
-    const wetOn = this.wetOn;
+    // The FREEZE switch is the hold gesture without the holding: it brings the wet
+    // side up and freezes it, so a reverb can be left ringing on its own.
+    const held = p.freeze > 0.5;
+    const wetOn = this.wetOn || held;
     const inT = wetOn ? 1 : 0;
     const outT = wetOn || p.trails ? 1 : 0;
     this.wetIn += (inT - this.wetIn) * 0.003;
     this.wetOut += (outT - this.wetOut) * 0.003;
     for (let k = 0; k < 4; k++) this.modeGain[k] += ((p.wetMode === k ? 1 : 0) - this.modeGain[k]) * 0.002;
 
-    const freeze = this.freeze;
+    const freeze = this.freeze || held;
     // WET CLOCK DIVISION: the wet side runs at 1/div of the clock, so every time
     // constant on that side is div times longer.
     const wdiv = divMap(p.wetDiv);
@@ -761,13 +772,15 @@ class MoodCore {
     }
     wl *= this.wetOut; wr *= this.wetOut;
 
-    // In the listening state, catch the live wet channel as well as the input.
-    // Do not feed wet audio into overdubs: that would create a feedback loop.
-    if (this.loopState === 'off') {
-      this.hist[this.histW] = softClip(x + (wl + wr) * 0.5);
-      if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
-      if (this.histCount < this.hist.length) this.histCount++;
-    }
+    // The history always advances, whether or not a loop is playing: pausing it
+    // left a splice in the buffer, and every extra tap stitched in another one,
+    // which is what put clicks inside the next loop. While a loop plays only the
+    // dry input is recorded — feeding the loop back would be a feedback path —
+    // and while listening the live wet channel is caught as well, as before.
+    const listening = this.loopState === 'off';
+    this.hist[this.histW] = softClip(x + (listening ? (wl + wr) * 0.5 : 0));
+    if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
+    if (this.histCount < this.hist.length) this.histCount++;
 
     // The loop is heard directly, except to the extent it is ALSO arriving
     // through an active wet channel — that would double it. The ducking follows
@@ -841,14 +854,15 @@ class MoodCore {
       }
 
       // dry stays at unity up to noon, then fades; true unity when nothing is engaged
-      const engagedT = this.wetOn || this.loopState === 'play' ? 1 : 0;
+      const latchFreeze = p.freeze > 0.5;   // the FREEZE switch, per sample
+      const engagedT = this.wetOn || latchFreeze || this.loopState === 'play' ? 1 : 0;
       this.engaged += (engagedT - this.engaged) * 0.001;
       const dg = p.dryKill ? 0 : 1 - this.engaged * (1 - Math.min(1, 2 * (1 - this.e.mix)));
       const wg = Math.min(1, 2 * this.e.mix);
       let l = dry * dg + el * wg;
       let r = dry * dg + er * wg;
       // A fully bypassed plugin must be transparent, including signals above 0 dBFS.
-      const fullyBypassed = !p.dryKill && !p.trails && !this.wetOn && this.loopState === 'off' && this.engaged < 1e-4;
+      const fullyBypassed = !p.dryKill && !p.trails && !this.wetOn && !latchFreeze && this.loopState === 'off' && this.engaged < 1e-4;
       if (!fullyBypassed) { l = softClip(l); r = softClip(r); }
       outL[i] = l; outR[i] = r;
       const ao = Math.max(Math.abs(l), Math.abs(r)); if (ao > pkOut) pkOut = ao;
@@ -866,7 +880,7 @@ class MoodCore {
     else if (this.overdub && this.loopState === 'play') loop = 'dub';
     const win = this.lsrc > 0 ? this.loopWindow() : { W: 0, start: 0 };
     return {
-      wetOn: this.wetOn, freeze: this.freeze, loop,
+      wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
       lsrc: this.lsrc, winStart: win.start, winLen: win.W, pos: this.loopPos,
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
     };
