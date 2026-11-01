@@ -395,7 +395,6 @@ class MoodCore {
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
     this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
     this.decor = [new Allpass(Math.round(113 * CORE_FS / 48000), 0.6), new Allpass(Math.round(337 * CORE_FS / 48000), 0.6)];
-    this.loopDirect = 1;
 
     // loop channel
     const nLoop = MAX_LOOP_SAMPLES;
@@ -782,15 +781,17 @@ class MoodCore {
     if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
     if (this.histCount < this.hist.length) this.histCount++;
 
-    // The loop is heard directly, except to the extent it is ALSO arriving
-    // through an active wet channel — that would double it. The ducking follows
-    // the wet level, so turning the balance to LOOP always restores the loop in
-    // full instead of silencing both sides.
+    // WET / LOOP is a blend of two complete worlds, not a ducking contest: the
+    // loop keeps its own level all the way across the knob, and the wet side adds
+    // to it. It used to be ducked against the wet level so the loop would not be
+    // heard twice, but the wet side always returns it late (a reverb tail, an
+    // echo, a grain) — and in SLIP and WEAVE it returns very little — so that duck
+    // simply swallowed the loop in the middle of the travel. Where the wet side
+    // does hand the loop back, it arrives as an effect on top of it, which is what
+    // the blend is for. At 100 % loop the wet side is gone and the loop is whole.
     const bal = e.balance;
     const wetLvl = Math.min(1, 2 * (1 - bal)), loopLvl = Math.min(1, 2 * bal);
-    const directT = p.routing !== 0 && wetOn ? 1 - wetLvl : 1;
-    this.loopDirect += (directT - this.loopDirect) * 0.003;
-    const ld = loopOut * this.loopDirect * loopLvl;
+    const ld = loopOut * loopLvl;
     this.prev[0] = this.cur[0]; this.prev[1] = this.cur[1];
     this.cur[0] = wl * wetLvl + ld;
     this.cur[1] = wr * wetLvl + ld;

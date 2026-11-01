@@ -24,6 +24,8 @@ that makes it musical rather than merely moving:
   stretch), three-way routing, wet/loop balance.
 - DIP switches: trails, dry kill, latch, spread, smooth clock, tempo sync.
 - Loop memory up to 30 s, and END trims how much of the loop plays (the start point is LENGTH's, as on the pedal). LENGTH's travel is linear, so the window reaches the very start of a 30 s take.
+- The WET / LOOP balance is a blend of two full-level worlds; the direct loop is no longer ducked against the wet level, so SLIP and WEAVE cannot swallow the loop in the middle of the travel.
+- Ramp cells read as buttons (frame, shadow, arrow blocks, inverted value) and say what pressing them does in the hover readout.
 - A **FREEZE** switch: the held-footswitch freeze without holding the foot. The wet side comes up held, the reverb rings on its own, and letting the switch go releases the tail. Also on CC 105.
 - Click-free re-takes: the capture history advances while a loop is playing too, so catching a loop over and over never splices a step in, and the capture length is a whole number of samples (MEMORY could previously leave it fractional and poison the loop with NaN).
 - Hidden options: tone, fade, stereo width, wet and loop clock division, classic.

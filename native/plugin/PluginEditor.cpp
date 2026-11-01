@@ -181,26 +181,37 @@ MoodEditor::Stepper::Stepper(juce::RangedAudioParameter& p, juce::String caption
       changed(std::move(onChange)) {
     attach.sendInitialUpdate();
     setTitle(cap);
+    setMouseCursor(juce::MouseCursor::PointingHandCursor);
 }
+// A ramp cell is a button, so it is drawn like one: an ink frame with a hard
+// shadow, arrow blocks either side and the chosen value in an inverted display.
+// The whole cell steps; the arrows are there to say that it can.
 void MoodEditor::Stepper::paint(juce::Graphics& g) {
     auto r = getLocalBounds();
     const bool hot = isMouseOver(true);
-    g.setColour(kPaper); g.fillRect(r);
-    g.setColour(kInk); g.drawRect(r, 1);
-    const int arrow = juce::jmax(16, r.getWidth() / 7);   // the whole cell steps; the arrows just say so
+    auto body = r.reduced(2).withTrimmedRight(2).withTrimmedBottom(2);
+    g.setColour(kInk); g.fillRect(body.translated(3, 3));                 // the hard shadow
+    g.setColour(hot ? juce::Colour(0xfff1efe6) : kPaper); g.fillRect(body);
+    g.setColour(kInk); g.drawRect(body, 2);
+    auto inner = body.reduced(2, 2);
+    const int arrow = juce::jlimit(12, 20, inner.getWidth() / 6);
     auto tri = [&](juce::Rectangle<int> zone, bool right) {
+        g.setColour(hot ? kInk : juce::Colour(0xff8b8b80)); g.fillRect(zone);
         juce::Path t;
-        const float w = 5.f, h = 7.f, cx = zone.getCentreX(), cy = zone.getCentreY();
+        const float w = 4.f, h = 7.f, cx = zone.getCentreX(), cy = zone.getCentreY();
         t.addTriangle(cx + (right ? w / 2 : -w / 2), cy - h / 2, cx + (right ? w / 2 : -w / 2), cy + h / 2, cx + (right ? -w / 2 : w / 2), cy);
-        g.setColour(hot ? kInk : kMuted); g.fillPath(t);
+        g.setColour(kPaper); g.fillPath(t);
     };
-    tri(r.removeFromLeft(arrow), false);
-    tri(r.removeFromRight(arrow), true);
+    tri(inner.removeFromLeft(arrow), false);
+    tri(inner.removeFromRight(arrow), true);
+    inner.removeFromLeft(3);
     g.setFont(font(11)); g.setColour(kMuted);
-    const int capW = juce::jmin(r.getWidth() / 2, 40);
-    g.drawFittedText(cap, r.removeFromLeft(capW), juce::Justification::centredLeft, 1);
-    g.setFont(font(13)); g.setColour(kInk);
-    g.drawFittedText(index >= 0 && index < names.size() ? names[index] : juce::String(), r, juce::Justification::centred, 1);
+    const int capW = juce::jmin(inner.getWidth() / 2, 42);
+    g.drawFittedText(cap, inner.removeFromLeft(capW), juce::Justification::centredLeft, 1);
+    auto value = inner.withTrimmedLeft(2);
+    g.setColour(kInk); g.fillRect(value);
+    g.setFont(font(13)); g.setColour(kPaper);
+    g.drawFittedText(index >= 0 && index < names.size() ? names[index] : juce::String(), value.reduced(2, 0), juce::Justification::centred, 1);
 }
 void MoodEditor::Stepper::mouseDown(const juce::MouseEvent& e) {
     const int count = juce::jmax(1, names.size());
@@ -606,9 +617,9 @@ void MoodEditor::rebuildHoverHelp() {
     static const char* dipNames[] = {"TRAILS", "DRY KILL", "LATCH", "SPREAD", "SMOOTH", "SYNC"};
     for (size_t i = 0; i < dips.size() && i < 6; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
 
-    add(rampWetDesign, "RAMP / WET", "which part of the wet side the first generator moves, on top of that knob.");
-    add(rampLoopDesign, "RAMP / LOOP", "which part of the loop the second generator moves. MODIFY means this side's own.");
-    add(rampWaveDesign, "RAMP SHAPE", "the shape of the tide: triangle, square, sine, random, smooth random.");
+    add(rampWetDesign, "RAMP / WET", "press to step through what the first tide turns: time, mix, length, modify, clock or balance. STILL leaves it alone.");
+    add(rampLoopDesign, "RAMP / LOOP", "press to step through what the second tide turns. MODIFY means this side's own. STILL leaves it alone.");
+    add(rampWaveDesign, "RAMP SHAPE", "press to step through the shapes: triangle, square, sine, random, smooth random.");
     add(rampRateDesign, "RAMP RATE", "how slowly the tide turns. both sides share it, so they stay in step with each other.");
     static const char* rampSwitchText[] = {
         "the swing sits above the knob instead of either side of it.",
@@ -637,7 +648,7 @@ void MoodEditor::rebuildHoverHelp() {
 
     static const char* hoodText[] = {
         "a hi-cut on the wet side. right is open, left is soft and far away.",
-        "what survives an overdub. left keeps the pedal's slow erosion.",
+        "how much of the old take an overdub erases. left keeps the pedal's slow erosion, right replaces it. hold the LOOP footswitch while it plays to overdub.",
         "how far apart the two speakers sit. the middle is the image as built.",
         "the wet side runs on a divided clock, so the room and the echo stretch out.",
         "the loop runs on a divided clock: lower, longer, further from the other side.",
@@ -717,6 +728,8 @@ void MoodEditor::paint(juce::Graphics& g) {
     panel(loopArea, "02  /  LOOP MEMORY");   // same rects resized() fills
     panel(dipArea, "03  /  THE LITTLE SWITCHES");
     panel(rampArea, "04  /  THE RAMPS");
+    g.setColour(kMuted); g.setFont(font(11));
+    g.drawText("CLICK A CELL TO STEP", rampArea.withTrimmedTop(4).withTrimmedRight(10), juce::Justification::centredRight);
     const int sx = srcArea.getX() + 14, lx = loopArea.getX() + 14;
     g.setColour(kInk); g.setFont(font(14));
     g.drawText("LEVEL", sx, inputGainDesign.getY(), 42, inputGainDesign.getHeight(), juce::Justification::centredLeft);

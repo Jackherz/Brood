@@ -389,7 +389,6 @@ public:
         wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
-        loopDirect = 1;
         hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f);
         histW = histCount = 0; histCycles = 0; lsrc = 0;
         loopState = LoopState::Off; overdub = false;
@@ -531,6 +530,16 @@ public:
         }
     }
 
+    // Level of what the loop is holding (its playable window only), for tests and
+    // for anything that wants to know whether the take still has something in it.
+    double loopWindowRms() const {
+        if (lsrc <= 0 || overdub) return 0;
+        const Window win = loopWindow();
+        double acc = 0;
+        for (int i = 0; i < win.W; ++i) { const double v = loopBuf[static_cast<size_t>(win.start + i)]; acc += v * v; }
+        return std::sqrt(acc / static_cast<double>(std::max(1, win.W)));
+    }
+
     bool takeLoopWaveDirty() { const bool d = loopWaveDirty; loopWaveDirty = false; return d; }
     // Raw generator output (0..1), for the UI and the ramp tests.
     double rampValue(int which) const { return rampRaw[which & 1]; }
@@ -568,7 +577,6 @@ private:
     bool wetOn = false, freeze = false, wetMomentary = false;
     double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
     Allpass decor[2];
-    double loopDirect = 1;
 
     std::vector<float> hist, loopBuf;
     int histW = 0, histCount = 0, lsrc = 0;
@@ -857,15 +865,15 @@ private:
         if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
         if (histCount < static_cast<int>(hist.size())) ++histCount;
 
-        // The loop is heard directly, except to the extent it is ALSO arriving
-        // through an active wet channel — that would double it. The ducking follows
-        // the wet level, so turning the balance to LOOP always restores the loop in
-        // full instead of silencing both sides.
+        // WET / LOOP blends two complete worlds: the loop keeps its own level
+        // across the whole knob and the wet side adds to it. It used to be ducked
+        // against the wet level so the loop was not heard twice, but the wet side
+        // always returns it late — and in SLIP and WEAVE it returns very little —
+        // so the duck swallowed the loop in the middle of the travel. Mirrors
+        // coreTick() in src/mood-worklet.js.
         const double bal = e.balance;
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
-        const double directT = p.routing != 0 && wet ? 1.0 - wetLvl : 1.0;
-        loopDirect += (directT - loopDirect) * 0.003;
-        const double ld = loopOut * loopDirect * loopLvl;
+        const double ld = loopOut * loopLvl;
         prev[0] = cur[0]; prev[1] = cur[1];
         cur[0] = wl * wetLvl + ld;
         cur[1] = wr * wetLvl + ld;

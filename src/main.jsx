@@ -132,7 +132,7 @@ function describe(id, p) {
   if (id === 'memory') return v <= 0.001 ? `PEDAL · ${timeText(64 / rate)}` : `UP TO ${timeText(expMap(v, 1, 30))}`;
   if (id === 'loopEnd') return v >= 0.999 ? 'THE WHOLE LOOP' : `PLAYS ${percent(v)}`;
   if (id === 'tone') return v > 0.995 ? 'OPEN' : `HI-CUT ${percent(1 - v)}`;
-  if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;
+  if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;   // per overdub pass
   if (id === 'width') return v < 0.49 ? `NARROW ${percent(v * 2)}` : v > 0.51 ? `WIDE ${percent((v - 0.5) * 2)}` : 'AS BUILT';
   if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1× CLOCK' : `${d}× SLOWER`; }
   if (id === 'rampWet' || id === 'rampLoop') return RAMP_TARGETS[rampIndex(v, RAMP_TARGETS)];
@@ -362,7 +362,7 @@ function TrimStrip({ params, onChange, help }) {
 function HoodPanel({ params, onChange, help }) {
   const rows = [
     ['tone', 'TONE', 'a hi-cut on the wet side. right is open; left is soft and far away.'],
-    ['fade', 'FADE', 'what survives an overdub. left keeps the pedal\u2019s slow erosion; right lets the new layer win.'],
+    ['fade', 'FADE', 'how much of the old take survives an overdub: hold the LOOP footswitch while a loop plays to record on top of it. left keeps the pedal\u2019s slow erosion; right lets the new layer win.'],
     ['width', 'WIDTH', 'how far apart the two speakers sit. the middle is the image as built.'],
     ['wetDiv', 'WET DIV', 'the wet side runs on a divided clock, so the room and the echo stretch out.'],
     ['loopDiv', 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.'],
@@ -385,29 +385,32 @@ function HoodPanel({ params, onChange, help }) {
   </div>;
 }
 
-// One ramp destination. Arrows step through the list so the cell stays big.
+// One ramp destination. It is a button that happens to hold a list: the arrows
+// step either way and clicking anywhere else steps forward, so pressing it is the
+// obvious thing to do with it.
 function Stepper({ label, names, value, onChange, hint, help }) {
   const index = rampIndex(value, names);
   const step = (d) => onChange(rampValue((index + d + names.length) % names.length, names));
-  return <div className="stepper" role="group" aria-label={`${label}: ${hint}`} {...(help || {})}>
-    <button type="button" aria-label={`previous ${label}`} onClick={() => step(-1)}>◀</button>
+  return <div className="stepper" role="group" aria-label={`${label}: ${names[index]}. ${hint}`}
+    title={`${label}: ${names[index]} — click to step through the list`} onClick={() => step(1)} {...(help || {})}>
+    <button type="button" aria-label={`previous ${label}`} onClick={(event) => { event.stopPropagation(); step(-1); }}>◀</button>
     <span className="stepper-cap">{label}</span>
-    <b title={hint}>{names[index]}</b>
-    <button type="button" aria-label={`next ${label}`} onClick={() => step(1)}>▶</button>
+    <b aria-live="polite">{names[index]}</b>
+    <button type="button" aria-label={`next ${label}`} onClick={(event) => { event.stopPropagation(); step(1); }}>▶</button>
   </div>;
 }
 
 // The ramps: two tides, one shape, one rate, and the two dips that bend them.
 function RampPanel({ params, onChange, help }) {
   return <div className="ramp-panel">
-    <div className="side-rule ramp-heading"><span>THE RAMPS</span><span>⇅ SLOW TIDE</span></div>
+    <div className="side-rule ramp-heading"><span>THE RAMPS</span><span>CLICK A CELL TO STEP</span></div>
     <div className="ramp-grid">
-      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="which part of the wet side drifts"
-        help={help('RAMP / WET', 'which part of the wet side the first generator moves, on top of that knob.')}/>
-      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="which part of the loop drifts"
-        help={help('RAMP / LOOP', 'which part of the loop the second generator moves. MODIFY means this side\u2019s own.')}/>
-      <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="the shape of the tide"
-        help={help('RAMP SHAPE', 'the shape of the tide: triangle, square, sine, random, smooth random.')}/>
+      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="click to step through what the first tide turns"
+        help={help('RAMP / WET', 'press to choose which knob the first tide turns by itself: time, mix, length, modify, clock or balance. STILL leaves it alone.')}/>
+      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="click to step through what the second tide turns"
+        help={help('RAMP / LOOP', 'press to choose which knob the second tide turns. MODIFY means this side\u2019s own modify. STILL leaves it alone.')}/>
+      <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="click to step through the shapes"
+        help={help('RAMP SHAPE', 'press to choose the shape of the tide: triangle, square, sine, random, smooth random.')}/>
       <label className="rate-row" {...help('RAMP RATE', 'how slowly the tide turns. both sides share it, so they stay in step.')}><span>RATE</span>
         <input aria-label="Ramp speed" type="range" min="0" max="1" step="0.005" value={params.rampSpeed} onChange={(event) => onChange('rampSpeed', Number(event.target.value))}/>
         <b>{rampHint(params.rampSpeed)}</b>

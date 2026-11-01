@@ -227,11 +227,16 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
 .hood-freeze-copy { font: 11px/1.5 'Terminal', monospace; color: #66665e; }
 .hood-freeze-copy b { display: block; color: #181815; font: 12px/1.3 'Terminal', monospace; }
 .ramp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 6px; align-items: stretch; }
-.stepper { display: grid; grid-template-columns: 16px auto minmax(0,1fr) 16px; align-items: center; gap: 3px; height: 26px; padding: 0 2px; border: 1px solid #181815; background: #faf9f3; font: 11px 'Terminal', monospace; }
-.stepper button { border: 0; background: transparent; padding: 0; font: 10px 'Terminal', monospace; line-height: 1; color: #181815; height: 20px; }
-.stepper button:hover { background: #181815; color: #faf9f3; }
-.stepper-cap { color: #77776f; white-space: nowrap; }
-.stepper b { font: 12px 'Terminal', monospace; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A ramp cell is a button, so it is built like one: ink frame, an offset shadow,
+   arrow blocks either side and the chosen value in an inverted display box. */
+.stepper { display: grid; grid-template-columns: 18px auto minmax(0,1fr) 18px; align-items: center; gap: 3px; height: 28px; padding: 0 3px; margin: 0 3px 3px 0; border: 2px solid #181815; background: #f1efe6; box-shadow: 3px 3px 0 #181815; font: 11px 'Terminal', monospace; cursor: pointer; }
+.stepper:hover { background: #faf9f3; }
+.stepper:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #181815; }
+.stepper button { border: 0; background: #181815; color: #faf9f3; padding: 0; font: 10px/1 'Terminal', monospace; height: 18px; cursor: pointer; }
+.stepper button:hover { background: #4a4a44; }
+.stepper button:focus-visible { outline: 2px solid #181815; outline-offset: 1px; }
+.stepper-cap { color: #66665e; white-space: nowrap; }
+.stepper b { font: 12px 'Terminal', monospace; color: #faf9f3; background: #181815; text-align: center; padding: 3px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rate-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 5px; height: 26px; margin: 0; padding: 0 5px; border: 1px solid #181815; background: #faf9f3; color: #77776f; font: 11px 'Terminal', monospace; white-space: nowrap; }
 .rate-row input[type="range"] { height: 12px; }
 .rate-row b { color: #181815; font: 11px 'Terminal', monospace; }

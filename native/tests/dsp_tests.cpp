@@ -436,6 +436,57 @@ int main() {
         const Out freed = render(c, 4, [](double) { return 0.0; });
         CHECK(rms(held.L, 1.5, 1.9) > 5 * rms(freed.L, 3.5, 3.9), "releasing FREEZE lets the tail decay");
     }
+    {   // WET/LOOP blends two worlds: no mode may swallow the loop in the middle
+        // Broadband, so a mode's phase cannot flatter or ruin the measurement.
+        auto broad = [](double t) {
+            return 0.15 * (std::sin(2 * mood::kPi * 220 * t) + std::sin(2 * mood::kPi * 331 * t)
+                         + std::sin(2 * mood::kPi * 517 * t) + std::sin(2 * mood::kPi * 733 * t));
+        };
+        auto level = [&](int wetMode, double balance) {
+            mood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.p.memory = 0; c.p.mix = 0.6;
+            c.p.wetMode = wetMode; c.p.routing = 1; c.p.modWet = 0.5; c.p.time = 0.5; c.p.balance = balance;
+            c.prepare(FS);
+            render(c, 2, broad);
+            c.footswitch(1, true); c.footswitch(1, false);
+            render(c, 0.4, [](double) { return 0.0; });
+            if (balance < 1) { c.footswitch(0, true); c.footswitch(0, false); }
+            render(c, 1.2, [](double) { return 0.0; });
+            const Out o = render(c, 1, [](double) { return 0.0; });
+            return rms(o.L, 0.2, 0.9);
+        };
+        static const char* names[] = {"REVERB", "DELAY", "SLIP", "WEAVE"};
+        for (int mode = 0; mode < 4; ++mode) {
+            const double loopOnly = level(mode, 1), middle = level(mode, 0.5), mostlyWet = level(mode, 0.2);
+            CHECK(middle > 0.9 * loopOnly, "%s: the loop keeps its level in the middle (%.2fx)", names[mode], middle / loopOnly);
+            CHECK(middle < 2.2 * loopOnly, "%s: without doubling it (%.2fx)", names[mode], middle / loopOnly);
+            CHECK(middle > 1.15 * mostlyWet, "%s: the middle is not just the wet side (%.2fx)", names[mode], middle / mostlyWet);
+        }
+    }
+    {   // Holding LOOP overdubs, and FADE decides what the old take keeps
+        auto take = [&](double fade, double& before, double& after, mood::LoopLed& during) {
+            mood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.p.memory = 0; c.p.mix = 0.5; c.p.fade = fade;
+            c.prepare(FS);
+            render(c, 2, tone(220, 9));
+            c.footswitch(1, true); c.footswitch(1, false);
+            before = c.loopWindowRms();
+            render(c, 0.3, [](double) { return 0.0; });
+            c.footswitch(1, true);
+            render(c, 0.6, [](double) { return 0.0; });
+            during = c.state().loop;
+            render(c, 1.6, [](double) { return 0.0; });
+            c.footswitch(1, false);
+            render(c, 0.2, [](double) { return 0.0; });
+            after = c.loopWindowRms();
+        };
+        double keepBefore = 0, keepAfter = 0, eraseBefore = 0, eraseAfter = 0;
+        mood::LoopLed keepLed = mood::LoopLed::Off, eraseLed = mood::LoopLed::Off;
+        take(0, keepBefore, keepAfter, keepLed);
+        take(1, eraseBefore, eraseAfter, eraseLed);
+        CHECK(keepLed == mood::LoopLed::Dub, "holding LOOP overdubs");
+        CHECK(keepBefore > 0.1, "there was something to keep (%.3f)", keepBefore);
+        CHECK(keepAfter > 0.05, "FADE 0 leaves the old take there (%.3f)", keepAfter);
+        CHECK(eraseAfter < keepAfter * 0.5, "FADE 1 replaces it (%.3f vs %.3f)", eraseAfter, keepAfter);
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

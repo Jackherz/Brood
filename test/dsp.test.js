@@ -829,3 +829,61 @@ test('FREEZE holds the wet tail without a held footswitch', () => {
   const freed = render(core, 4, () => 0);
   assert.ok(rms(held.L, 1.5, 1.9) > 5 * rms(freed.L, 3.5, 3.9), 'releasing FREEZE lets the tail decay');
 });
+
+test('the wet/loop balance never swallows the loop in the middle', () => {
+  // The direct loop used to be ducked against the wet level, so at the middle of
+  // the travel the wet side was all you heard — and a mode that returns very
+  // little of the loop (WEAVE) left no loop at all until the knob reached LOOP.
+  // A broadband loop, so a mode's phase cannot flatter or ruin the measurement.
+  const broad = (t) => 0.15 * (Math.sin(2 * Math.PI * 220 * t) + Math.sin(2 * Math.PI * 331 * t)
+    + Math.sin(2 * Math.PI * 517 * t) + Math.sin(2 * Math.PI * 733 * t));
+  const level = (wetMode, balance) => {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, mix: 0.6, wetMode, routing: 1, modWet: 0.5, time: 0.5, balance });
+    render(core, 2, broad);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    render(core, 0.4, () => 0);
+    if (balance < 1) { core.footswitch('wet', 'down'); core.footswitch('wet', 'up'); }
+    render(core, 1.2, () => 0);
+    const { L } = render(core, 1, () => 0);
+    return rms(L, 0.2, 0.9);
+  };
+  for (const [mode, name] of [[0, 'REVERB'], [1, 'DELAY'], [2, 'SLIP'], [3, 'WEAVE']]) {
+    const loopOnly = level(mode, 1), middle = level(mode, 0.5), mostlyWet = level(mode, 0.2);
+    assert.ok(middle > 0.9 * loopOnly, `${name}: the loop keeps its level in the middle (${(middle / loopOnly).toFixed(2)}x)`);
+    assert.ok(middle < 2.2 * loopOnly, `${name}: without doubling it (${(middle / loopOnly).toFixed(2)}x)`);
+    // What the duck used to do: the middle sounded exactly like the wet end.
+    assert.ok(middle > 1.15 * mostlyWet, `${name}: the middle is not just the wet side (${(middle / mostlyWet).toFixed(2)}x)`);
+  }
+});
+
+test('holding LOOP overdubs, and FADE decides what the old take keeps', () => {
+  // FADE is not a dead control: it shapes each overdub pass. This also pins the
+  // gesture FADE depends on — hold the LOOP footswitch while a loop plays.
+  const take = (fade) => {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, mix: 0.5, fade });
+    render(core, 2, tone(220, 9));
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    const win = core.state();
+    // Only the loop's own window is overdubbed, so compare like with like.
+    const window = () => core.loopBuf.subarray(win.winStart, win.winStart + win.winLen);
+    const rmsOf = (a) => { let acc = 0; for (const v of a) acc += v * v; return Math.sqrt(acc / a.length); };
+    const before = rmsOf(window());
+    render(core, 0.3, () => 0);
+    core.footswitch('loop', 'down');
+    const during = [];
+    render(core, 0.6, () => 0);
+    during.push(core.state().loop);
+    render(core, 1.6, () => 0);
+    core.footswitch('loop', 'up');
+    render(core, 0.2, () => 0);
+    const after = rmsOf(window());
+    return { before, after, during };
+  };
+  const keepAll = take(0), eraseAll = take(1);
+  assert.strictEqual(keepAll.during[0], 'dub', 'holding LOOP overdubs');
+  assert.ok(keepAll.before > 0.1, `there was something to keep (${keepAll.before.toFixed(3)})`);
+  assert.ok(keepAll.after > 0.05, `FADE left the old take there (${keepAll.after.toFixed(3)})`);
+  assert.ok(eraseAll.after < keepAll.after * 0.5, `FADE 1 replaced it (${eraseAll.after.toFixed(3)} vs ${keepAll.after.toFixed(3)})`);
+});

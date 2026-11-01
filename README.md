@@ -365,17 +365,23 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   trim, which meant END silently dragged the start around with it; it is gone.) The waveform display dims everything outside the
   window. Both cores allocate for the longest possible loop up front (about
   32 MB), so MEMORY never reallocates on the audio thread.
-- **WET / LOOP** is a crossfade, not two independent gains, and the loop's direct
-  path is only ducked by as much as the wet path is audible. Earlier versions
-  hard-muted the direct loop whenever the wet channel was on with routing BOTH or
-  LOOP, so a balance fully to LOOP went silent; that is fixed and covered by
-  tests in both implementations.
+- **WET / LOOP** blends two complete worlds rather than fading one into the
+  other: the loop keeps its own level across the whole knob and the wet side adds
+  on top, so the middle hears both. It used to duck the direct loop against the
+  wet level, which meant the middle of the travel was the wet side only — and in
+  SLIP and WEAVE, which hand back little of the loop, the loop vanished until the
+  knob was nearly at LOOP. The duck is gone; both cores agree bit for bit
+  (`tests/parity/scenarios/balance.txt`) and the level is pinned by tests in both
+  implementations.
 - **Under the hood** is the row along the bottom of the editor (browser: the
   block at the foot of the side panel): the options the pedal keeps behind both
   footswitches, with CLASSIC beside them in the browser's switch row. **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
   bit-transparent, so it can stay open. **FADE** sets how much of the old loop
-  survives each overdub pass: 0 is the pedal's slow erosion, 1 lets the new layer
-  replace it entirely. **WIDTH** is mid/side on the effect bus only (the dry never
+  survives each overdub pass: 0 is the pedal's slow erosion (about 3 % a pass), 1
+  lets the new layer replace it entirely. It only does anything *while you are
+  overdubbing*, and overdubbing is the hold gesture: press and hold **MICRO-LOOPER**
+  / the LOOP footswitch while a loop plays, and play over the top. Holding it while
+  the looper is still listening records a new loop instead. **WIDTH** is mid/side on the effect bus only (the dry never
   moves); 0.5 is the image as built. **WET DIV** and **LOOP DIV** run one side on
   a divided clock — 2× or 4× slower — so the wet side's room and echo stretch out
   while the loop drops an octave or two, or the other way round. **CLASSIC**
@@ -390,9 +396,11 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   eight a second. **UNI** keeps the swing above the knob instead of either side
   of it; **BOUNCE** reflects the phase so it never snaps back; **SWEEP** drops the
   shape and climbs, restarting from the bottom. In the editor the two destination
-  cells step with their arrows, the rate is the RATE slider and the three
-  switches sit in the same panel — on the pedal these are the dips, so the editor
-  is the comfortable place to reach them.
+  cells step with their arrows or by clicking them anywhere (they are drawn as
+  buttons: frame, hard shadow, arrow blocks, value in a display), the rate is the
+  RATE slider and the three switches sit in the same panel — on the pedal these
+  are the dips, so the editor is the comfortable place to reach them. Hovering a
+  cell in the editor writes what pressing it will do into the readout.
 - **TRAILS**, **DRY KILL**, **LATCH**, **SPREAD**, **SYNC** and wet/loop balance
   are modelled. Stereo input is kept separate with SPREAD off. The exact stereo
   movement, filters, transient response, control curves, reverb and grains differ
