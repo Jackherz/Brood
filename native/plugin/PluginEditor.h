@@ -18,6 +18,19 @@ public:
         KnobLook();
         void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
         void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
+        // The rest of the widget set, drawn to the same sheet: a hard offset
+        // instead of a bevel, square corners, one rule for a track and a scale
+        // printed under it.
+        void drawLinearSlider(juce::Graphics&, int x, int y, int w, int h, float sliderPos,
+                              float minSliderPos, float maxSliderPos, juce::Slider::SliderStyle, juce::Slider&) override;
+        void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool, bool) override;
+        void drawButtonText(juce::Graphics&, juce::TextButton&, bool, bool) override;
+        void drawComboBox(juce::Graphics&, int width, int height, bool isButtonDown,
+                          int buttonX, int buttonY, int buttonW, int buttonH, juce::ComboBox&) override;
+        // The panel has exactly two faces — the pixel font and the terminal font —
+        // and every piece of text on it comes from one of them.
+        juce::Font getComboBoxFont(juce::ComboBox&) override;
+        juce::Font getPopupMenuFont() override;
     };
     // Segmented selector for 2..N choices; the wet channel now has four modes.
     struct ThreeWay : juce::Component {
@@ -128,6 +141,9 @@ private:
     juce::AffineTransform view;
     void repaintDesign(const juce::Rectangle<int>& designArea) { repaint(designArea.transformedBy(view)); }
     juce::String lcdLabel { "READY" }, lcdValue { "Tap L to loop, A for wet" }, lastTouched;
+    // The status segment at the right of the title bar: what the host is actually
+    // running us at, repainted only when that changes.
+    juce::String barMeta;
     juce::String lcdMeta;
     bool ledWetOn = false, ledLoopOn = false, blink = false;
     uint32_t lastCycles = 0; double flashUntil = 0; int lastLoopLed = 0;

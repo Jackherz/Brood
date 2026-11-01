@@ -15,6 +15,14 @@ that makes it musical rather than merely moving:
 
 ## Done
 
+- Round 12: one design sheet for both panels. Spacing, type and elevation are
+  tokens rather than one-off numbers; panel heads are halftone bands with a
+  number, a name and a dotted leader out to a figure; knobs are numbered; the
+  readout is an alert box with a status chip and a blinking cursor; the meters are
+  ten countable cells; the switches are boxed cells; sliders are a rule with a
+  boxed tab; buttons and combo boxes are flat frames with a hard shadow. The
+  palette did not change.
+
 - Round 11: **LATCH** and **DRY KILL** are gone — MIX alone takes the dry away at
   the top of its travel, and the FREEZE switch latches what a held footswitch only
   does while held. **SPREAD** is gone too: **WIDTH** owns the stereo image, from

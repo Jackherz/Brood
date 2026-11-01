@@ -31,6 +31,80 @@ juce::Font pixel(float size) {
 #endif
 }
 
+// ── the sheet ─────────────────────────────────────────────────────────────
+// One small system instead of a drawer of one-off numbers, after the product
+// styleguide: spacing snaps to 4 / 8 / 16 / 24 / 32, type to five sizes, and
+// elevation is always a hard offset (1 px controls, 2 px panels, 3 px readouts),
+// never a blur. Rules carry the structure — ink for frames, hairline grey for
+// grouping — and the only textures are a 2 px halftone band and a 20 px dot
+// grid, both built from the paper's own colour so the cream/ink palette holds.
+constexpr int kSp1 = 4, kSp2 = 8, kSp3 = 16, kSp4 = 24, kSp5 = 32;
+const juce::Colour kGrid { 0xffe4e2d6 };      // the dot grid under the paper
+const juce::Colour kHalftone { 0xffc2c1b6 };  // the hatched band on a panel head
+juce::Font capFont() { return font(11); }
+juce::Font labelFont() { return font(13); }
+juce::Font textFont() { return font(15); }
+
+// A halftone: paper with every fourth pixel inked, the way a printed sheet makes
+// a grey it does not have a colour for. Small enough areas only — this is a loop
+// of single pixels, not a gradient.
+void halftone(juce::Graphics& g, juce::Rectangle<int> r, juce::Colour bg, juce::Colour dot) {
+    g.setColour(bg); g.fillRect(r);
+    // Only the part being repainted: a knob or a meter repaints a corner of the
+    // window thirty times a second, and the texture does not need to be walked
+    // for pixels that are clipped anyway.
+    const auto clip = r.getIntersection(g.getClipBounds().expanded(1));
+    if (clip.isEmpty()) return;
+    g.setColour(dot);
+    for (int y = clip.getY(); y < clip.getBottom(); ++y)
+        for (int x = clip.getX() + (y % 2) * 2; x < clip.getRight(); x += 4) g.fillRect(x, y, 1, 1);
+}
+void dotGrid(juce::Graphics& g, juce::Rectangle<int> r, int pitch, juce::Colour c) {
+    const auto clip = r.getIntersection(g.getClipBounds().expanded(pitch));
+    if (clip.isEmpty()) return;
+    g.setColour(c);
+    for (int y = r.getY() + pitch; y < r.getBottom(); y += pitch) {
+        if (y < clip.getY() || y >= clip.getBottom()) continue;
+        for (int x = r.getX() + pitch; x < r.getRight(); x += pitch)
+            if (x >= clip.getX() && x < clip.getRight()) g.fillRect(x, y, 1, 1);
+    }
+}
+// NAME ......... FIGURE: the manifest way of tying a label to its value when
+// there is no room for a rule between them.
+void leader(juce::Graphics& g, int x1, int x2, int y, juce::Colour c) {
+    g.setColour(c);
+    for (int x = x1; x < x2 - 2; x += kSp1) g.fillRect(x, y, 1, 1);
+}
+// Registration marks: four L-shaped ticks, as on a trim sheet. They read as
+// structure without adding a line anybody has to look past.
+void cornerTicks(juce::Graphics& g, juce::Rectangle<int> r, int len, juce::Colour c) {
+    g.setColour(c);
+    const float x = (float) r.getX(), y = (float) r.getY(), X = (float) r.getRight(), Y = (float) r.getBottom();
+    g.drawLine(x, y, x + (float) len, y, 1.f); g.drawLine(x, y, x, y + (float) len, 1.f);
+    g.drawLine(X, y, X - (float) len, y, 1.f); g.drawLine(X, y, X, y + (float) len, 1.f);
+    g.drawLine(x, Y, x + (float) len, Y, 1.f); g.drawLine(x, Y, x, Y - (float) len, 1.f);
+    g.drawLine(X, Y, X - (float) len, Y, 1.f); g.drawLine(X, Y, X, Y - (float) len, 1.f);
+}
+// A panel head cell: `01` in an inverted block, the name beside it, a dotted
+// leader out to the right and a small figure at the end. Every panel opens the
+// same way, so the column reads as one document.
+void headCell(juce::Graphics& g, juce::Rectangle<int> head, const juce::String& index, const juce::String& name, const juce::String& tail) {
+    auto r = head.reduced(kSp2, 0);
+    g.setColour(kInk); g.setFont(capFont());
+    const int iw = 20;
+    g.fillRect(r.removeFromLeft(iw).withSizeKeepingCentre(iw, 15));
+    g.setColour(kPaper);
+    g.drawText(index, r.withX(head.getX() + 8).withWidth(iw), juce::Justification::centred);
+    r.removeFromLeft(kSp1 + 1);
+    g.setColour(kInk); g.setFont(labelFont());
+    const int nameW = juce::jmin(r.getWidth(), juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), name) + 2);
+    g.drawText(name, r.removeFromLeft(nameW), juce::Justification::centredLeft);
+    g.setColour(kMuted); g.setFont(capFont());
+    const int tailW = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), tail) + 2;
+    g.drawText(tail, r.removeFromRight(tailW), juce::Justification::centredRight);
+    leader(g, r.getX() + 3, r.getRight() - 3, head.getCentreY(), kLine);
+}
+
 constexpr int W = 900, H = 712;
 // One whispered sentence per knob per mode: enough to know which way to turn,
 // never quite enough to stop wondering. The exact value appears in the display
@@ -126,12 +200,15 @@ void MoodEditor::KnobLook::drawToggleButton(juce::Graphics& g, juce::ToggleButto
         g.drawFittedText(b.getButtonText().toUpperCase(), bounds.withTrimmedLeft(30).toNearestInt(), juce::Justification::centredLeft, 1);
         return;
     }
-    // One sixth of the 292 px switch row: drawing in that design slot and scaling
-    // keeps the switch and its name together at any window size. The name is fitted
-    // because "SPREAD" and "SMOOTH" are wider than the slot at full size.
-    const float u = b.getWidth() / (292.f / 6.f);
-    g.addTransform(juce::AffineTransform::scale(u));
-    const auto bounds = juce::Rectangle<float>(0, 0, 292.f / 6.f, b.getHeight() / u);
+    // Drawn in a 48.7 x 56 design slot and centred in whatever cell it is given.
+    // Scaling by width alone broke when the row went from six switches to three:
+    // each cell doubled in width, so the switch doubled too. The scale is now the
+    // smaller of "fit the slot's width" and "fit its height", and what is left
+    // over becomes margin on both sides.
+    constexpr float kSlotW = 292.f / 6.f, kSlotH = 56.f;
+    const float u = juce::jmin(b.getWidth() / kSlotW, b.getHeight() / kSlotH);
+    g.addTransform(juce::AffineTransform::scale(u).translated((b.getWidth() - kSlotW * u) * 0.5f, 0.f));
+    const auto bounds = juce::Rectangle<float>(0, 0, kSlotW, b.getHeight() / u);
     const auto sw = juce::Rectangle<float>(18, 32).withCentre({bounds.getCentreX(), 20});
     g.setColour(kInk); g.fillRect(sw);
     const auto handle = juce::Rectangle<float>(12, 11).withCentre({sw.getCentreX(), b.getToggleState() ? sw.getY()+8 : sw.getBottom()-8});
@@ -140,6 +217,68 @@ void MoodEditor::KnobLook::drawToggleButton(juce::Graphics& g, juce::ToggleButto
     g.setColour(kInk); g.setFont(font(12));
     g.drawFittedText(b.getButtonText().toUpperCase(), bounds.withTop(40).withHeight(15).toNearestInt(), juce::Justification::centredTop, 1);
 }
+
+// A slider is a printed scale: one 2 px rule for the travel, five marks under it
+// and a boxed thumb. No track highlight, no rounded cap, no glow.
+void MoodEditor::KnobLook::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float pos,
+                                            float, float, juce::Slider::SliderStyle style, juce::Slider& slider) {
+    if (style != juce::Slider::LinearHorizontal) {
+        juce::LookAndFeel_V4::drawLinearSlider(g, x, y, w, h, pos, 0.f, 0.f, style, slider);
+        return;
+    }
+    const float cy = (float) y + (float) h * 0.5f;
+    const float left = (float) x + 1.f, right = (float) x + (float) w - 1.f;
+    g.setColour(kLine);
+    for (int i = 0; i <= 4; ++i) {
+        const float px = left + (right - left) * (float) i / 4.f;
+        g.fillRect(px - 0.5f, cy + 6.f, 1.f, 4.f);
+    }
+    g.setColour(kInk);
+    g.fillRect(left, cy - 1.f, right - left, 2.f);
+    // The thumb sits on the rule and under a hard shadow, so it reads as a
+    // physical tab rather than a dot.
+    const auto tab = juce::Rectangle<float>(9.f, 15.f).withCentre({ juce::jlimit(left, right, pos), cy - 1.f });
+    g.setColour(kInk); g.fillRect(tab.translated(2.f, 2.f));
+    g.setColour(slider.isMouseOverOrDragging() ? juce::Colour(0xfff4f2e9) : kPaper); g.fillRect(tab);
+    g.setColour(kInk); g.drawRect(tab, 1.f);
+    g.fillRect(tab.withSizeKeepingCentre(3.f, 15.f).reduced(0.f, 4.f));
+}
+
+void MoodEditor::KnobLook::drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) {
+    const auto r = b.getLocalBounds().toFloat().reduced(2.f);
+    const bool off = !b.isEnabled();
+    // Disabled is drawn, not faded: a grey frame and no shadow, so it still sits
+    // on the same sheet instead of turning into a ghost.
+    if (!off) { g.setColour(kInk); g.fillRect(r.translated(2.f, 2.f)); }
+    g.setColour(down && !off ? kInk : over && !off ? juce::Colour(0xfff1efe6) : kPaper); g.fillRect(r);
+    g.setColour(off ? kLine : down ? kPaper : kInk); g.drawRect(r, 1.5f);
+}
+void MoodEditor::KnobLook::drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool down) {
+    g.setColour(!b.isEnabled() ? kLine : down ? kPaper : kInk);
+    g.setFont(textFont());
+    g.drawFittedText("[ " + b.getButtonText().toUpperCase() + " ]", b.getLocalBounds().reduced(6, 0),
+                     juce::Justification::centred, 1, 0.85f);
+}
+
+// A field, not a widget: hairline frame, hard shadow, and the chevron inside its
+// own inverted cell so the right-hand end of every field looks the same.
+void MoodEditor::KnobLook::drawComboBox(juce::Graphics& g, int width, int height, bool,
+                                        int, int, int, int, juce::ComboBox& box) {
+    auto r = juce::Rectangle<float>(0.f, 0.f, (float) width, (float) height).reduced(2.f);
+    g.setColour(kInk); g.fillRect(r.translated(2.f, 2.f));
+    g.setColour(box.isMouseOver(true) ? juce::Colour(0xfff1efe6) : kPaper); g.fillRect(r);
+    g.setColour(kInk); g.drawRect(r, 1.5f);
+    auto cell = r.removeFromRight(juce::jmin(r.getWidth(), (float) height * 0.85f));
+    g.fillRect(cell);
+    g.setColour(kPaper);
+    juce::Path chev;
+    const float cx = cell.getCentreX(), cy = cell.getCentreY();
+    chev.addTriangle(cx - 4.f, cy - 2.5f, cx + 4.f, cy - 2.5f, cx, cy + 3.5f);
+    g.fillPath(chev);
+}
+
+juce::Font MoodEditor::KnobLook::getComboBoxFont(juce::ComboBox&) { return font(15); }
+juce::Font MoodEditor::KnobLook::getPopupMenuFont() { return font(16); }
 
 // ───────── 3-way toggle ─────────
 MoodEditor::ThreeWay::ThreeWay(juce::RangedAudioParameter& p, juce::StringArray l, std::function<void()> onChange)
@@ -153,14 +292,26 @@ void MoodEditor::ThreeWay::paint(juce::Graphics& g) {
     const auto bounds = juce::Rectangle<float>(0, 0, 130.f, getHeight() / s).toNearestInt();
     const int count = juce::jmax(1, labels.size());
     const int row = bounds.getHeight() / count;
+    // Elevation 2, like a panel: the selector is a plate sitting on the paper, and
+    // the chosen row is a solid block rather than a tint.
+    g.setColour(kInk); g.fillRect(bounds.translated(2, 2));
     g.setColour(kPaper); g.fillRect(bounds);
     g.setColour(kInk); g.drawRect(bounds, 1);
     for (int i = 0; i < count; ++i) {
         const auto r = juce::Rectangle<int>(1, 1 + i * row, bounds.getWidth() - 2, row - 1);
-        if (i == index) { g.setColour(kInk); g.fillRect(r); }
-        else { g.setColour(kLine); if (i > 0) g.drawHorizontalLine(i * row, 0.f, static_cast<float>(getWidth())); }
+        if (i == index) {
+            g.setColour(kInk); g.fillRect(r);
+            // A small block at the left edge, the mark that says "this line".
+            g.setColour(kPaper); g.fillRect(r.withWidth(4).reduced(0, 3));
+        } else if (i > 0) {
+            g.setColour(kLine); g.drawHorizontalLine(i * row, 0.f, static_cast<float>(getWidth()));
+        }
         g.setColour(i == index ? kPaper : kInk); g.setFont(font(15));
-        g.drawText((i == index ? ">  " : "   ") + labels[i].toUpperCase(), r.reduced(5, 0), juce::Justification::centredLeft);
+        g.drawText(labels[i].toUpperCase(), r.reduced(9, 0), juce::Justification::centredLeft);
+        if (i != index) {
+            g.setColour(kMuted); g.setFont(capFont());
+            g.drawText(juce::String(i + 1), r.reduced(4, 0), juce::Justification::centredRight);
+        }
     }
 }
 void MoodEditor::ThreeWay::mouseDown(const juce::MouseEvent& e) {
@@ -659,16 +810,27 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.setColour(kInk); g.fillRect(pa.translated(4, 4));
     g.setColour(kPaper); g.fillRect(pa);
     g.setColour(kInk); g.drawRect(pa, 2);
+    // The paper is graph paper: one dot every 20 px, in a shade just off it.
+    dotGrid(g, pa.withTrimmedTop(25).reduced(1), kSp4 - kSp1, kGrid);
+    cornerTicks(g, pa.withTrimmedTop(25).reduced(5), 9, kLine);   // trim marks, in the margins
     auto bar = pa.removeFromTop(25);
     g.fillRect(bar);
     g.setColour(kPaper); g.setFont(font(15));
     const juce::String title = "*  MOOD.EXE   /   A SOUND EXPERIMENT";
     g.drawText(title, bar.reduced(11, 0), juce::Justification::centredLeft);
-    // The dotted fill starts wherever the title ends, so it can run to the edge now
-    // that the HIDDEN button has gone.
-    const int dotsFrom = bar.getX() + 11 + juce::roundToInt(juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), title)) + 12;
-    for (int x = dotsFrom; x < bar.getRight() - 12; x += 5)
+    // The bar is also the machine's status line: dotted fill, then the rate it is
+    // actually running at, boxed off at the right the way a manifest ends.
+    g.setFont(capFont());
+    const int metaW = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), barMeta) + 8;
+    const int dotsFrom = bar.getX() + 11 + juce::roundToInt(juce::GlyphArrangement::getStringWidth(font(15), title)) + 12;
+    for (int x = dotsFrom; x < bar.getRight() - 12 - metaW - 8; x += 5)
         for (int y = bar.getY() + 7; y < bar.getBottom() - 5; y += 5) g.fillRect(x, y, 2, 2);
+    if (barMeta.isNotEmpty()) {
+        auto chip = juce::Rectangle<int>(bar.getRight() - 9 - metaW, bar.getY() + 4, metaW, 17);
+        g.setColour(kPaper); g.fillRect(chip);
+        g.setColour(kInk); g.setFont(capFont());
+        g.drawText(barMeta, chip.reduced(4, 0), juce::Justification::centredRight);
+    }
     // The masthead is a stack with a known height: wordmark, subtitle, rule, and
     // only then the knob names. The names sit at cellTop - 21 (99 px into the
     // pedal, 119 in window coordinates), so everything above them is measured
@@ -687,9 +849,17 @@ void MoodEditor::paint(juce::Graphics& g) {
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
     for (size_t i = 0; i < knobs.size(); ++i) {
         const auto kb = knobDesign[i];
-        g.setColour(kInk); g.setFont(font(17));
         // Row two's names sit under the mode selectors: start them at 348, not 341.
-        g.drawText(knobs[i].label, kb.withY(kb.getY() - (i < 3 ? 21 : 14)).withHeight(18), juce::Justification::centred);
+        const auto nameRow = kb.withY(kb.getY() - (i < 3 ? 21 : 14)).withHeight(18);
+        g.setColour(kInk); g.setFont(font(17));
+        g.drawText(knobs[i].label, nameRow, juce::Justification::centred);
+        // The cell carries its own number, tied to the name rather than floating
+        // in the corner, so six knobs read as six numbered lines of a manifest.
+        g.setColour(kMuted); g.setFont(capFont());
+        const int nameW = juce::GlyphArrangement::getStringWidthInt(font(17), knobs[i].label);
+        g.drawText(juce::String(i + 1).paddedLeft('0', 2),
+                   juce::Rectangle<int>(kb.getCentreX() + nameW / 2 + 5, nameRow.getY() + 1, 18, 13),
+                   juce::Justification::centredLeft);
         g.setColour(kMuted); g.setFont(font(13));
         const int mode = kKnobMode[i] == 0 ? wm : kKnobMode[i] == 1 ? lm : 0;
         juce::String whisper = kWhisper[i][juce::jlimit(0, 3, mode)];
@@ -711,22 +881,54 @@ void MoodEditor::paint(juce::Graphics& g) {
         if (on) { g.setColour(kInk); g.fillRect(r.reduced(5)); }
     };
     drawLed(ledWet, ledWetOn); drawLed(ledLoop, ledLoopOn);
-    g.setColour(kMuted); g.setFont(font(13));
-    g.drawText("ONE CLOCK. TWO WORLDS.", pedalArea.getCentreX() - 80, pedalArea.getBottom() - 50, 160, 20, juce::Justification::centred);
+    // The one line of copy left on the panel: centred between the footswitches,
+    // with a leader either side so it reads as a caption rather than a label.
+    {
+        auto line = juce::Rectangle<int>(pedalArea.getCentreX() - 96, pedalArea.getBottom() - 48, 192, 18);
+        g.setColour(kMuted); g.setFont(font(12));
+        const juce::String words = "ONE CLOCK. TWO WORLDS.";
+        const int w = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), words);
+        g.drawText(words, line, juce::Justification::centred);
+        const int half = (line.getWidth() - w) / 2;
+        leader(g, line.getX(), line.getX() + half - 6, line.getCentreY(), kLine);
+        leader(g, line.getRight() - half + 6, line.getRight(), line.getCentreY(), kLine);
+    }
+
+    // Two figures the heads can quote: what the host gave us, and how much past
+    // the looper is set to keep.
+    const auto* memoryParam = proc.apvts.getRawParameterValue("memory");
+    const float memV = memoryParam != nullptr ? memoryParam->load() : 0.f;
+    const juce::String srcTail = juce::String(proc.getTotalNumInputChannels()) + " IN / "
+                               + juce::String(proc.getTotalNumOutputChannels()) + " OUT";
+    const juce::String loopTail = memV <= 0.001f ? juce::String("PEDAL")
+                                                 : juce::String(mood::expMap(memV, 1.0, 30.0), 1) + " s";
 
     // "heading", not "title": the window title above already owns that name.
-    auto panel = [&](juce::Rectangle<int> r, const char* heading) {
+    // Every panel opens the same way: a halftone band, a number in a solid block,
+    // the name, a dotted leader out to a small figure. Elevation is a 2 px hard
+    // offset, so the column reads as sheets pinned to a board.
+    auto panel = [&](juce::Rectangle<int> r, const char* index, const char* heading, const juce::String& tail) {
+        g.setColour(kInk); g.fillRect(r.translated(2, 2));
         g.setColour(kPaper); g.fillRect(r);
         g.setColour(kInk); g.drawRect(r, 1);
-        auto head = r.removeFromTop(24);
-        g.setColour(kPanel); g.fillRect(head);
+        auto head = r.removeFromTop(kSp4);
+        halftone(g, head, kPanel, kHalftone);
         g.setColour(kInk); g.drawHorizontalLine(head.getBottom(), static_cast<float>(head.getX()), static_cast<float>(head.getRight()));
-        g.setFont(font(16)); g.drawText(heading, head.reduced(10, 0), juce::Justification::centredLeft);
+        headCell(g, head, index, heading, tail);
     };
-    panel(srcArea, "01  /  INPUT SOURCE");
-    panel(loopArea, "02  /  LOOP MEMORY");   // same rects resized() fills
-    panel(dipArea, "03  /  THE LITTLE SWITCHES");
-    panel(rampArea, "04  /  THE RAMPS");
+    panel(srcArea, "01", "INPUT SOURCE", srcTail);
+    panel(loopArea, "02", "LOOP MEMORY", loopTail);   // same rects resized() fills
+    panel(dipArea, "03", "THE LITTLE SWITCHES", juce::String(dips.size()) + " FITTED");
+    // Three switches in a row that used to hold six leaves a lot of air, so each
+    // one gets its own cell: a hairline box, the switch inside it, the name under.
+    // A table of three, rather than three things floating.
+    for (size_t i = 0; i < dips.size(); ++i) {
+        const auto cell = dipCellDesign[i].reduced(kSp1, 2);
+        g.setColour(kPaper); g.fillRect(cell);
+        g.setColour(kLine); g.drawRect(cell, 1);
+        cornerTicks(g, cell.reduced(1), 4, kLine);
+    }
+    panel(rampArea, "04", "THE RAMPS", "2 GEN / 1 CLOCK");
     g.setColour(kMuted); g.setFont(font(11));
     g.drawText("CLICK A CELL TO STEP", rampArea.withTrimmedTop(4).withTrimmedRight(10), juce::Justification::centredRight);
     const int sx = srcArea.getX() + 14, lx = loopArea.getX() + 14;
@@ -795,37 +997,73 @@ void MoodEditor::paint(juce::Graphics& g) {
                          juce::Justification::centredLeft, 1, 0.8f);
         if (i < 5) {
             g.setColour(kMuted);
-            g.drawFittedText(hoodText[i], cellRect.withHeight(14).withLeft(cellRect.getCentreX() + 2),
-                             juce::Justification::centredRight, 1, 0.8f);
+            const auto value = cellRect.withHeight(14).withLeft(cellRect.getCentreX() + 2);
+            g.drawFittedText(hoodText[i], value, juce::Justification::centredRight, 1, 0.8f);
+            // Name, dotted leader, figure — the whole band reads as one ledger.
+            const int nameEnd = cellRect.getX() + juce::jmin(cellRect.getWidth() / 2,
+                                                             juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), hoodNames[i]) + 4);
+            leader(g, nameEnd + 3, value.getX() - 3, cellRect.getY() + 7, kLine);
         }
     }
 
+    // Ten cells rather than a continuous bar: a level you can count. Reading a
+    // figure off a scale is half of what this panel is for.
     auto meter = [&](int y, const char* name, float peak) {
-        g.setColour(kMuted); g.setFont(mono(12)); g.drawText(name, meterArea.getX(), y, 32, 8, juce::Justification::centredLeft);
-        const auto track = juce::Rectangle<float>(static_cast<float>(meterArea.getX() + 34), static_cast<float>(y + 1), static_cast<float>(meterArea.getWidth() - 34), 6);
-        g.setColour(kPaper); g.fillRect(track); g.setColour(kInk); g.drawRect(track, 1);
+        g.setColour(kMuted); g.setFont(capFont());
+        g.drawText(name, meterArea.getX(), y, 24, 9, juce::Justification::centredRight);
+        constexpr int cells = 10;
+        const int left = meterArea.getX() + 28, span = meterArea.getWidth() - 28;
+        const int cw = juce::jmax(2, span / cells);
         const float level = juce::jlimit(0.f, 1.f, (juce::Decibels::gainToDecibels(peak, -60.f) + 60.f) / 60.f);
-        g.fillRect(track.withWidth(track.getWidth() * level));
+        const int lit = juce::roundToInt(level * (float) cells);
+        for (int i = 0; i < cells; ++i) {
+            const auto cell = juce::Rectangle<int>(left + i * cw + 1, y, cw - 2, 8);
+            g.setColour(i < lit ? kInk : kPaper); g.fillRect(cell);
+            g.setColour(i < lit ? kInk : kLine); g.drawRect(cell, 1);
+        }
     };
     meter(meterArea.getY(), "IN", meterIn); meter(meterArea.getY() + 11, "OUT", meterOut);
 
+    // The readout is the one thing here that behaves like a machine's own display,
+    // so it is drawn as the styleguide's alert box: 3 px offset, a 2 px frame, a
+    // title band with a status chip, and a blinking block where a cursor would be.
+    // While the mouse rests on something that has no explanation of its own this
+    // explains it; otherwise it is the readout for the last thing you moved.
+    const bool helping = hoverText.isNotEmpty();
+    g.setColour(kInk); g.fillRect(lcdArea.translated(3, 3));
     g.setColour(kPaper); g.fillRect(lcdArea);
     g.setColour(kInk); g.drawRect(lcdArea, 2);
-    auto lcdHead = lcdArea.withHeight(21); g.fillRect(lcdHead);
-    // While the mouse rests on something that has no explanation of its own, this
-    // panel explains it; otherwise it is the readout for the last thing you moved.
-    const bool helping = hoverText.isNotEmpty();
-    g.setColour(kPaper); g.setFont(font(15));
-    g.drawText("*  THE SIGNAL  /  " + (helping ? hoverLabel : lcdLabel), lcdHead.reduced(10, 0), juce::Justification::centredLeft);
-    auto lr = lcdArea.reduced(12, 6).withTrimmedTop(20);
+    auto lcdHead = lcdArea.reduced(2).withHeight(19);
+    g.fillRect(lcdHead);
+    g.setColour(kPaper); g.setFont(textFont());
+    g.drawText("*  THE SIGNAL  /  " + (helping ? hoverLabel : lcdLabel), lcdHead.reduced(8, 0),
+               juce::Justification::centredLeft);
+    {
+        const juce::String chip = helping ? "HELP" : "LIVE";
+        const int cw = juce::GlyphArrangement::getStringWidthInt(capFont(), chip) + 8;
+        auto box = juce::Rectangle<int>(lcdHead.getRight() - cw - 2, lcdHead.getY() + 3, cw, 13);
+        g.setColour(kPaper); g.fillRect(box);
+        g.setColour(kInk); g.setFont(capFont());
+        g.drawText(chip, box, juce::Justification::centred);
+    }
+    auto lr = lcdArea.reduced(10, 6).withTrimmedTop(19);
     if (helping) {
         g.setColour(kInk); g.setFont(font(14));
         g.drawFittedText(hoverText, lr.removeFromTop(30), juce::Justification::topLeft, 2);
     } else {
+        auto line = lr.removeFromTop(27);
         g.setColour(kInk); g.setFont(font(20));
-        g.drawFittedText(lcdValue.toUpperCase(), lr.removeFromTop(27), juce::Justification::centredLeft, 1);
+        const juce::String shown = lcdValue.toUpperCase();
+        g.drawFittedText(shown, line, juce::Justification::centredLeft, 1);
+        if (blink) {
+            const int w = juce::jmin(line.getWidth() - 4,
+                                     juce::GlyphArrangement::getStringWidthInt(font(20), shown) + 4);
+            g.fillRect(line.getX() + w, line.getY() + 4, 6, line.getHeight() - 8);
+        }
     }
-    g.setColour(kMuted); g.setFont(font(14)); g.drawText(lcdMeta, lr, juce::Justification::centredLeft);
+    // The figure row: dotted leaders out to whatever the machine is doing.
+    g.setColour(kMuted); g.setFont(font(13));
+    g.drawText(lcdMeta, lr, juce::Justification::centredLeft);
 }
 
 void MoodEditor::timerCallback() {
@@ -853,7 +1091,11 @@ void MoodEditor::timerCallback() {
         repaintDesign(lcdArea);
     }
     const double now = juce::Time::getMillisecondCounterHiRes();
+    const bool wasBlink = blink;
     blink = static_cast<int>(now / 160.0) % 2 == 0;
+    // The readout's cursor is drawn by paint(), so it needs its own repaint when
+    // nothing else has changed — otherwise it sits still.
+    if (blink != wasBlink && hoverText.isEmpty() && lcdValue.isNotEmpty()) repaintDesign(lcdArea);
     const uint32_t cycles = ui.histCycles.load();
     if (cycles != lastCycles) { lastCycles = cycles; flashUntil = now + 120; }   // off: blink each new loop recorded
     const int led = ui.loopLed.load();   // 0 off, 1 play, 2 rec, 3 dub
@@ -869,6 +1111,9 @@ void MoodEditor::timerCallback() {
     }
     const float mi = ui.peakIn.load(), mo = ui.peakOut.load();
     if (std::fabs(mi - meterIn) > 1e-3f || std::fabs(mo - meterOut) > 1e-3f) { meterIn = mi; meterOut = mo; repaintDesign(meterArea.expanded(2)); }
+    const juce::String bar = juce::String(proc.getSampleRate() / 1000.0, 1) + " kHz  /  "
+                           + juce::String(proc.getTotalNumInputChannels()) + " IN";
+    if (bar != barMeta) { barMeta = bar; repaintDesign(pedalArea.withHeight(25)); }
     const int lsrc = ui.lsrc.load();
     const juce::String meta = juce::String(ui.clockHz.load() / 1000.f, 1) + " kHz    "
         + (lsrc > 0 ? "loop " + juce::String(ui.winLen.load() / ui.clockHz.load(), 2) + " s" : juce::String("no loop"))

@@ -601,7 +601,7 @@ function App() {
         <aside className="side-panel" aria-label="Audio input and options">
           <div className="section-heading side-heading"><div><span className="heading-num">02</span><strong>THE SIGNAL</strong></div><span className="heading-end">●</span></div>
           <div className="side-inner">
-            <div className="scope-head"><div><strong>HELLO, SOUND.</strong><small>YOUR SIGNAL, IN REAL TIME</small></div><span className="scope-star"><Spark size={20}/></span></div>
+            <div className="scope-head"><div><strong>HELLO, SOUND.</strong><small>YOUR SIGNAL, IN REAL TIME</small></div><span className={`scope-chip ${running ? 'live' : ''}`}>{running ? 'LIVE' : 'STANDBY'}</span><span className="scope-star"><Spark size={20}/></span></div>
             <Scope engineRef={engineRef} running={running}/>
             <div className="meter-row"><span>IN</span><div className="meter"><i style={{ width: running ? meter(state?.peakIn) : '0%' }}/></div><span>OUT</span><div className="meter"><i style={{ width: running ? meter(state?.peakOut) : '0%' }}/></div></div>
             <div className="side-rule"><span>INPUT SOURCE</span><span>01—03</span></div>

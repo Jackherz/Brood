@@ -304,13 +304,31 @@ parameters instead. Loop memory and END are host-only parameters too.
 Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
 it on in the editor.
 
+### The sheet
+
+Both panels are drawn to one small system, the way a product styleguide works:
+spacing snaps to 4 / 8 / 16 / 24 / 32, type to five sizes, and elevation is
+always a hard offset — 1 px for a control, 2 px for a panel, 3 px for the
+readout — never a blur. Rules carry the structure: ink for frames and controls,
+hairline grey for grouping. The only textures are a 2 px halftone band on every
+panel head and a 20 px dot grid under the paper, both built from the paper's own
+colour, so the cream-and-ink palette is untouched.
+
+That system is read the way a shipping manifest is read, because the machine is
+one: every panel opens with a numbered block, its name, a dotted leader and a
+figure (`02 INPUT SOURCE ···· 2 IN / 2 OUT`); every knob carries a number beside
+its name; the two level meters are ten countable cells rather than a bar; the
+readout is an alert box with a status chip, a hard frame and a blinking block
+where a cursor would be; the switches sit as three boxed cells; and the title bar
+ends with what the host is actually running us at (`48.0 kHz / 2 IN`). Small
+registration marks sit in the margins, and `ONE CLOCK. TWO WORLDS.` is set as a
+caption with a leader either side.
+
 The knobs are flat discs with a hairline rim and a thin pointer, five marks around
-the outside and a hard offset shadow — a plainer, more analogue face than the
-bevelled pixel knob it replaces, which is why the panel reads quieter now. The
-wet channel's two knobs are black, the shared and loop knobs are pale, the same
-way a pedal marks the primary control. The panel keeps two rules and no more:
-ink for structure (window, panels, controls), hairline grey for grouping (rows
-inside a panel). Everything dashed is gone.
+the outside and a hard offset shadow. The wet channel's two knobs are black, the
+shared and loop knobs are pale, the same way a pedal marks the primary control.
+Nothing is rounded, nothing is dashed, and nothing is a tint of a colour that is
+not in the palette.
 
 The browser version does not receive MIDI. MIDI clock sync, expression/CV, synth
 mode, MISO, true bypass, the direct micro-loop blend and the remaining hardware
