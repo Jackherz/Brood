@@ -12,9 +12,18 @@ that makes it musical rather than merely moving:
   The hardware does this from the hidden menu; CC 52 stops a running ramp.
 - **DIRECT MICRO-LOOP blend** — how much of the *unprocessed* loop reaches the
   output, mixed in beside the wet side.
-- **SPREAD per channel** — the stereo width applies to each side separately.
 
 ## Done
+
+- Round 11: **LATCH** and **DRY KILL** are gone — MIX alone takes the dry away at
+  the top of its travel, and the FREEZE switch latches what a held footswitch only
+  does while held. **SPREAD** is gone too: **WIDTH** owns the stereo image, from
+  mono at 0 % through the image as built at 50 % to open sides above it.
+- **Bounces capture the take.** The loop used to vanish when a host prepared the
+  plugin for an offline pass, and nothing carried it in the project state. Now
+  `prepare()` keeps the take, and the audio itself is written into the saved state
+  as gzipped 16-bit PCM per core, swapped in on the audio thread after a reload.
+  A bounce in Ableton is what was playing.
 
 - The ramp engine: two generators (wet and loop) writing to TIME, MIX, LENGTH,
   MODIFY, CLOCK or BALANCE, five waveforms, unipolar or bipolar, a rate from one
@@ -22,7 +31,7 @@ that makes it musical rather than merely moving:
   Bit-exact between the browser and native cores (`tests/parity/scenarios/ramps.txt`).
 - Four wet modes (reverb, delay, slip, weave) and three loop modes (env, tape,
   stretch), three-way routing, wet/loop balance.
-- DIP switches: trails, dry kill, latch, spread, smooth clock, tempo sync.
+- DIP switches: trails, smooth clock, tempo sync.
 - Loop memory up to 30 s, and END trims how much of the loop plays (the start point is LENGTH's, as on the pedal). LENGTH's travel is linear, so the window reaches the very start of a 30 s take.
 - New knob face: a flat disc, one hairline rim, a thin pointer and five marks, after the SR-01. Wet channel black, shared and loop pale. The panel now uses ink for structure and hairline grey for grouping only — no dashed rules left — and the ramp cells read as buttons.
 - The WET / LOOP balance is a blend of two full-level worlds; the direct loop is no longer ducked against the wet level, so SLIP and WEAVE cannot swallow the loop in the middle of the travel.

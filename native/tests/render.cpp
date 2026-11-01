@@ -16,8 +16,9 @@ static void setParam(mood::Params& p, const std::string& n, double v) {
     else if (n == "modWet") p.modWet = v; else if (n == "clock") p.clock = v; else if (n == "modLoop") p.modLoop = v;
     else if (n == "wetMode") p.wetMode = static_cast<int>(v); else if (n == "routing") p.routing = static_cast<int>(v);
     else if (n == "loopMode") p.loopMode = static_cast<int>(v);
-    else if (n == "trails") p.trails = v != 0; else if (n == "dryKill") p.dryKill = v != 0; else if (n == "latch") p.latch = v != 0;
-    else if (n == "spread") p.spread = v != 0; else if (n == "smooth") p.smooth = v != 0; else if (n == "balance") p.balance = v;
+    // DRY KILL / LATCH / SPREAD retired in round 11: MIX, the FREEZE switch and
+    // WIDTH cover them. The old names are rejected so a stale scenario fails loudly.
+    else if (n == "trails") p.trails = v != 0; else if (n == "smooth") p.smooth = v != 0; else if (n == "balance") p.balance = v;
     else if (n == "sync") p.sync = v != 0; else if (n == "bpm") p.bpm = v;
     else if (n == "loopEnd") p.loopEnd = v;
     else if (n == "memory") p.memory = v;

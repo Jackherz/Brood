@@ -54,7 +54,7 @@ test('bypass remains transparent above nominal full scale', () => {
 test('delay repeats at the TIME setting, and half clock doubles it', () => {
   const measure = (clock) => {
     const core = new MoodCore(FS);
-    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('dryKill', 1);
+    core.setParam('wetMode', 1); core.setParam('mix', 1);
     core.setParam('modWet', 0.3); core.setParam('clock', clock);
     core.s.clock = clock; core.s.mix = 1; core.modeGain = [0, 1, 0];
     // time 0.5 → expMap(0.5, 0.02s, 2s) = 0.2 s at full clock
@@ -84,7 +84,7 @@ test('delay time changes crossfade between fixed read heads', () => {
 test('delay timing is stable at 44.1 and 96 kHz host rates', () => {
   for (const rate of [44100, 96000]) {
     const core = new MoodCore(rate);
-    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('dryKill', 1); core.setParam('clock', 1);
+    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('clock', 1);
     core.s.clock = 1; core.s.mix = 1; core.modeGain = [0, 1, 0];
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const input = new Float32Array(BLOCK), left = new Float32Array(BLOCK), right = new Float32Array(BLOCK);
@@ -154,7 +154,7 @@ test('maximum delay feedback stays bounded', () => {
 test('slip produces pitch-shifted slices in all directions', () => {
   for (const m of [0, 0.15, 0.4, 1]) {
     const core = new MoodCore(FS);
-    core.setParam('wetMode', 2); core.setParam('modWet', m); core.setParam('dryKill', 1);
+    core.setParam('wetMode', 2); core.setParam('modWet', m); core.setParam('mix', 1);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const { L } = render(core, 2, tone(220, 2));
     assert.ok(finite(L));
@@ -164,7 +164,7 @@ test('slip produces pitch-shifted slices in all directions', () => {
 
 test('tapping the loop switch captures what was just played', () => {
   const core = new MoodCore(FS);
-  core.setParam('dryKill', 1); core.setParam('mix', 1);
+  core.setParam('mix', 1);
   // play a tone for 1 s, then silence; tap at 1.0 s
   const { L } = render(core, 3, tone(330, 1), {
     [blk(1.0)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); },
@@ -236,7 +236,7 @@ test('loop buffer length is set by the clock (fixed sample count)', () => {
 test('ENV mode: playing interrupts the loop with a repeating slice', () => {
   const core = new MoodCore(FS);
   core.setParam('loopMode', 0); core.setParam('modLoop', 0.8); core.setParam('length', 0.2);
-  core.setParam('dryKill', 1); core.setParam('mix', 1);
+  core.setParam('mix', 1);
   // record a 220 Hz loop, then play a loud 880 Hz note: the output should keep
   // repeating loop material (not 880 Hz, since dry is killed) and stay finite
   const src = (t) => (t < 1 ? 0.3 * Math.sin(2 * Math.PI * 220 * t) : t > 1.5 && t < 2.2 ? 0.5 * Math.sin(2 * Math.PI * 880 * t) : 0);
@@ -270,7 +270,7 @@ test('clock is stepped by default and continuously variable with Smooth', () => 
 
 test('wet input ignores routing when the loop is listening', () => {
   const core = new MoodCore(FS);
-  core.setParam('wetMode', 1); core.setParam('routing', 2); core.setParam('mix', 1); core.setParam('dryKill', 1);
+  core.setParam('wetMode', 1); core.setParam('routing', 2); core.setParam('mix', 1);
   core.setParam('time', 0.15);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   const { L } = render(core, 1.5, tone(220, 1));
@@ -294,7 +294,7 @@ test('listening history includes wet ambience and overdubs use clean input', () 
 test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => {
   const run = (time, modify) => {
     const core = new MoodCore(FS);
-    core.setParam('wetMode', 3); core.setParam('mix', 1); core.setParam('dryKill', 1);
+    core.setParam('wetMode', 3); core.setParam('mix', 1);
     core.setParam('time', time); core.setParam('modWet', modify);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     // A gated tone keeps the memory fresh, like a guitarist playing.
@@ -311,7 +311,7 @@ test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => 
 test('WEAVE stays bounded at the extremes', () => {
   const core = new MoodCore(FS);
   core.setParam('wetMode', 3); core.setParam('mix', 1); core.setParam('modWet', 1);
-  core.setParam('time', 1); core.setParam('clock', 0); core.setParam('spread', 1);
+  core.setParam('time', 1); core.setParam('clock', 0); core.setParam('width', 1);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   const { L, R } = render(core, 2, tone(196, 5));
   for (let i = 0; i < L.length; i++) {
@@ -323,7 +323,7 @@ test('WEAVE stays bounded at the extremes', () => {
 test('tempo sync puts the delay on the musical division, at any clock', () => {
   const echoAt = (time, bpm, clock) => {
     const core = new MoodCore(FS);
-    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('dryKill', 1); core.setParam('modWet', 0.5);
+    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.5);
     core.setParam('sync', 1); core.setParam('bpm', bpm); core.setParam('time', time); core.setParam('clock', clock);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const n = FS * 3;
@@ -345,7 +345,7 @@ test('tempo sync puts the delay on the musical division, at any clock', () => {
 
 test('sync off leaves TIME as a free time', () => {
   const core = new MoodCore(FS);
-  core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('dryKill', 1); core.setParam('modWet', 0.5);
+  core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.5);
   core.setParam('sync', 0);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   const n = FS * 2, click = new Float32Array(n); click[FS] = 0.8;
@@ -886,4 +886,56 @@ test('holding LOOP overdubs, and FADE decides what the old take keeps', () => {
   assert.ok(keepAll.before > 0.1, `there was something to keep (${keepAll.before.toFixed(3)})`);
   assert.ok(keepAll.after > 0.05, `FADE left the old take there (${keepAll.after.toFixed(3)})`);
   assert.ok(eraseAll.after < keepAll.after * 0.5, `FADE 1 replaced it (${eraseAll.after.toFixed(3)} vs ${keepAll.after.toFixed(3)})`);
+});
+
+test('WIDTH does what SPREAD used to: 0 is mono, the middle is as built, above it opens', () => {
+  // SPREAD was a switch that duplicated the mono path; WIDTH now does it, so
+  // turning WIDTH to zero is the same as that switch being off.
+  const run = (width, pan) => {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { wetMode: 1, mix: 1, modWet: 0.6, time: 0.35, clock: 1, width });
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    const src = pan === 0 ? tone(440, 9) : (t) => ((t % 1) < 0.05 ? 0.9 : 0);   // clicks pan nothing, but excite the room
+    const { L, R } = render(core, 1.5, src);
+    let side = 0, mid = 0;
+    for (let i = FS * 0.3; i < L.length; i++) { mid += Math.abs(L[i] + R[i]); side += Math.abs(L[i] - R[i]); }
+    return { width, side, mid, diff: side / Math.max(1e-9, mid) };
+  };
+  const mono = run(0), centre = run(0.5), wide = run(1);
+  assert.ok(mono.side < 1e-9, `WIDTH 0 is mono (${mono.side.toExponential(2)})`);
+  // The delay's own image is centred (that is how it was built), so the middle is
+  // still mono — and above it the decorrelation is what opens the sides up.
+  assert.ok(centre.side < mono.side + 1e-9, `the middle is still the built image (${centre.side.toExponential(2)})`);
+  assert.ok(wide.side > 1e-3, `WIDTH 1 opens the sides (${wide.side.toExponential(2)})`);
+  assert.ok(wide.mid > 0.2 * centre.mid, 'and keeps the middle of the signal');
+});
+
+test('MIX alone takes the dry away, so DRY KILL is not needed', () => {
+  // At the top of its travel MIX fades the dry signal out completely once the
+  // pedal is engaged; the DRY KILL switch used to duplicate that.
+  const dryLeft = (mix) => {
+    const core = new MoodCore(FS);
+    Object.assign(core.p, { wetMode: 0, mix, modWet: 0.5, time: 0.5 });
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    render(core, 0.5, () => 0);                       // let "engaged" settle
+    const { L } = render(core, 0.4, () => 0.5);       // a DC input: nothing else can be 0.5
+    return L[L.length - 1];
+  };
+  assert.ok(dryLeft(0.5) > 0.4, `half way the dry is still there (${dryLeft(0.5).toFixed(3)})`);
+  assert.ok(Math.abs(dryLeft(1)) < 0.05, `fully wet the dry is gone (${dryLeft(1).toFixed(3)})`);
+});
+
+test('a hold on the wet footswitch freezes only while it is held', () => {
+  // There is no LATCH switch any more: the FREEZE switch is how a freeze is left
+  // standing, and a held foot is momentary.
+  const core = new MoodCore(FS);
+  Object.assign(core.p, { wetMode: 0, time: 0.8, modWet: 0.9, mix: 1 });
+  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  render(core, 1, tone(300, 9));
+  core.footswitch('wet', 'down');
+  render(core, 0.6, () => 0);
+  assert.ok(core.state().freeze, 'holding freezes');
+  core.footswitch('wet', 'up');
+  render(core, 0.1, () => 0);
+  assert.ok(!core.state().freeze, 'letting go lets go');
 });

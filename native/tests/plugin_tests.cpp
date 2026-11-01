@@ -30,11 +30,11 @@ int main() {
     // Control a knob and enable wet with the pedal's CC assignments.
     m.addEvent(juce::MidiMessage::controllerEvent(1, 15, 100), 0);
     m.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
-    m.addEvent(juce::MidiMessage::controllerEvent(1, 73, 1), 0);
+    m.addEvent(juce::MidiMessage::controllerEvent(1, 75, 1), 0);
     b.clear(); process(p, b, m);
     CHECK(std::fabs(p.apvts.getRawParameterValue("mix")->load() - 100.f / 127.f) < 0.001f, "MIDI CC 15 controls MIX");
     CHECK(p.ui.wetOn.load(), "MIDI CC 103 engages wet at value 1");
-    CHECK(p.apvts.getRawParameterValue("spread")->load() == 1.f, "MIDI switches accept value 1");
+    CHECK(p.apvts.getRawParameterValue("trails")->load() == 1.f, "MIDI switches accept value 1");
     p.prepareToPlay(rate, size);
     b.clear(); process(p, b, m);
     CHECK(p.ui.wetOn.load(), "wet state survives DAW re-prepare");

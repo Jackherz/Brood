@@ -70,6 +70,12 @@ private:
     bool lastWetSw_ = false, lastLoopSw_ = false;
     std::atomic<float> hostBpm_ { 120.f };   // last tempo the host reported
     std::atomic<int> restoreWet_ { -1 };
+    // A take restored from the state, waiting to be swapped in by the audio thread.
+    // (A host that renders offline may be a fresh instance with nothing captured.)
+    struct PendingTake { std::vector<float> pcm; bool play = false; bool has = false; };
+    juce::SpinLock takeLock_;
+    PendingTake pendingTake_[2];
+    void applyPendingTakes();
     std::vector<float> inputLeft_, inputRight_, scratchLeft_, scratchRight_;
     int dubBlocks_ = 0;
     bool pendingWave_ = false;

@@ -354,7 +354,7 @@ enum class LoopLed { Off, Play, Rec, Dub };
 struct Params {
     double time = 0.5, mix = 0.5, length = 0.75, modWet = 0.5, clock = 1, modLoop = 0.5;
     int wetMode = 0, routing = 0, loopMode = 0;   // reverb/delay/slip/weave, in/in+loop/loop, env/tape/stretch
-    bool trails = false, dryKill = false, latch = false, spread = false, smooth = false;
+    bool trails = false, smooth = false;
     bool sync = false;
     double balance = 0.5, bpm = 120.0;
     double loopEnd = 1, memory = 0;                 // playback trim + capture ceiling
@@ -389,10 +389,17 @@ public:
         wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
-        hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f);
-        histW = histCount = 0; histCycles = 0; lsrc = 0;
-        loopState = LoopState::Off; overdub = false;
-        loopGain = 0; loopPos = 0; tapeSpeed = 1; stretchSpeed = 0;
+        // The loop survives a re-prepare. A host calls prepareToPlay again for a
+        // device or block-size change and before an offline render, and wiping the
+        // take there is why a bounce could come back empty. The loop is measured in
+        // core-clock ticks (kCoreFs), not host samples, so it stays valid as it is.
+        if (hist.size() != static_cast<size_t>(kMaxLoopSamples)) {
+            hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f);
+            histW = histCount = 0; lsrc = 0; loopPos = 0; loopState = LoopState::Off;
+        }
+        histCycles = 0;
+        overdub = false;
+        loopGain = 0; tapeSpeed = 1; stretchSpeed = 0;
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         grain[0] = {0, 0}; grain[1] = {0.5, 0};
         rng = 22222;
@@ -413,7 +420,7 @@ public:
                 const bool held = fsWet.held;
                 fsWet.active = false;
                 if (held) {
-                    if (!p.latch) { freeze = false; if (wetMomentary) wetOn = false; }
+                    freeze = false; if (wetMomentary) wetOn = false;   // a hold freezes only while held
                 } else if (!wetMomentary) { wetOn = false; freeze = false; }
                 wetMomentary = false;
             }
@@ -447,7 +454,7 @@ public:
         const double holdN = kHoldSec * fs;
         if (fsWet.active && !fsWet.held && hostCount - fsWet.t >= holdN) {
             fsWet.held = true;
-            freeze = p.latch ? !freeze : true;
+            freeze = true;
         }
         if (fsLoop.active && !fsLoop.held && hostCount - fsLoop.t >= holdN) { fsLoop.held = true; if (fsLoop.playing) overdub = true; }
 
@@ -492,11 +499,11 @@ public:
             const bool latchFreeze = p.freezeLatch > 0.5;   // the FREEZE switch, per sample
             const double engagedT = wetOn || latchFreeze || loopState == LoopState::Play ? 1.0 : 0.0;
             engaged += (engagedT - engaged) * 0.001;
-            const double dg = p.dryKill ? 0.0 : 1 - engaged * (1 - std::min(1.0, 2 * (1 - e.mix)));
+            const double dg = 1 - engaged * (1 - std::min(1.0, 2 * (1 - e.mix)));
             const double wg = std::min(1.0, 2 * e.mix);
             double l = dry * dg + el * wg;
             double r = dry * dg + er * wg;
-            const bool fullyBypassed = !p.dryKill && !p.trails && !wetOn && !latchFreeze && loopState == LoopState::Off && engaged < 1e-4;
+            const bool fullyBypassed = !p.trails && !wetOn && !latchFreeze && loopState == LoopState::Off && engaged < 1e-4;
             if (!fullyBypassed) { l = softClip(l); r = softClip(r); }
             outL[i] = static_cast<float>(l); outR[i] = static_cast<float>(r);
             pkOut = std::max(pkOut, std::max(std::fabs(l), std::fabs(r)));
@@ -538,6 +545,38 @@ public:
         double acc = 0;
         for (int i = 0; i < win.W; ++i) { const double v = loopBuf[static_cast<size_t>(win.start + i)]; acc += v * v; }
         return std::sqrt(acc / static_cast<double>(std::max(1, win.W)));
+    }
+
+    // ── the take as data ──
+    // A host that re-creates the plug-in for an offline render starts with empty
+    // buffers, so a captured loop has to travel in the state as well as live in
+    // memory. Copies of the playable window, in core-clock samples.
+    int capturedLoop(float* out, int maxOut) const {
+        const int n = std::min(lsrc, maxOut);
+        for (int i = 0; i < n; ++i) out[i] = loopBuf[static_cast<size_t>(i)];
+        return n;
+    }
+    // Put a take back. `n` must already be in core-clock samples.
+    void restoreLoop(const float* pcm, int n, bool play) {
+        if (pcm == nullptr || n < 64 || n > static_cast<int>(loopBuf.size())) return;
+        loopBuf.assign(loopBuf.size(), 0.f);      // keep the allocation, clear the old take
+        std::copy(pcm, pcm + n, loopBuf.begin());
+        lsrc = n; loopPos = 0; loopGain = 1;
+        loopState = play ? LoopState::Play : LoopState::Off;
+        loopWaveDirty = true;
+    }
+    LoopState loopLedState() const { return loopState; }
+    // int16 is plenty for a take and half the bytes of float; the state is
+    // base64'd afterwards, so every byte saved is a byte off the set file.
+    static void packLoop(const float* src, int n, std::vector<int16_t>& out) {
+        out.resize(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            const float v = static_cast<float>(clampd(static_cast<double>(src[i]), -1.0, 1.0));
+            out[static_cast<size_t>(i)] = static_cast<int16_t>(jsRound(v * 32767.f));
+        }
+    }
+    static void unpackLoop(const int16_t* src, int n, float* out) {
+        for (int i = 0; i < n; ++i) out[i] = static_cast<float>(src[i]) / 32767.f;
     }
 
     bool takeLoopWaveDirty() { const bool d = loopWaveDirty; loopWaveDirty = false; return d; }
@@ -840,10 +879,18 @@ private:
             wl += o[0] * modeGain[3]; wr += o[1] * modeGain[3];
         }
         wl += mono;
-        wr += p.spread ? decor[1].run(decor[0].run(mono)) : mono;
-        if (p.spread) {
-            const double mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * 1.6;
+        wr += mono;
+        // WIDTH is the whole stereo story now that SPREAD has gone: 0 is mono, 0.5
+        // is the image as built, and above the middle the two sides stop sharing.
+        const double wv = clampd(s.width, 0.0, 1.0);
+        if (std::fabs(wv - 0.5) > 0.002) {
+            const double mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * (wv * 2);
             wl = mid + side; wr = mid - side;
+        }
+        if (wv > 0.5) {
+            const double amt = (wv - 0.5) * 2;
+            const double d = decor[1].run(decor[0].run((wl + wr) * 0.5));
+            wl += d * 0.5 * amt; wr -= d * 0.5 * amt;
         }
         // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
         const double toneAmt = 1 - clampd(s.tone, 0, 1);

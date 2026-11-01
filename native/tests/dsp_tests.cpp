@@ -62,7 +62,7 @@ int main() {
         CHECK(worst < 1e-6, "bypass error %g", worst);
     }
     {   // delay echo lands at TIME (0.2 s at the default knob)
-        mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.3; c.prepare(FS);
+        mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.3; c.prepare(FS);
         tap(c, 0);
         // start in delay mode: let the reverb→delay mode crossfade finish before the click
         auto o = render(c, 1.4, [](double t) { return t > 0.5 && t < 0.502 ? 0.8 : 0.0; });
@@ -102,7 +102,7 @@ int main() {
     }
     {   // WEAVE: audible, repeatable at a fixed knob position, and it answers the knobs
         auto weaveRun = [](double time, double modify) {
-            mood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.dryKill = true; c.p.time = time; c.p.modWet = modify;
+            mood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.time = time; c.p.modWet = modify;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 3, [](double t) {
                 const double ph = std::fmod(t, 1.0);
@@ -118,7 +118,7 @@ int main() {
         CHECK(std::fabs(texture - deep) > 1e-4, "weave ignores TIME");
     }
     {   // WEAVE stays bounded with the nastiest settings
-        mood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.0; c.p.spread = true;
+        mood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.0; c.p.width = 1;
         c.prepare(FS); tap(c, 0);
         auto o = render(c, 2, tone(196, 5));
         bool bounded = true; for (float v : o.L) if (std::fabs(v) > 1.0f) bounded = false;
@@ -162,7 +162,7 @@ int main() {
     }
     {   // tempo sync puts the echo on the divisiuon, independent of the clock
         auto echoAt = [](double time, double bpm, double clock) {
-            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.5;
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5;
             c.p.sync = true; c.p.bpm = bpm; c.p.time = time; c.p.clock = clock;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 3, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
@@ -218,7 +218,7 @@ int main() {
     }
     {   // WET CLOCK DIVISION stretches the wet side only
         auto gap = [](double wetDiv) {
-            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.3;
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.3;
             c.p.time = 0.3; c.p.wetDiv = wetDiv;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 6, [](double t) { return t > 1.0 && t < 1.002 ? 0.8 : 0.0; });
@@ -284,7 +284,7 @@ int main() {
     }
     {   // a TIME ramp moves the echo
         auto echoPair = [] {
-            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.55;
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.55;
             c.p.time = 0.4; c.p.rampWet = 0.2; c.p.rampSpeed = 0.35;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 5, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
@@ -486,6 +486,83 @@ int main() {
         CHECK(keepBefore > 0.1, "there was something to keep (%.3f)", keepBefore);
         CHECK(keepAfter > 0.05, "FADE 0 leaves the old take there (%.3f)", keepAfter);
         CHECK(eraseAfter < keepAfter * 0.5, "FADE 1 replaces it (%.3f vs %.3f)", eraseAfter, keepAfter);
+    }
+    {   // WIDTH does what SPREAD used to: 0 is mono and the top opens the sides
+        auto runWidth = [&](double width) {
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.6; c.p.time = 0.35; c.p.clock = 1; c.p.width = width;
+            c.prepare(FS); c.footswitch(0, true); c.footswitch(0, false);
+            const Out o = render(c, 1.5, tone(440, 9));
+            double side = 0, mid = 0;
+            for (size_t i = static_cast<size_t>(0.3 * FS); i < o.L.size(); ++i) {
+                mid += std::fabs(static_cast<double>(o.L[i]) + o.R[i]);
+                side += std::fabs(static_cast<double>(o.L[i]) - o.R[i]);
+            }
+            return std::pair<double, double>(side, mid);
+        };
+        const auto mono = runWidth(0), centre = runWidth(0.5), wide = runWidth(1);
+        CHECK(mono.first < 1e-9, "WIDTH 0 is mono (%.2e)", mono.first);
+        CHECK(centre.first <= mono.first + 1e-9, "the middle is the built image (%.2e)", centre.first);
+        CHECK(wide.first > 1e-3, "WIDTH 1 opens the sides (%.2e)", wide.first);
+        CHECK(wide.second > 0.2 * centre.second, "and keeps the middle of the signal");
+    }
+    {   // MIX alone takes the dry away, so DRY KILL is not needed
+        auto dryLeft = [&](double mix) {
+            mood::Core c; c.p.wetMode = 0; c.p.mix = mix; c.p.modWet = 0.5; c.p.time = 0.5;
+            c.prepare(FS); c.footswitch(0, true); c.footswitch(0, false);
+            render(c, 0.5, [](double) { return 0.0; });
+            const Out o = render(c, 0.4, [](double) { return 0.5; });
+            return static_cast<double>(o.L.back());
+        };
+        CHECK(dryLeft(0.5) > 0.4, "half way the dry is still there (%.3f)", dryLeft(0.5));
+        CHECK(std::fabs(dryLeft(1)) < 0.05, "fully wet the dry is gone (%.3f)", dryLeft(1));
+    }
+    {   // There is no LATCH any more: a held foot is momentary, the switch latches
+        mood::Core c; c.p.wetMode = 0; c.p.time = 0.8; c.p.modWet = 0.9; c.p.mix = 1;
+        c.prepare(FS);
+        c.footswitch(0, true); c.footswitch(0, false);
+        render(c, 1, tone(300, 9));
+        c.footswitch(0, true);
+        render(c, 0.6, [](double) { return 0.0; });
+        CHECK(c.state().freeze, "holding freezes");
+        c.footswitch(0, false);
+        render(c, 0.1, [](double) { return 0.0; });
+        CHECK(!c.state().freeze, "letting go lets go");
+    }
+    {   // A re-prepare must keep the take: hosts re-prepare for a device change and
+        // before an offline render, and wiping the loop there is what came back as
+        // silence when bouncing.
+        mood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.prepare(FS);
+        render(c, 2, tone(220, 9));
+        c.footswitch(1, true); c.footswitch(1, false);
+        const int before = c.capturedLength();
+        const double level = c.loopWindowRms();
+        CHECK(before > 64, "there is a take to keep (%d)", before);
+        c.prepare(FS);                       // what a host does before a render
+        CHECK(c.capturedLength() == before, "prepare keeps the take (%d -> %d)", before, c.capturedLength());
+        CHECK(std::fabs(c.loopWindowRms() - level) < 1e-9, "and its contents");
+        c.prepare(96000.0);                  // and a sample-rate change
+        CHECK(c.capturedLength() == before, "a sample-rate change keeps it too");
+    }
+    {   // The take survives being written into the state and read back
+        mood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.prepare(FS);
+        render(c, 2, tone(220, 9));
+        c.footswitch(1, true); c.footswitch(1, false);
+        const int n = c.capturedLength();
+        std::vector<float> pcm(static_cast<size_t>(n));
+        CHECK(c.capturedLoop(pcm.data(), n) == n, "the take can be read out");
+        std::vector<int16_t> packed;
+        mood::Core::packLoop(pcm.data(), n, packed);
+        std::vector<float> back(static_cast<size_t>(n));
+        mood::Core::unpackLoop(packed.data(), n, back.data());
+        double worst = 0;
+        for (int i = 0; i < n; ++i) worst = std::max(worst, std::fabs(static_cast<double>(back[static_cast<size_t>(i)] - pcm[static_cast<size_t>(i)])));
+        CHECK(worst < 1e-4, "int16 packing is transparent enough (%.2e)", worst);
+        mood::Core d; d.p.loopMode = 0; d.p.clock = 0.6; d.prepare(FS);
+        d.restoreLoop(back.data(), n, true);
+        CHECK(d.capturedLength() == n, "restored into a fresh engine");
+        CHECK(d.state().loop == mood::LoopLed::Play, "and it plays");
+        const Out o = render(d, 1, [](double) { return 0.0; });
+        CHECK(finite(o.L) && rms(o.L, 0.1, 0.9) > 0.01, "a restored take makes sound (%.3f)", rms(o.L, 0.1, 0.9));
     }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;

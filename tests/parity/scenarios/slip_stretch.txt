@@ -1,11 +1,11 @@
-# wet SLIP + loop STRETCH, routing LOOP, mode switches mid-stream, latch freeze
+# wet SLIP + loop STRETCH, routing LOOP, mode switches mid-stream, FREEZE switch
 rate 44100
 seconds 6
 0 param wetMode 2
 0 param loopMode 2
 0 param modWet 0.1
 0 param modLoop 0.2
-0 param latch 1
+0 param freeze 0
 0 fs wet down
 2 fs wet up
 500 fs loop down

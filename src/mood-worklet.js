@@ -362,7 +362,7 @@ class MoodCore {
     this.p = {
       time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5,
       wetMode: 0, routing: 0, loopMode: 0,
-      trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
+      trails: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
       loopEnd: 1, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
@@ -449,11 +449,9 @@ class MoodCore {
       } else if (this.fsDown.wet) {
         const held = this.fsDown.wet.held;
         this.fsDown.wet = null;
-        if (held) {
-          if (!this.p.latch) {
-            this.freeze = false;
-            if (this.wetMomentary) this.wetOn = false;
-          }
+        if (held) {                       // a hold freezes for as long as it is held
+          this.freeze = false;
+          if (this.wetMomentary) this.wetOn = false;
         } else if (!this.wetMomentary) {
           this.wetOn = false;
           this.freeze = false;
@@ -755,11 +753,19 @@ class MoodCore {
       const o = this.weave.tick(wIn, Math.min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, freeze);
       wl += o[0] * this.modeGain[3]; wr += o[1] * this.modeGain[3];
     }
-    wl += mono;
-    wr += p.spread ? this.decor[1].run(this.decor[0].run(mono)) : mono;
-    if (p.spread) { // widen reverb too
-      const mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * 1.6;
+    wl += mono; wr += mono;
+    // WIDTH is the whole stereo story now that SPREAD has gone: 0 is mono, 0.5 is
+    // the image as built, and above the middle the two sides stop sharing — the
+    // mono path is decorrelated so even a centred source opens up.
+    const wv = clamp(this.s.width, 0, 1);
+    if (Math.abs(wv - 0.5) > 0.002) {
+      const mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * (wv * 2);
       wl = mid + side; wr = mid - side;
+    }
+    if (wv > 0.5) {
+      const amt = (wv - 0.5) * 2;                       // 0 at the middle, 1 at the top
+      const d = this.decor[1].run(this.decor[0].run((wl + wr) * 0.5));
+      wl += d * 0.5 * amt; wr -= d * 0.5 * amt;
     }
     // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
     const toneAmt = 1 - clamp(this.s.tone);
@@ -808,7 +814,7 @@ class MoodCore {
     const fw = this.fsDown.wet;
     if (fw && !fw.held && this.hostCount - fw.t >= holdN) {
       fw.held = true;
-      this.freeze = p.latch ? !this.freeze : true;
+      this.freeze = true;
     }
     const fl = this.fsDown.loop;
     if (fl && !fl.held && this.hostCount - fl.t >= holdN) { fl.held = true; if (fl.playing) this.overdub = true; }
@@ -858,12 +864,12 @@ class MoodCore {
       const latchFreeze = p.freeze > 0.5;   // the FREEZE switch, per sample
       const engagedT = this.wetOn || latchFreeze || this.loopState === 'play' ? 1 : 0;
       this.engaged += (engagedT - this.engaged) * 0.001;
-      const dg = p.dryKill ? 0 : 1 - this.engaged * (1 - Math.min(1, 2 * (1 - this.e.mix)));
+      const dg = 1 - this.engaged * (1 - Math.min(1, 2 * (1 - this.e.mix)));
       const wg = Math.min(1, 2 * this.e.mix);
       let l = dry * dg + el * wg;
       let r = dry * dg + er * wg;
       // A fully bypassed plugin must be transparent, including signals above 0 dBFS.
-      const fullyBypassed = !p.dryKill && !p.trails && !this.wetOn && !latchFreeze && this.loopState === 'off' && this.engaged < 1e-4;
+      const fullyBypassed = !p.trails && !this.wetOn && !latchFreeze && this.loopState === 'off' && this.engaged < 1e-4;
       if (!fullyBypassed) { l = softClip(l); r = softClip(r); }
       outL[i] = l; outR[i] = r;
       const ao = Math.max(Math.abs(l), Math.abs(r)); if (ao > pkOut) pkOut = ao;
@@ -909,7 +915,7 @@ function softClip(x) {
 
 if (typeof AudioWorkletProcessor !== 'undefined') {
   // Independent left/right engines preserve stereo input. Both receive the same
-  // gestures and parameters; the optional spread uses their opposite outputs.
+  // gestures and parameters; each contributes its own left channel.
   class MoodProcessor extends AudioWorkletProcessor {
     constructor() {
       super();
@@ -940,8 +946,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       const inL = inp[0] || null;
       const inR = inp[1] || inL;
       this.left.process(inL, outL, this.scratchL);
-      if (this.left.p.spread) this.right.process(inR, this.scratchL, outR);
-      else this.right.process(inR, outR, this.scratchL);
+      this.right.process(inR, outR, this.scratchL);
       this.sinceState += outL.length;
       if (this.sinceState >= sampleRate / 30) {
         this.sinceState = 0;

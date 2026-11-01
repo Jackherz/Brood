@@ -16,4 +16,4 @@ seconds 6
 1300 param smooth 1
 1500 param time 0.8
 1700 param mix 0.9
-1800 param dryKill 1
+1800 param mix 1

@@ -349,9 +349,9 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
     loopSlider(loopEnd, "loopEnd", "How much of the loop plays");
     memoryAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "memory", memory);
     endAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopEnd", loopEnd);
-    const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"dryKill", "Dry"}, {"latch", "Latch"},
-                                                          {"spread", "Spread"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
-    // Six switches is tight: use the short labels the browser panel uses too.
+    // Three switches, not six: DRY KILL was MIX at the top of its travel, LATCH
+    // is what the FREEZE switch does, and SPREAD is now WIDTH above the middle.
+    const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
     for (const auto& [id, label] : dipDefs) {
         Dip d { std::make_unique<juce::ToggleButton>(label), nullptr };
         const juce::String lab = label;
@@ -408,7 +408,7 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         for (int i = 0; i < 9; ++i) if (auto* parameter = proc.apvts.getParameter(ids[i])) {
             parameter->beginChangeGesture(); parameter->setValueNotifyingHost(patches[which][i]); parameter->endChangeGesture();
         }
-        for (auto* id : {"trails", "dryKill", "latch", "spread", "smooth", "rampUni", "bounce", "sweep"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
+        for (auto* id : {"trails", "smooth", "rampUni", "bounce", "sweep"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
         for (auto* id : {"rampWet", "rampLoop"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
         if (auto* parameter = proc.apvts.getParameter("rampWave")) parameter->setValueNotifyingHost(0.f);
         if (auto* parameter = proc.apvts.getParameter("balance")) parameter->setValueNotifyingHost(0.5f);
@@ -604,14 +604,11 @@ void MoodEditor::rebuildHoverHelp() {
     };
     static const char* dipText[] = {
         "the tails keep falling after you switch the wet side off.",
-        "the dry signal steps aside. only what the pedal made comes out.",
-        "a held footswitch stays held: tap once and it is still pressed.",
-        "the two channels stop sharing. each one gets its own copy.",
         "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
         "the delay stops being a length of time and becomes a division of the beat.",
     };
-    static const char* dipNames[] = {"TRAILS", "DRY KILL", "LATCH", "SPREAD", "SMOOTH", "SYNC"};
-    for (size_t i = 0; i < dips.size() && i < 6; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
+    static const char* dipNames[] = {"TRAILS", "SMOOTH", "SYNC"};
+    for (size_t i = 0; i < dips.size() && i < 3; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
 
     add(rampWetDesign, "RAMP / WET", "press to step through what the first tide turns: time, mix, length, modify, clock or balance. STILL leaves it alone.");
     add(rampLoopDesign, "RAMP / LOOP", "press to step through what the second tide turns. MODIFY means this side's own. STILL leaves it alone.");
@@ -645,7 +642,7 @@ void MoodEditor::rebuildHoverHelp() {
     static const char* hoodText[] = {
         "a hi-cut on the wet side. right is open, left is soft and far away.",
         "how much of the old take an overdub erases. left keeps the pedal's slow erosion, right replaces it. hold the LOOP footswitch while it plays to overdub.",
-        "how far apart the two speakers sit. the middle is the image as built.",
+        "how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.",
         "the wet side runs on a divided clock, so the room and the echo stretch out.",
         "the loop runs on a divided clock: lower, longer, further from the other side.",
         "the MK I in the room: a noisy clock, a loop that never sits still.",
@@ -672,13 +669,19 @@ void MoodEditor::paint(juce::Graphics& g) {
     const int dotsFrom = bar.getX() + 11 + juce::roundToInt(juce::GlyphArrangement::getStringWidth(g.getCurrentFont(), title)) + 12;
     for (int x = dotsFrom; x < bar.getRight() - 12; x += 5)
         for (int y = bar.getY() + 7; y < bar.getBottom() - 5; y += 5) g.fillRect(x, y, 2, 2);
+    // The masthead is a stack with a known height: wordmark, subtitle, rule, and
+    // only then the knob names. The names sit at cellTop - 21 (99 px into the
+    // pedal, 119 in window coordinates), so everything above them is measured
+    // from that line backwards instead of being placed by eye. That is what
+    // stops TIME / MIX / LENGTH from striking through either the subtitle or the
+    // rule between them.
     g.setColour(kInk); g.setFont(pixel(30));
-    g.drawText("MOOD.", pedalArea.getX() + 23, pedalArea.getY() + 42, 280, 42, juce::Justification::centredLeft);
+    g.drawText("MOOD.", pedalArea.getX() + 23, pedalArea.getY() + 30, 280, 40, juce::Justification::centredLeft);
     g.setFont(font(16));
-    g.drawText("A LITTLE WORLD OF SOUND & SPACE", pedalArea.getX() + 24, pedalArea.getY() + 84, 325, 18, juce::Justification::centredLeft);
+    g.drawText("A LITTLE WORLD OF SOUND & SPACE", pedalArea.getX() + 24, pedalArea.getY() + 70, 325, 18, juce::Justification::centredLeft);
     g.setColour(kMuted); g.setFont(font(13));
-    g.drawText("WET   +   MICRO-LOOPER", pedalArea.getRight() - 180, pedalArea.getY() + 49, 160, 36, juce::Justification::centredRight);
-    g.setColour(kLine); g.drawHorizontalLine(pedalArea.getY() + 111, static_cast<float>(pedalArea.getX() + 14), static_cast<float>(pedalArea.getRight() - 14));
+    g.drawText("WET   +   MICRO-LOOPER", pedalArea.getRight() - 180, pedalArea.getY() + 38, 160, 36, juce::Justification::centredRight);
+    g.setColour(kLine); g.drawHorizontalLine(pedalArea.getY() + 94, static_cast<float>(pedalArea.getX() + 14), static_cast<float>(pedalArea.getRight() - 14));
 
     const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
@@ -779,7 +782,8 @@ void MoodEditor::paint(juce::Graphics& g) {
     juce::String hoodText[5];
     hoodText[0] = hv[0] > 0.995f ? "open" : "cut " + percent(1.f - hv[0]);
     hoodText[1] = hv[1] <= 0.001f ? "pedal" : "keeps " + percent(1.f - hv[1]);
-    hoodText[2] = hv[2] < 0.49f ? "nar " + percent(hv[2] * 2) : hv[2] > 0.51f ? "wid " + percent((hv[2] - 0.5f) * 2) : "mid";
+    hoodText[2] = hv[2] <= 0.005f ? "mono" : hv[2] < 0.49f ? "nar " + percent(hv[2] * 2) :
+                  hv[2] > 0.51f ? "wid " + percent((hv[2] - 0.5f) * 2) : "mid";
     hoodText[3] = juce::String(mood::divMap(hv[3])) + "x";
     hoodText[4] = juce::String(mood::divMap(hv[4])) + "x";
     for (int i = 0; i < 7; ++i) {

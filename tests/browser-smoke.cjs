@@ -43,7 +43,7 @@ let browser;
      const paused = ctx.suspend(0.05), rendering = ctx.startRendering();
      await paused;
      if (wet) {
-       for (const [name,value] of Object.entries({wetMode:1, time:0.5, mix:1, dryKill:1, clock:1, modWet:0.4})) node.port.postMessage({type:'param', name, value});
+       for (const [name,value] of Object.entries({wetMode:1, time:0.5, mix:1, clock:1, modWet:0.4})) node.port.postMessage({type:'param', name, value});
        node.port.postMessage({type:'fs', which:'wet', action:'down'}); node.port.postMessage({type:'fs', which:'wet', action:'up'});
      }
      await new Promise(resolve => setTimeout(resolve, 50));

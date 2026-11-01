@@ -11,7 +11,7 @@ seconds 6
 2 fs wet up
 600 param modWet 0.8
 900 param time 0.85
-1200 param spread 1
+1200 param width 1
 1400 param modWet 0.2
 500 fs loop down
 700 fs loop up

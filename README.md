@@ -265,9 +265,12 @@ the proportions never break and labels cannot collide when the window changes.
 Everything is on that one page — pedal, side column and the row of options under
 the hood — because a second page is a menu, and the pedal this follows has none. The
 plugin normally processes the host track's input. The editor also offers a
-generated demo and local file input. Plugin settings and wet on/off state are
-stored in the DAW project; recorded loops, effect tails and loaded file audio are
-not. The file source returns to live input after a project reload. The native
+generated demo and local file input. Plugin settings, wet on/off state **and the
+recorded loops** are stored in the DAW project — the two takes travel with the
+state as gzipped 16-bit PCM and are swapped back in on the audio thread after a
+reload, so a bounce or a reopened session plays the loop you were hearing rather
+than an empty buffer. Effect tails and loaded file audio are not saved. The file
+source returns to live input after a project reload. The native
 patch menu has the same five factory patches; use your DAW for user presets.
 
 ### MIDI
@@ -283,14 +286,17 @@ the effect. Changes are applied at audio-block boundaries:
 | 53, 54 | Wet and loop clock division |
 | 71 | Classic mode (`0` off, `1–127` on) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
-| 73–76, 78 | Spread, Dry Kill, Trails, Latch, Smooth (`0` off, `1–127` on) |
+| 75, 78 | Trails, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
 | 105 | Wet freeze — same as the FREEZE switch (`0` off, `1–127` on) |
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware MOOD controller
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
 by automating the `wetMode` parameter (value 3) instead. CC 20 is ramp speed and
-66/67 are the two ramp dips, as on the pedal. The ramp destinations (RAMPS wet and
+66/67 are the two ramp dips, as on the pedal. CC 73, 74 and 76 used to carry
+SPREAD, DRY KILL and LATCH; those controls are gone (WIDTH does the first, MIX the
+second, the FREEZE switch the third), so the pedal's controllers for them do
+nothing now. The ramp destinations (RAMPS wet and
 loop), the shape and polarity have no CC in the MOOD map — they live in the hidden
 menu there — so automate the `rampWet`, `rampLoop`, `rampWave` and `rampUni`
 parameters instead. Loop memory and END are host-only parameters too.
@@ -381,6 +387,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   knob was nearly at LOOP. The duck is gone; both cores agree bit for bit
   (`tests/parity/scenarios/balance.txt`) and the level is pinned by tests in both
   implementations.
+- **The little switches** lost three of their six. What is left is TRAILS, SMOOTH
+  and SYNC, with CLASSIC beside them in the browser. LATCH went because the FREEZE
+  switch does the same job without having to hold anything (the one thing it does
+  that nothing else now can: latching the loop's overdub hold, so a tap leaves you
+  recording on top — that is a held gesture again). DRY KILL went because MIX at
+  the top of its travel already removes the dry, and SPREAD went into WIDTH.
 - **Under the hood** is the row along the bottom of the editor (browser: the
   block at the foot of the side panel): the options the pedal keeps behind both
   footswitches, with CLASSIC beside them in the browser's switch row. **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
@@ -389,8 +401,10 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   lets the new layer replace it entirely. It only does anything *while you are
   overdubbing*, and overdubbing is the hold gesture: press and hold **MICRO-LOOPER**
   / the LOOP footswitch while a loop plays, and play over the top. Holding it while
-  the looper is still listening records a new loop instead. **WIDTH** is mid/side on the effect bus only (the dry never
-  moves); 0.5 is the image as built. **WET DIV** and **LOOP DIV** run one side on
+  the looper is still listening records a new loop instead. **WIDTH** took over
+  from the removed SPREAD switch: fully left is mono, 0.5 is the image as built,
+  and past the middle a decorrelated copy of the wet bus is pushed out into the
+  sides. It acts on the effect bus only — the dry never moves. **WET DIV** and **LOOP DIV** run one side on
   a divided clock — 2× or 4× slower — so the wet side's room and echo stretch out
   while the loop drops an octave or two, or the other way round. **CLASSIC**
   restores MK I manners: a noisy clock that hisses most at low settings, a loop
@@ -409,11 +423,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   RATE slider and the three switches sit in the same panel — on the pedal these
   are the dips, so the editor is the comfortable place to reach them. Hovering a
   cell in the editor writes what pressing it will do into the readout.
-- **TRAILS**, **DRY KILL**, **LATCH**, **SPREAD**, **SYNC** and wet/loop balance
-  are modelled. Stereo input is kept separate with SPREAD off. The exact stereo
-  movement, filters, transient response, control curves, reverb and grains differ
-  from the hardware. Deliberate limiting when effects are active and resampling
-  also affect the sound.
+- **TRAILS**, **SMOOTH**, **SYNC** and wet/loop balance are modelled. WIDTH, the
+  hidden stereo control, is where the pedal's SPREAD lives: fully left is mono,
+  the middle is the image as built, and only past the middle does the sides open.
+  The exact stereo movement, filters, transient response, control curves, reverb
+  and grains differ from the hardware. Deliberate limiting when effects are active
+  and resampling also affect the sound.
 
 ## Tests
 

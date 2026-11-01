@@ -37,9 +37,6 @@ MoodProcessor::MoodProcessor()
           layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In + Loop", "Loop"}, 1));
           layout.add(std::make_unique<APC>(juce::ParameterID("loopMode", 1), "Loop mode", juce::StringArray{"Env", "Tape", "Stretch"}, 1));
           layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Dip: Trails", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("dryKill", 1), "Dip: Dry kill", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("latch", 1), "Dip: Latch", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("spread", 1), "Dip: Spread", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Dip: Smooth clock", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Dip: Tempo sync", false));
           auto loopParam = [this](const char* id, const char* name, float def) {
@@ -103,11 +100,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         if (wetMode == 3) return "memory " + fmtTime(0.2 + v * 2.6);
         return "refresh " + fmtTime(mood::expMap(v, 0.05, 1.5) / c);
     }
-    if (id == "mix") {
-        const auto* dkp = apvts.getRawParameterValue("dryKill");
-        const bool dk = dkp != nullptr && dkp->load() > 0.5f;
-        return "dry " + pct(dk ? 0 : std::min(1.0, 2.0 * (1 - v))) + " / fx " + pct(std::min(1.0, 2.0 * v));
-    }
+    if (id == "mix") return "dry " + pct(v > 0.995f ? 0.0 : std::min(1.0, 2.0 * (1 - v))) + " / fx " + pct(std::min(1.0, 2.0 * v));
     if (id == "length") {
         const double full = mood::kLoopSamples / hz;
         if (loopMode == 1) return "loop " + fmtTime(full * mood::expMap(v, 0.02, 1)) + " of " + fmtTime(full);
@@ -136,7 +129,9 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     if (id == "freeze") return v > 0.5f ? "held, ringing" : "moving";
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
-    if (id == "width") return v < 0.49f ? "narrow " + pct(v * 2) : v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
+    // WIDTH is where the removed SPREAD lives now: hard left is mono.
+    if (id == "width") return v <= 0.005f ? "mono" : v < 0.49f ? "narrow " + pct(v * 2) :
+                        v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
     if (id == "rampWet" || id == "rampLoop") {
         const int t = mood::rampTargetIndex(v);
         return t == 0 ? juce::String("still") : juce::String(mood::kRampTargets[t]).toLowerCase();
@@ -212,8 +207,7 @@ void MoodProcessor::pullParams() {
     p.wetMode = juce::roundToInt(param("wetMode"));
     p.routing = juce::roundToInt(param("routing"));
     p.loopMode = juce::roundToInt(param("loopMode"));
-    p.trails = param("trails") > 0.5f; p.dryKill = param("dryKill") > 0.5f; p.latch = param("latch") > 0.5f;
-    p.spread = param("spread") > 0.5f; p.smooth = param("smooth") > 0.5f;
+    p.trails = param("trails") > 0.5f; p.smooth = param("smooth") > 0.5f;
     p.sync = param("sync") > 0.5f;
     p.memory = param("memory"); p.loopEnd = param("loopEnd");
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
@@ -242,6 +236,22 @@ bool MoodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
     if (!lock.isLocked()) return false;
     out = wave_;
     return true;
+}
+
+// Swap a state-carried take into the engines. Message thread fills it, audio
+// thread takes it, so nothing is allocated or locked for long on the audio side.
+void MoodProcessor::applyPendingTakes() {
+    for (int i = 0; i < 2; ++i) {
+        PendingTake ready;
+        {
+            const juce::SpinLock::ScopedTryLockType lock(takeLock_);
+            if (!lock.isLocked()) return;      // try again next block
+            if (!pendingTake_[i].has) continue;
+            ready = std::move(pendingTake_[i]);
+            pendingTake_[i] = PendingTake{};
+        }
+        (i == 0 ? core_ : coreRight_).restoreLoop(ready.pcm.data(), static_cast<int>(ready.pcm.size()), ready.play);
+    }
 }
 
 void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -283,8 +293,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
             const float choice = value <= 1 ? 0.f : value == 2 ? 0.5f : 1.f;
             if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(choice);
         } else {
-            if (cc == 73) id = "spread"; else if (cc == 74) id = "dryKill";
-            else if (cc == 75) id = "trails"; else if (cc == 76) id = "latch"; else if (cc == 78) id = "smooth";
+            if (cc == 75) id = "trails"; else if (cc == 78) id = "smooth";   // SPREAD / DRY KILL / LATCH retired
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
             else if (cc == 20) { if (auto* parameter = apvts.getParameter("rampSpeed")) parameter->setValueNotifyingHost(value / 127.f); }
@@ -297,6 +306,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }
     }
+    applyPendingTakes();
     pullParams();
     auto tap = [&](int which) {
         core_.footswitch(which, true); coreRight_.footswitch(which, true);
@@ -347,8 +357,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     float* outL = buffer.getWritePointer(0);
     float* outR = nOut > 1 ? buffer.getWritePointer(1) : scratchRight_.data();
     core_.process(xL, outL, scratchLeft_.data(), n);
-    if (core_.p.spread) coreRight_.process(xR, scratchLeft_.data(), outR, n);
-    else coreRight_.process(xR, outR, scratchLeft_.data(), n);
+    coreRight_.process(xR, outR, scratchLeft_.data(), n);
     for (int c = nOut; c < buffer.getNumChannels(); ++c) buffer.clear(c, 0, n);
 
     const auto st = core_.state(), rightState = coreRight_.state();
@@ -372,10 +381,46 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     ui.load = static_cast<float>(100.0 * secs / (n / getSampleRate()));
 }
 
+// The captured take, as data the state can carry. Two engines (left and right)
+// each hold a copy of what they caught.
+static void writeTake(juce::ValueTree& parent, const mood::Core& core, const char* name) {
+    const int n = core.capturedLength();
+    if (n < 64) return;
+    std::vector<float> pcm(static_cast<size_t>(n));
+    const int got = core.capturedLoop(pcm.data(), n);
+    if (got < 64) return;
+    std::vector<int16_t> packed;
+    mood::Core::packLoop(pcm.data(), got, packed);          // float → int16, half the bytes
+    juce::MemoryOutputStream raw;
+    {
+        juce::GZIPCompressorOutputStream gz(raw);           // the state is base64'd, so compress first
+        gz.write(packed.data(), packed.size() * sizeof(int16_t));
+        gz.flush();
+    }
+    juce::ValueTree take("TAKE");
+    take.setProperty("id", juce::String(name), nullptr);
+    take.setProperty("samples", got, nullptr);
+    take.setProperty("play", core.loopLedState() != mood::LoopState::Off, nullptr);
+    take.setProperty("pcm", juce::MemoryBlock(raw.getData(), raw.getDataSize()).toBase64Encoding(), nullptr);
+    parent.appendChild(take, nullptr);
+}
+
 void MoodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = apvts.copyState();
     state.setProperty("source", source.load(), nullptr);
     state.setProperty("inputGain", inputGain.load(), nullptr);
+    // A host may render offline in a fresh instance, and a reloaded set starts
+    // empty; without the take in here a bounce comes back as silence or as
+    // something other than what was playing.
+    // A restored state hands its TAKES child back through apvts.copyState(), so
+    // strip the old one first: otherwise every save after a load would stack
+    // another copy of the audio and the set file would grow on each round trip.
+    for (auto stale = state.getChildWithName("TAKES"); stale.isValid(); stale = state.getChildWithName("TAKES"))
+        state.removeChild(stale, nullptr);
+    juce::ValueTree takes("TAKES");
+    writeTake(takes, core_, "left");
+    writeTake(takes, coreRight_, "right");
+    if (takes.getNumChildren() > 0) state.appendChild(takes, nullptr);
     // Hosts can re-save a restored state before processing the first block.
     const int pendingWet = restoreWet_.load();
     state.setProperty("wetEnabled", pendingWet >= 0 ? pendingWet == 1 : ui.wetOn.load(), nullptr);
@@ -389,6 +434,36 @@ void MoodProcessor::setStateInformation(const void* data, int size) {
         if (state.hasProperty("source")) { const int saved = static_cast<int>(state["source"]); source = saved == File ? Live : juce::jlimit(0, 1, saved); }
         if (state.hasProperty("inputGain")) inputGain = static_cast<float>(state["inputGain"]);
         if (state.hasProperty("wetEnabled")) restoreWet_ = static_cast<bool>(state["wetEnabled"]) ? 1 : 0;
+        // Unpack any take the state carries; the audio thread swaps it in at its
+        // next block, so a render that starts from a saved state hears the loop.
+        for (int c = 0; c < state.getNumChildren(); ++c) {
+            const auto takes = state.getChild(c);
+            if (!takes.hasType("TAKES")) continue;
+            for (int i = 0; i < takes.getNumChildren(); ++i) {
+                const auto take = takes.getChild(i);
+                const int slot = take["id"].toString() == "right" ? 1 : 0;
+                const int samples = static_cast<int>(take["samples"]);
+                const auto encoded = take["pcm"].toString();
+                if (samples < 64 || encoded.isEmpty()) continue;
+                juce::MemoryBlock block;
+                if (!block.fromBase64Encoding(encoded) || block.getSize() < 2) continue;
+                juce::MemoryInputStream raw(block, false);
+                juce::GZIPDecompressorInputStream gz(raw);
+                std::vector<int16_t> pcm(static_cast<size_t>(samples));
+                gz.read(pcm.data(), samples * static_cast<int>(sizeof(int16_t)));
+                PendingTake ready;
+                ready.pcm.resize(static_cast<size_t>(samples));
+                mood::Core::unpackLoop(pcm.data(), samples, ready.pcm.data());
+                ready.has = true;
+                ready.play = static_cast<bool>(take["play"]);
+                const juce::SpinLock::ScopedLockType lock(takeLock_);
+                pendingTake_[slot] = std::move(ready);
+            }
+        }
+        // The takes are ours, not parameters: keep them out of the parameter tree
+        // (they were decoded above into the pending slots).
+        for (auto takeTree = state.getChildWithName("TAKES"); takeTree.isValid(); takeTree = state.getChildWithName("TAKES"))
+            state.removeChild(takeTree, nullptr);
         apvts.replaceState(state);
         // footswitches are momentary: never restore one as held down
         for (auto* id : {"wetSwitch", "loopSwitch"})

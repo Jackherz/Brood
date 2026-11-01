@@ -15,4 +15,4 @@ seconds 6
 1400 fs wet up
 1500 fs loop down
 1800 fs loop up
-1900 param spread 1
+1900 param width 1

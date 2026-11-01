@@ -38,7 +38,7 @@ const divIndex = (v) => Math.round(clamp(v, 0, 1) * (DIV_STEPS.length - 1));
 const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
-  trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
+  trails: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
   rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
@@ -100,7 +100,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -133,7 +133,9 @@ function describe(id, p) {
   if (id === 'loopEnd') return v >= 0.999 ? 'THE WHOLE LOOP' : `PLAYS ${percent(v)}`;
   if (id === 'tone') return v > 0.995 ? 'OPEN' : `HI-CUT ${percent(1 - v)}`;
   if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;   // per overdub pass
-  if (id === 'width') return v < 0.49 ? `NARROW ${percent(v * 2)}` : v > 0.51 ? `WIDE ${percent((v - 0.5) * 2)}` : 'AS BUILT';
+  // WIDTH took SPREAD's job: all the way left is mono, the middle is the image as
+  // built, and only past the middle do the sides open.
+  if (id === 'width') return v <= 0.005 ? 'MONO' : v < 0.49 ? `NARROW ${percent(v * 2)}` : v > 0.51 ? `WIDE ${percent((v - 0.5) * 2)}` : 'AS BUILT';
   if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1× CLOCK' : `${d}× SLOWER`; }
   if (id === 'rampWet' || id === 'rampLoop') return RAMP_TARGETS[rampIndex(v, RAMP_TARGETS)];
   if (id === 'rampWave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES)];
@@ -367,7 +369,7 @@ function HoodPanel({ params, onChange, help }) {
   const rows = [
     ['tone', 'TONE', 'a hi-cut on the wet side. right is open; left is soft and far away.'],
     ['fade', 'FADE', 'how much of the old take survives an overdub: hold the LOOP footswitch while a loop plays to record on top of it. left keeps the pedal\u2019s slow erosion; right lets the new layer win.'],
-    ['width', 'WIDTH', 'how far apart the two speakers sit. the middle is the image as built.'],
+    ['width', 'WIDTH', 'how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.'],
     ['wetDiv', 'WET DIV', 'the wet side runs on a divided clock, so the room and the echo stretch out.'],
     ['loopDiv', 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.'],
   ];
@@ -616,9 +618,6 @@ function App() {
             <div className="side-rule dip-heading"><span>THE LITTLE SWITCHES</span><span>ON ↑</span></div>
             <div className="dips">
               {[['trails', 'TRAILS', 'the tails keep falling after you switch the wet side off.'],
-              ['spread', 'SPREAD', 'the two channels stop sharing. each one gets its own copy.'],
-              ['latch', 'LATCH', 'a held footswitch stays held: tap once and it is still pressed.'],
-              ['dryKill', 'DRY KILL', 'the dry signal steps aside. only what the pedal made comes out.'],
               ['smooth', 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.'],
               ['sync', 'SYNC', 'the delay stops being a length of time and becomes a division of the beat.'],
               ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
