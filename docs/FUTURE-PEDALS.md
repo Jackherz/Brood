@@ -4,6 +4,12 @@
 > scheduled. It is the dossier a future round starts from so the research does not
 > have to be done twice. Packaging was decided on 2026-11-01 (below); the per-pedal
 > verdicts are the notes that decision was made from.
+>
+> The wider series — nine more pedals added to the list on 2026-11-01 (Chase Bliss
+> Lossy, Onward, Clean, Generation Loss MKII, Lost + Found, Reverse Mode C, Brothers
+> AM and Big Time, plus Hologram's Microcosm) — is in
+> [PEDAL-SERIES.md](PEDAL-SERIES.md). This file stays the deep dive on the three the
+> packaging decision was made around.
 
 The question this file answers: can this become a **series of pedals** — Chase
 Bliss-flavoured, sharing one engine, one parity harness and one design sheet —

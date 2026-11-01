@@ -27,6 +27,16 @@ clock) and the cheap way to price it later: write pedal two as named blocks, and
 extract the looper behind an interface the day it needs one. Nothing below is
 scheduled.
 
+The **candidate queue** for the series, with research on each, is in
+[docs/PEDAL-SERIES.md](docs/PEDAL-SERIES.md): Reverse Mode C, Clean, Generation Loss
+MKII, Lossy, Onward, Brothers AM, Big Time and Lost + Found by Chase Bliss, and
+Microcosm by Hologram Electronics. Its verdict in one line: the cheapest three
+(Reverse Mode C, Clean, Generation Loss MKII) are mostly blocks we already own, the
+expensive two (Lost + Found, Microcosm) are expensive because of how many algorithms
+they contain rather than how hard they are, and Brothers AM is the fork in the road —
+it is analogue, so shipping it means writing "model" instead of "clone". Nothing is
+scheduled.
+
 - **blooper** — parked for now, by decision. Reverse and smooth/stepped speed,
   stopper, loop filter and one-shot are cheap because the blocks already exist;
   eight layers of undo and additive mode are the two hard pieces, and layers lose

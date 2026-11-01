@@ -490,7 +490,19 @@ Font License. See [LICENSE](LICENSE) and
 
 ## Where this could go
 
-This is one pedal, emulated carefully. Turning it into a small playground of Chase
-Bliss–style pedals — blooper, Habit, Bad Mood — is researched but not scheduled;
-the feasibility notes, the RAM and save-size numbers, and the architectural work
-that would come first are in [docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md).
+This is one pedal, emulated carefully. The direction now settled is a **series of
+separate plug-ins in one repository** — one `juce_add_plugin` per pedal, sharing this
+engine, the parity harness and the design sheet — because a pedal's panel is its own
+shape, its memory should exist only in the instances that need it, and two MIDI maps
+never have to share a device.
+
+Nine candidates are researched. Reverse Mode C, Clean, Generation Loss MKII, Lossy,
+Onward, Brothers AM, Big Time and Lost + Found (Chase Bliss), plus Hologram's
+Microcosm, each with its front panel, the blocks it would force, what this codebase
+already owns, an effort in rounds, and where it collides with the one-page rule — in
+[docs/PEDAL-SERIES.md](docs/PEDAL-SERIES.md). The packaging decision and the three
+pedals studied earlier — blooper, Habit, Bad Mood — are in
+[docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md).
+
+None of it is scheduled. The cheapest three are Reverse Mode C, Clean and Generation
+Loss MKII, at roughly one round each because most of their blocks already exist here.
