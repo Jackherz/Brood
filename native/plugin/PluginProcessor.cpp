@@ -49,6 +49,7 @@ MoodProcessor::MoodProcessor()
           };
           layout.add(loopParam("memory", "Loop memory", 0.f));
           layout.add(loopParam("loopEnd", "Loop end", 1.f));
+          layout.add(loopParam("start", "Loop start", 0.f));
           // Hidden options: on the pedal these live behind holding both footswitches.
           layout.add(loopParam("tone", "Wet tone (hi-cut)", 1.f));
           layout.add(loopParam("fade", "Overdub fade", 0.f));
@@ -126,6 +127,14 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         return "up to " + fmtTime(mood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
     }
     if (id == "loopEnd") return v >= 0.999f ? "the whole loop" : "plays " + pct(v);
+    if (id == "start") {
+        // ENV and STRETCH play from the oldest audio, so START slides towards the
+        // present; TAPE plays the newest, so START reaches back. Same knob, two
+        // honest readouts. A percentage, because the room it moves through depends
+        // on LENGTH and END and the take's length is not known here.
+        if (v <= 0.005f) return loopMode == 1 ? "the newest" : "the oldest";
+        return (loopMode == 1 ? "reaches back " : "slides on ") + pct(v);
+    }
     if (id == "freeze") return v > 0.5f ? "held, ringing" : "moving";
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
@@ -210,6 +219,7 @@ void MoodProcessor::pullParams() {
     p.trails = param("trails") > 0.5f; p.smooth = param("smooth") > 0.5f;
     p.sync = param("sync") > 0.5f;
     p.memory = param("memory"); p.loopEnd = param("loopEnd");
+    p.start = param("start");
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
     p.classic = param("classic") > 0.5f;

@@ -39,7 +39,7 @@ const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, smooth: 0, balance: 0.5,
-  sync: 0, bpm: 120, memory: 0, loopEnd: 1,
+  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
   rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
 };
@@ -131,6 +131,14 @@ function describe(id, p) {
   if (id === 'modLoop' && p.loopMode === 2 && Math.abs(v - 0.5) < 0.03) return 'FROZEN';
   if (id === 'memory') return v <= 0.001 ? `PEDAL · ${timeText(64 / rate)}` : `UP TO ${timeText(expMap(v, 1, 30))}`;
   if (id === 'loopEnd') return v >= 0.999 ? 'THE WHOLE LOOP' : `PLAYS ${percent(v)}`;
+  // ENV and STRETCH play from the oldest audio, so START moves towards the present;
+  // TAPE plays the newest, so START reaches back. Same knob, two honest readouts.
+  if (id === 'start') {
+    // A percentage, not a duration: how far the window has moved into the room
+    // LENGTH and END leave is exact, whereas the take's length is not known here.
+    if (v <= 0.005) return p.loopMode === 1 ? 'THE NEWEST' : 'THE OLDEST';
+    return (p.loopMode === 1 ? 'REACHES BACK ' : 'SLIDES ON ') + percent(v);
+  }
   if (id === 'tone') return v > 0.995 ? 'OPEN' : `HI-CUT ${percent(1 - v)}`;
   if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;   // per overdub pass
   // WIDTH took SPREAD's job: all the way left is mono, the middle is the image as
@@ -346,6 +354,7 @@ function LoopWave({ wave, state }) {
 function TrimStrip({ params, onChange, help }) {
   const controls = [
     ['memory', 'MEMORY', memoryText(params.memory), 'how much of the recent past the looper may keep'],
+    ['start', 'START', describe('start', params), 'where the loop begins inside what was recorded. in ENV and STRETCH it slides towards the present; in TAPE it reaches back. it crossfades as it moves, so it will not click.'],
     ['loopEnd', 'END', describe('loopEnd', params), 'how much of the loop plays before it wraps'],
   ];
   return <div className="trim-strip" role="group" aria-label="Loop trim">

@@ -358,6 +358,7 @@ struct Params {
     bool sync = false;
     double balance = 0.5, bpm = 120.0;
     double loopEnd = 1, memory = 0;                 // playback trim + capture ceiling
+    double start = 0;                                // where the loop's window sits in the take
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
@@ -623,6 +624,10 @@ private:
     LoopState loopState = LoopState::Off;
     bool overdub = false;
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
+    // Moving START moves the read head, and a jump is a click. These three carry a
+    // short crossfade from where the loop was playing to where it now begins.
+    double startA = 0, startB = 0, startFade = 1;
+    int startLen = -1;
     double env = 0, envHold = 0, envMix = 0, sliceStart = 0, slicePh = 0;
     bool envGate = false;
     Grain grain[2] = {{0, 0}, {0.5, 0}};
@@ -728,21 +733,32 @@ private:
         loopWaveDirty = true;
     }
 
-    // Playback region of the captured loop. LENGTH decides where the loop sits
-    // (TAPE takes the tail of the capture, ENV and STRETCH play all of it); END
-    // then decides how much of that window sounds before it wraps, so END only
-    // moves the loop's end point. Mirrors loopWindow() in src/mood-worklet.js.
+    // Playback region of the captured loop. LENGTH decides how big the window is
+    // (TAPE takes its from the tail of the capture, ENV and STRETCH from the whole
+    // take), END decides how much of that window sounds before it wraps, and START
+    // decides where the window sits inside the capture — 0 is where each mode has
+    // always begun. Mirrors loopWindow() in src/mood-worklet.js.
     Window loopWindow() const {
         const int len = std::max(64, lsrc);
         const double trim = clampd(p.loopEnd, 0.02, 1);
-        if (p.loopMode != 1)
-            return {std::max(64, static_cast<int>(std::floor(len * trim))), 0};
+        const double where = clampd(p.start, 0, 1);
+        if (p.loopMode != 1) {
+            const int W = std::max(64, static_cast<int>(std::floor(len * trim)));
+            // ENV and STRETCH: END says how much of the take plays, START says where
+            // that window sits in it. Zero is the oldest audio, which is where these
+            // two modes have always played from, so nothing changes at the default.
+            const int room = std::max(0, len - W);
+            return {W, static_cast<int>(std::lround(where * room))};
+        }
         // Linear in the fraction of the capture, so at 1 the window is everything
         // and the start of a long recording is actually reachable; the exponential
         // curve spent 95% of the knob's travel on the last few seconds.
         // Rounded, not floored: at 1 the window is exactly the whole take.
         const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * clampd(e.length, 0, 1)))));
-        return {std::max(64, static_cast<int>(std::floor(W0 * trim))), len - W0};
+        // TAPE takes its window from the newest audio, so START reaches back into
+        // the take; zero is the tail, as before.
+        const int room = std::max(0, len - W0);
+        return {std::max(64, static_cast<int>(std::floor(W0 * trim))), static_cast<int>(std::lround((1.0 - where) * room))};
     }
 
     double loopTick(double x) {
@@ -755,7 +771,8 @@ private:
         if (lsrc < 64) return 0;
 
         const Window win = loopWindow();
-        const int W = win.W, start = win.start;
+        const int W = win.W;
+        const int len = std::max(64, lsrc);
         const double Wd = W;
         const int mode = p.loopMode;
         const double m = e.modLoop;
@@ -764,12 +781,40 @@ private:
         const double ldivd = divMap(p.loopDiv);
         const double lstep = 1 / ldivd;
         double pos = jsMod(loopPos, Wd); if (pos < 0) pos += Wd;
-        auto rd = [&](double q0) {
+
+        // START moves the read head, and a jump in the read head is a click. So a
+        // change of START is a crossfade from where the loop was playing to where it
+        // now begins: 25 ms, weighted by a raised cosine so the fade has no corners
+        // of its own either. A capture or a restore resets it — there is a gain ramp
+        // around both, so landing instantly there cannot be heard.
+        const int wantStart = win.start;   // ('target' is taken: the loop's gain target)
+        if (lsrc != startLen) { startLen = lsrc; startA = startB = wantStart; startFade = 1; }
+        if (startFade >= 1) {
+            startA = startB;                          // the last fade has landed
+            if (wantStart != startA) { startB = wantStart; startFade = 0; }
+        } else {
+            // The head we are fading *to* stays put while it fades in. Moving it
+            // mid-fade is the same jump in a smaller dose, which is what a first
+            // attempt did: a knob still being dragged simply starts the next fade
+            // as soon as this one lands.
+            startFade = std::min(1.0, startFade + 1.0 / (kCoreFs * 0.025));
+        }
+        const double wB = 0.5 - 0.5 * std::cos(kPi * startFade);   // 0 → A, 1 → B
+        auto at = [&](double base, double q0) {
             double q = jsMod(q0, Wd); if (q < 0) q += Wd;
-            const int i0 = static_cast<int>(std::floor(q)); const double f = q - i0;
-            const int i1 = i0 + 1 >= W ? 0 : i0 + 1;
-            const double a = loopBuf[static_cast<size_t>(start + i0)], b = loopBuf[static_cast<size_t>(start + i1)];
+            const double abs = base + q;
+            int i0 = static_cast<int>(std::floor(abs));
+            double f = abs - i0;
+            if (i0 < 0) { i0 = 0; f = 0; }
+            int i1 = i0 + 1;
+            if (i1 >= len) { i1 = len - 1; if (i0 > i1) i0 = i1; f = 0; }
+            const double a = loopBuf[static_cast<size_t>(i0)], b = loopBuf[static_cast<size_t>(i1)];
             return a + (b - a) * f;
+        };
+        auto rd = [&](double q0) {
+            if (startFade >= 1) return at(startB, q0);
+            if (startFade <= 0) return at(startA, q0);
+            return at(startA, q0) * (1 - wB) + at(startB, q0) * wB;
         };
         const double F = std::min(0.004 * kCoreFs, Wd / 4);
         auto edgeAt = [&](double q0) { double q = jsMod(q0, Wd); if (q < 0) q += Wd; return std::min({1.0, q / F, (Wd - q) / F}); };
@@ -829,7 +874,9 @@ private:
             // the pedal's slow decay; 1 lets the new layer replace it completely.
             const double keep = 0.97 * (1 - clampd(s.fade, 0, 1));
             int q = static_cast<int>(jsMod(std::floor(mode == 1 ? loopPos : pos), Wd)); if (q < 0) q += W;
-            float& cell = loopBuf[static_cast<size_t>(start + q)];
+            // Overdubs land in the window as it is headed for, not as it was.
+            const int wi = std::min(len - 1, std::max(0, static_cast<int>(std::lround(startB)) + q));
+            float& cell = loopBuf[static_cast<size_t>(wi)];
             cell = static_cast<float>(cell * keep + x);
         }
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);

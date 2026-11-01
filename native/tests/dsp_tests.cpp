@@ -564,6 +564,67 @@ int main() {
         const Out o = render(d, 1, [](double) { return 0.0; });
         CHECK(finite(o.L) && rms(o.L, 0.1, 0.9) > 0.01, "a restored take makes sound (%.3f)", rms(o.L, 0.1, 0.9));
     }
+    {   // START moves the loop window inside the take, and never clicks when it does.
+        auto captured = [](int mode, double length) {
+            mood::Core c; c.p.loopMode = mode; c.p.length = length; c.prepare(FS);
+            c.p.loopEnd = 1;
+            render(c, 4, [](double) { return 0.2; });
+            tap(c, 1);
+            return c;
+        };
+        for (int mode : {0, 2}) {
+            mood::Core c = captured(mode, 0.72);
+            c.p.loopEnd = 0.5;
+            render(c, 0.1, [](double) { return 0.0; });
+            const auto base = c.state();
+            CHECK(base.winStart == 0, "mode %d: START 0 opens on the oldest audio", mode);
+            const int room = c.capturedLength() - base.winLen;
+            c.p.start = 1;
+            render(c, 0.1, [](double) { return 0.0; });
+            CHECK(c.state().winLen == base.winLen, "mode %d: START leaves the length alone", mode);
+            CHECK(std::abs(c.state().winStart - room) <= 1, "mode %d: START 1 slides the window to the end (%d of %d)", mode, c.state().winStart, room);
+        }
+        {
+            mood::Core c = captured(1, 0.72);
+            render(c, 0.1, [](double) { return 0.0; });
+            const int tail = c.state().winStart;
+            c.p.start = 1;
+            render(c, 0.1, [](double) { return 0.0; });
+            CHECK(c.state().winStart == 0, "TAPE: START 1 reaches all the way back");
+            c.p.start = 0;
+            render(c, 0.1, [](double) { return 0.0; });
+            CHECK(c.state().winStart == tail, "TAPE: and 0 is the tail, as it always was");
+        }
+        {
+            mood::Core c = captured(0, 1.0);
+            c.p.start = 1;
+            render(c, 0.1, [](double) { return 0.0; });
+            CHECK(c.state().winStart == 0, "a full-length window cannot move");
+        }
+        // A jump in the read head would be a click; the crossfade must hide it.
+        mood::Core c; c.p.loopMode = 2; c.p.length = 0.5; c.p.loopEnd = 0.4; c.p.mix = 1; c.prepare(FS);
+        render(c, 3, [](double t) { return 0.35 * std::sin(2 * mood::kPi * 140 * t) + 0.2 * std::sin(2 * mood::kPi * 523 * t); });
+        tap(c, 1);
+        c.p.balance = 1;
+        auto step = [](const std::vector<float>& a, double from, double to) {
+            double m = 0;
+            for (long i = std::lround(from * FS) + 1; i < std::lround(to * FS); ++i) m = std::max(m, (double) std::fabs(a[(size_t) i] - a[(size_t) (i - 1)]));
+            return m;
+        };
+        const Out still = render(c, 0.5, [](double) { return 0.0; });
+        const double quiet = step(still.L, 0.1, 0.5);
+        const long sweepBlocks = blk(0.5);
+        const Out sweep = render(c, 0.6, [](double) { return 0.0; }, [sweepBlocks](mood::Core& cc, long b) {
+            cc.p.start = std::min(1.0, (double) b / (double) sweepBlocks);
+        });
+        const double moving = step(sweep.L, 0.02, 0.6);
+        CHECK(moving < std::max(0.02, quiet * 4), "sweeping START stays smooth (worst step %.4f vs %.4f still)", moving, quiet);
+        c.p.start = 0;
+        render(c, 0.1, [](double) { return 0.0; });
+        const Out jump = render(c, 0.4, [](double) { return 0.0; }, [](mood::Core& cc, long b) { if (b == blk(0.1)) cc.p.start = 1; });
+        const double worst = step(jump.L, 0.05, 0.4);
+        CHECK(worst < std::max(0.02, quiet * 4), "one big move stays smooth (worst step %.4f vs %.4f still)", worst, quiet);
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

@@ -20,7 +20,7 @@ static void setParam(mood::Params& p, const std::string& n, double v) {
     // WIDTH cover them. The old names are rejected so a stale scenario fails loudly.
     else if (n == "trails") p.trails = v != 0; else if (n == "smooth") p.smooth = v != 0; else if (n == "balance") p.balance = v;
     else if (n == "sync") p.sync = v != 0; else if (n == "bpm") p.bpm = v;
-    else if (n == "loopEnd") p.loopEnd = v;
+    else if (n == "loopEnd") p.loopEnd = v; else if (n == "start") p.start = v;
     else if (n == "memory") p.memory = v;
     else if (n == "tone") p.tone = v; else if (n == "fade") p.fade = v; else if (n == "width") p.width = v;
     else if (n == "wetDiv") p.wetDiv = v; else if (n == "loopDiv") p.loopDiv = v;

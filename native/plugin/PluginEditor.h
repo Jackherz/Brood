@@ -94,8 +94,8 @@ private:
     juce::Slider inputGain;
     juce::Slider balance;
     // Loop edit: capture ceiling, and the trim markers that decide what plays.
-    juce::Slider memory, loopEnd;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, endAtt;
+    juce::Slider memory, loopEnd, loopStart;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, endAtt, startAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::vector<Dip> dips;
@@ -120,7 +120,7 @@ private:
     juce::Rectangle<int> pedalArea, lcdArea, ledWet, ledLoop, meterArea, loopArea;
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
-    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopEndDesign;
+    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopEndDesign, loopStartDesign;
     juce::Rectangle<int> hoodArea, hoodCellDesign[7], dipCellDesign[6];
 
     // Hover help. The readout at the top of the side column used to hold whatever

@@ -364,7 +364,7 @@ class MoodCore {
       wetMode: 0, routing: 0, loopMode: 0,
       trails: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
-      loopEnd: 1, memory: 0,
+      loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
       rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
     };
@@ -408,6 +408,9 @@ class MoodCore {
     this.overdub = false;
     this.loopGain = 0;
     this.loopPos = 0;
+    // Moving START moves the read head; see loopTick for the 25 ms crossfade these
+    // four carry from where the loop was playing to where it now begins.
+    this.startA = 0; this.startB = 0; this.startFade = 1; this.startLen = -1;
     this.tapeSpeed = 1;
     this.stretchSpeed = 0;
     this.env = 0;
@@ -512,22 +515,32 @@ class MoodCore {
     this.events.push('loop-wave');
   }
 
-  // Loop region being played. LENGTH decides where the loop sits: in TAPE it
-  // takes the most recent part of the capture, so the loop's start point follows
-  // that knob; in ENV and STRETCH the whole capture plays. END then decides how
-  // much of that window sounds before it wraps, so it only ever moves the loop's
-  // end point — it used to shorten the capture and drag the start around with it.
+  // Loop region being played. LENGTH decides how big the window is (TAPE takes it
+  // from the newest part of the capture, ENV and STRETCH from the whole take), END
+  // decides how much of that window sounds before it wraps, and START decides where
+  // the window sits inside the capture — 0 is where each mode has always begun.
   loopWindow() {
     const len = Math.max(64, this.lsrc);
     const trim = clamp(this.p.loopEnd, 0.02, 1);
-    if (this.p.loopMode !== 1) return { W: Math.max(64, Math.floor(len * trim)), start: 0 };
+    const where = clamp(this.p.start, 0, 1);
+    if (this.p.loopMode !== 1) {
+      const W = Math.max(64, Math.floor(len * trim));
+      // ENV and STRETCH: END says how much of the take plays, START says where
+      // that window sits in it. Zero is the oldest audio, which is where these
+      // two modes have always played from, so nothing changes at the default.
+      const room = Math.max(0, len - W);
+      return { W, start: Math.round(where * room) };
+    }
     // Linear in the fraction of the capture: at 1 the window is everything, so
     // the start of a long recording is actually reachable. The old exponential
     // curve spent 95% of the knob's travel on the last few seconds.
     // Rounded, not floored: at 1 the window is exactly the whole take, so the
     // start is sample 0 rather than one sample late.
     const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(this.e.length))));
-    return { W: Math.max(64, Math.floor(W0 * trim)), start: len - W0 };
+    // TAPE takes its window from the newest audio, so START reaches back into
+    // the take; zero is the tail, as before.
+    const room = Math.max(0, len - W0);
+    return { W: Math.max(64, Math.floor(W0 * trim)), start: Math.round((1 - where) * room) };
   }
 
   rand() { this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0; return this.rng / 4294967296; }
@@ -613,8 +626,10 @@ class MoodCore {
     if (this.loopState === 'off' && this.loopGain < 1e-4) { this.loopGain = 0; return 0; }
     if (this.lsrc < 64) return 0;
 
-    const { W, start } = this.loopWindow();
+    const win = this.loopWindow();
+    const W = win.W, winStart = win.start;
     const buf = this.loopBuf;
+    const len = Math.max(64, this.lsrc);
     const mode = this.p.loopMode;
     const m = this.e.modLoop;
     // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
@@ -622,11 +637,37 @@ class MoodCore {
     const ldiv = divMap(this.p.loopDiv);
     const lstep = 1 / ldiv;
     let pos = this.loopPos % W; if (pos < 0) pos += W;
-    const rd = (p) => {
+
+    // START moves the read head, and a jump in the read head is a click. So a
+    // change of START is a crossfade from where the loop was playing to where it
+    // now begins: 25 ms, weighted by a raised cosine so the fade has no corners
+    // of its own either. A capture or a restore resets it — there is a gain ramp
+    // around both, so landing instantly there cannot be heard.
+    if (this.lsrc !== this.startLen) { this.startLen = this.lsrc; this.startA = winStart; this.startB = winStart; this.startFade = 1; }
+    if (this.startFade >= 1) {
+      this.startA = this.startB;                   // the last fade has landed
+      if (winStart !== this.startA) { this.startB = winStart; this.startFade = 0; }
+    } else {
+      // The head we are fading *to* stays put while it fades in. Moving it mid-fade
+      // is the same jump in a smaller dose: a knob still being dragged simply starts
+      // the next fade as soon as this one lands.
+      this.startFade = Math.min(1, this.startFade + 1 / (CORE_FS * 0.025));
+    }
+    const wB = 0.5 - 0.5 * Math.cos(Math.PI * this.startFade);   // 0 -> A, 1 -> B
+    const at = (base, p) => {
       let q = p % W; if (q < 0) q += W;
-      const i0 = Math.floor(q), f = q - i0;
-      const i1 = i0 + 1 >= W ? 0 : i0 + 1;
-      return buf[start + i0] + (buf[start + i1] - buf[start + i0]) * f;
+      const abs = base + q;
+      let i0 = Math.floor(abs);
+      let f = abs - i0;
+      if (i0 < 0) { i0 = 0; f = 0; }
+      let i1 = i0 + 1;
+      if (i1 >= len) { i1 = len - 1; if (i0 > i1) i0 = i1; f = 0; }
+      return buf[i0] + (buf[i1] - buf[i0]) * f;
+    };
+    const rd = (p) => {
+      if (this.startFade >= 1) return at(this.startB, p);
+      if (this.startFade <= 0) return at(this.startA, p);
+      return at(this.startA, p) * (1 - wB) + at(this.startB, p) * wB;
     };
     const F = Math.min(0.004 * fs, W / 4);
     const edgeAt = (p) => { let q = p % W; if (q < 0) q += W; return Math.min(1, q / F, (W - q) / F); };
@@ -699,8 +740,8 @@ class MoodCore {
       // pedal's slow decay; 1 lets the new layer replace it completely.
       const keep = 0.97 * (1 - clamp(this.s.fade));
       let q = Math.floor(mode === 1 ? this.loopPos : pos) % W; if (q < 0) q += W;
-      const i = start + q;
-      buf[i] = buf[i] * keep + x;
+      const wi = Math.min(len - 1, Math.max(0, Math.round(this.startB) + q));
+      buf[wi] = buf[wi] * keep + x;
     }
     this.loopPos = ((pos % W) + W) % W;
     return y * this.loopGain;

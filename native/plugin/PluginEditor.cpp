@@ -498,8 +498,10 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
     };
     loopSlider(memory, "memory", "Loop memory");
     loopSlider(loopEnd, "loopEnd", "How much of the loop plays");
+    loopSlider(loopStart, "start", "Where the loop begins in the take");
     memoryAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "memory", memory);
     endAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopEnd", loopEnd);
+    startAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "start", loopStart);
     // Three switches, not six: DRY KILL was MIX at the top of its travel, LATCH
     // is what the FREEZE switch does, and SPREAD is now WIDTH above the middle.
     const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
@@ -611,7 +613,7 @@ void MoodEditor::touch(const juce::String& id) {
     if (id == "clock") repaintDesign(pedalArea);
     // The small readouts beside the trim and hood sliders are drawn by this
     // editor rather than by the control, so they need a repaint to follow it.
-    if (id == "memory" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
+    if (id == "memory" || id == "start" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
     if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv") repaintDesign(hoodArea);
 }
 
@@ -683,15 +685,18 @@ void MoodEditor::resized() {
     meterArea = r2.removeFromRight(76).withSizeKeepingCentre(76, 18);
     place(inputGain, r2.withTrimmedRight(6));
 
-    // Three rows now that START has gone (LENGTH is what moves the loop's start),
-    // so the extra 19 px goes to the waveform rather than to a gap.
+    // Four rows: MEMORY, START, END, WET/LOOP. START is back (it was useful on ENV
+    // and STRETCH, where END on its own could only ever shorten the loop from the
+    // top), so the waveform gives up 19 px rather than the rows getting thinner.
     auto inner = loopArea.withTrimmedTop(24).reduced(12, 6);
-    place(loopView, inner.removeFromTop(55));
+    place(loopView, inner.removeFromTop(36));
     inner.removeFromTop(2);
     memoryDesign = inner.removeFromTop(19).withTrimmedLeft(54).withTrimmedRight(40);
+    loopStartDesign = inner.removeFromTop(19).withTrimmedLeft(40).withTrimmedRight(40);
     loopEndDesign = inner.removeFromTop(19).withTrimmedLeft(26).withTrimmedRight(40);
     balanceDesign = inner.removeFromTop(19).withTrimmedLeft(58).withTrimmedRight(40);
     place(memory, memoryDesign);
+    place(loopStart, loopStartDesign);
     place(loopEnd, loopEndDesign);
     place(balance, balanceDesign);
 
@@ -774,7 +779,8 @@ void MoodEditor::rebuildHoverHelp() {
     for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left waits about a second, like the pedal.");
-    add(loopEndDesign.expanded(0, 2), "END", "how much of the loop plays before it wraps. where it starts is LENGTH's job.");
+    add(loopStartDesign.expanded(0, 2), "START", "where the loop begins inside what was recorded. in ENV and STRETCH it slides towards the present; in TAPE it reaches back. it crossfades as it moves, so it will not click.");
+    add(loopEndDesign.expanded(0, 2), "END", "how much of the loop plays before it wraps.");
     add(balanceDesign.expanded(0, 2), "WET / LOOP", "a crossfade between the two worlds. hard right is the loop on its own.");
 
     add(sourceBoxDesign, "SOURCE", "what the pedal listens to: the track, a phrase made here, or a file.");
@@ -940,6 +946,7 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.drawText("WET/LOOP", lx, balanceDesign.getY(), 56, balanceDesign.getHeight(), juce::Justification::centredLeft);
     g.setColour(kInk); g.setFont(font(13));
     g.drawText("MEMORY", lx, memoryDesign.getY(), 52, memoryDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("START", lx, loopStartDesign.getY(), 38, loopStartDesign.getHeight(), juce::Justification::centredLeft);
     g.drawText("END", lx, loopEndDesign.getY(), 24, loopEndDesign.getHeight(), juce::Justification::centredLeft);
     // RATE sits inside the rate cell, so it costs no extra row.
     g.setFont(font(11)); g.setColour(kMuted);
@@ -958,6 +965,7 @@ void MoodEditor::paint(juce::Graphics& g) {
     };
     readout("memory", memoryDesign.withX(memoryDesign.getRight() + 3).withWidth(36), false);
     readout("loopEnd", loopEndDesign.withX(loopEndDesign.getRight() + 3).withWidth(36), true);
+    readout("start", loopStartDesign.withX(loopStartDesign.getRight() + 3).withWidth(36), true);
     readout("balance", balanceDesign.withX(balanceDesign.getRight() + 3).withWidth(36), true);   // loop side, %
     g.setColour(kInk); g.setFont(font(14));
     g.drawText("* PATCH", presetBoxDesign.getX() - 44, presetBoxDesign.getY(), 42, presetBoxDesign.getHeight(), juce::Justification::centredLeft);

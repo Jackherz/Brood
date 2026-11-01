@@ -386,17 +386,24 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   whatever the 64,000-sample buffer holds at the current clock; MEMORY lifts that
   ceiling to a chosen length in *real time* (1–30 s, and the clock is clamped up
   if it could not fill the window). At the far left it reads `PEDAL` and behaves
-  exactly like the hardware. END then sets how much of that window sounds before
-  it wraps: it only ever moves the loop's *end*. The start point belongs to
-  LENGTH — in TAPE the loop window is the most recent part of the capture, so
-  turning LENGTH walks the start forward, exactly as the pedal does. At `1` the
-  window is the whole take, so LENGTH reaches the very beginning of a 30 s
+  exactly like the hardware. LENGTH sets how big the window is — in TAPE it is the
+  most recent part of the capture, so turning LENGTH walks the start forward, and
+  at `1` the window is the whole take, reaching the very beginning of a 30 s
   capture; the travel is linear in the knob (each quarter turn moves the start a
   quarter of the way in), which is what makes a long take usable rather than a
-  long wait on the last few seconds. (An earlier version had a separate START
-  trim, which meant END silently dragged the start around with it; it is gone.) The waveform display dims everything outside the
-  window. Both cores allocate for the longest possible loop up front (about
-  32 MB), so MEMORY never reallocates on the audio thread.
+  long wait on the last few seconds. END then sets how much of that window sounds
+  before it wraps: it only ever moves the loop's *end*. **START** says where that
+  window sits inside the capture, which is what ENV and STRETCH were missing —
+  with END alone you could only ever hear the front of a take. It reads `THE
+  OLDEST` / `THE NEWEST` at zero and a percentage of the room LENGTH and END
+  leave after that; in TAPE, which plays the newest audio, turning it *reaches
+  back*. Moving it is **not** a jump: the read head crossfades from where the loop
+  was playing to where it now begins over 25 ms, weighted by a raised cosine, and
+  a knob still being dragged simply starts the next fade when the last one lands.
+  A test sweeps the whole travel while the loop plays and checks the worst
+  sample-to-sample step stays within the signal's own slope. The waveform display
+  dims everything outside the window. Both cores allocate for the longest possible
+  loop up front (about 32 MB), so MEMORY never reallocates on the audio thread.
 - **WET / LOOP** blends two complete worlds rather than fading one into the
   other: the loop keeps its own level across the whole knob and the wet side adds
   on top, so the middle hears both. It used to duck the direct loop against the

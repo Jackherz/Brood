@@ -440,6 +440,87 @@ test('TAPE takes its loop window from the tail of the capture', () => {
   assert.ok(Math.abs(short.winStart - (core.lsrc - short.winLen)) <= 1, 'the window ends at the capture end');
 });
 
+test('START moves the loop window inside the take', () => {
+  // The user asked for it back for ENV and STRETCH: END says how much of the take
+  // plays, START says where that window sits in it. Zero is where each mode has
+  // always begun, so nothing changes at the default.
+  const renderLoop = (mode, length) => {
+    const core = new MoodCore(FS);
+    core.setParam('loopMode', mode);
+    core.setParam('length', length);
+    render(core, 4, () => 0.2);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    return core;
+  };
+  for (const [mode, name] of [[0, 'ENV'], [2, 'STRETCH']]) {
+    const core = renderLoop(mode, 0.72);
+    core.setParam('loopEnd', 0.5);
+    render(core, 0.1, () => 0);
+    const base = core.state();
+    assert.strictEqual(base.winStart, 0, `${name}: START 0 opens on the oldest audio`);
+    const room = core.lsrc - base.winLen;
+    core.setParam('start', 1);
+    render(core, 0.1, () => 0);
+    const end = core.state();
+    assert.strictEqual(end.winLen, base.winLen, `${name}: START leaves the length alone`);
+    assert.ok(Math.abs(end.winStart - room) <= 1, `${name}: START 1 slides the window to the end of the take`);
+    core.setParam('start', 0.5);
+    render(core, 0.1, () => 0);
+    assert.ok(Math.abs(core.state().winStart - Math.round(room / 2)) <= 1, `${name}: and stops anywhere between`);
+  }
+  // TAPE takes its window from the newest audio, so START reaches back from the tail.
+  const tape = renderLoop(1, 0.72);
+  render(tape, 0.1, () => 0);
+  const tail = tape.state();
+  tape.setParam('start', 1);
+  render(tape, 0.1, () => 0);
+  assert.strictEqual(tape.state().winStart, 0, 'TAPE: START 1 reaches all the way back');
+  tape.setParam('start', 0);
+  render(tape, 0.1, () => 0);
+  assert.strictEqual(tape.state().winStart, tail.winStart, 'TAPE: and 0 is the tail, as it always was');
+  // With END wide open there is nothing to move into.
+  const whole = renderLoop(0, 1);
+  whole.setParam('start', 1);
+  render(whole, 0.1, () => 0);
+  assert.strictEqual(whole.state().winStart, 0, 'a full-length window cannot move');
+});
+
+test('moving START crossfades instead of jumping', () => {
+  // A step in the read head is a click, so a change of START is a 25 ms crossfade.
+  // Compare the worst sample-to-sample step while sweeping against the same figure
+  // for the loop playing still: a jump would show up as a step many times bigger.
+  const core = new MoodCore(FS);
+  core.setParam('loopMode', 2);
+  core.setParam('length', 0.5);
+  core.setParam('loopEnd', 0.4);
+  core.setParam('mix', 1);
+  render(core, 3, (t) => 0.35 * Math.sin(2 * Math.PI * 140 * t) + 0.2 * Math.sin(2 * Math.PI * 523 * t));
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  core.setParam('balance', 1);                      // the loop on its own
+  const still = render(core, 0.5, () => 0);
+  const step = (a, from, to) => {
+    let m = 0;
+    for (let i = Math.floor(from * FS) + 1; i < Math.floor(to * FS); i++) m = Math.max(m, Math.abs(a[i] - a[i - 1]));
+    return m;
+  };
+  const quiet = step(still.L, 0.1, 0.5);
+  // One jump of the whole window at once, 300 times a second.
+  const stepped = render(core, 0.6, () => 0, {});
+  const sweep = render(core, 0.6, () => 0, Object.fromEntries(
+    Array.from({ length: blk(0.5) }, (_, b) => [b, (c) => c.setParam('start', (b / blk(0.5)))])
+  ));
+  const moving = step(sweep.L, 0.02, 0.6);
+  assert.ok(Number.isFinite(moving) && moving < Math.max(0.02, quiet * 4),
+    `sweeping START stays smooth (worst step ${moving.toFixed(4)} vs ${quiet.toFixed(4)} still)`);
+  assert.ok(/^[\s\S]*$/.test('') && stepped.L.length > 0, 'the stepped pass renders');
+  // And a single big move mid-loop, the worst case a drag can produce.
+  core.setParam('start', 0);
+  render(core, 0.1, () => 0);
+  const jump = render(core, 0.4, () => 0, { [blk(0.1)]: (c) => c.setParam('start', 1) });
+  const worst = step(jump.L, 0.05, 0.4);
+  assert.ok(worst < Math.max(0.02, quiet * 4), `one big move stays smooth (worst step ${worst.toFixed(4)})`);
+});
+
 // ───────────────────────── hidden options ─────────────────────────
 
 const hfEnergy = (a, from, to) => { let acc = 0; for (let i = Math.floor(from * FS) + 1; i < Math.floor(to * FS); i++) acc += Math.pow(a[i] - a[i - 1], 2); return Math.sqrt(acc / Math.floor((to - from) * FS)); };

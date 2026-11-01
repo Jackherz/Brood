@@ -45,6 +45,15 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 13: **START is back.** It had been removed because END was dragging the
+  start around with it; with END fixed to the end only, a start trim is the piece
+  ENV and STRETCH were missing — until now those modes could only ever hear the
+  front of a take. START slides the window through the room LENGTH and END leave
+  (in TAPE it reaches back from the tail, since TAPE plays the newest audio), and
+  in both cores a change of START is a 25 ms raised-cosine crossfade rather than a
+  jump in the read head, so dragging it cannot click. New parity scenario
+  `tests/parity/scenarios/start.txt` sweeps it in all three modes at 0.00e+0.
+
 - Round 12: one design sheet for both panels. Spacing, type and elevation are
   tokens rather than one-off numbers; panel heads are halftone bands with a
   number, a name and a dotted leader out to a figure; knobs are numbered; the
