@@ -23,7 +23,7 @@ that makes it musical rather than merely moving:
 - Four wet modes (reverb, delay, slip, weave) and three loop modes (env, tape,
   stretch), three-way routing, wet/loop balance.
 - DIP switches: trails, dry kill, latch, spread, smooth clock, tempo sync.
-- Loop memory up to 30 s, start/end trim of the captured region.
+- Loop memory up to 30 s, and END trims how much of the loop plays (the start point is LENGTH's, as on the pedal).
 - Hidden options: tone, fade, stereo width, wet and loop clock division, classic.
 - Host tempo sync for the delay (VST3/AU follows the DAW playhead).
 

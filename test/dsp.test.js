@@ -400,22 +400,44 @@ test('LOOP MEMORY raises the capture ceiling, 0 keeps the pedal rule', () => {
   assert.ok(capturedSeconds(1, 0) <= 30.05, 'never longer than the ceiling');
 });
 
-test('LOOP START and END trim the region that plays', () => {
+test('END trims the end of the loop and never moves where it starts', () => {
+  // LENGTH decides the loop's start point (in TAPE the window is the tail of the
+  // capture), so END must only shorten the loop from its beginning. It used to
+  // shorten the capture instead, which dragged the start around with it.
+  for (const [mode, name] of [[0, 'ENV'], [1, 'TAPE'], [2, 'STRETCH']]) {
+    const core = new MoodCore(FS);
+    core.setParam('loopMode', mode);
+    core.setParam('length', 0.72);
+    render(core, 3, () => 0.2);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    const full = core.state();
+    if (mode === 1) assert.ok(full.winStart > 0 && full.winLen < core.lsrc, `${name}: LENGTH sets the window`);
+    else assert.ok(full.winStart === 0 && full.winLen === core.lsrc, `${name}: the whole capture plays`);
+    core.setParam('loopEnd', 0.5);
+    render(core, 0.1, () => 0);
+    const half = core.state();
+    assert.strictEqual(half.winStart, full.winStart, `${name}: END leaves the start alone`);
+    assert.ok(Math.abs(half.winLen - full.winLen / 2) <= 1, `${name}: END halves what plays`);
+    core.setParam('loopEnd', 0.02);
+    render(core, 0.1, () => 0);
+    assert.ok(core.state().winLen >= 64, `${name}: the trim has a floor`);
+    assert.strictEqual(core.state().winStart, full.winStart, `${name}: still no movement at the extreme`);
+  }
+});
+
+test('TAPE takes its loop window from the tail of the capture', () => {
   const core = new MoodCore(FS);
+  core.setParam('loopMode', 1);
+  core.setParam('length', 1);
   render(core, 3, () => 0.2);
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
-  const full = core.state();
-  assert.strictEqual(full.winStart, 0);
-  assert.strictEqual(full.winLen, core.lsrc);
-  core.setParam('loopStart', 0.5); core.setParam('loopEnd', 1);
+  const long = core.state();
+  core.setParam('length', 0.4);
   render(core, 0.1, () => 0);
-  const half = core.state();
-  assert.ok(Math.abs(half.winStart - core.lsrc / 2) <= 1, 'starts at the marker');
-  assert.ok(Math.abs(half.winLen - core.lsrc / 2) <= 1, 'plays only the marked part');
-  core.setParam('loopStart', 0.9); core.setParam('loopEnd', 0.1);
-  render(core, 0.1, () => 0);
-  const swapped = core.state();
-  assert.ok(swapped.winLen > 0 && swapped.winLen < core.lsrc, 'inverted markers still leave a region');
+  const short = core.state();
+  assert.ok(short.winLen < long.winLen, 'a shorter LENGTH is a shorter loop');
+  assert.ok(short.winStart > long.winStart, 'and it starts later in the capture');
+  assert.ok(Math.abs(short.winStart - (core.lsrc - short.winLen)) <= 1, 'the window ends at the capture end');
 });
 
 // ───────────────────────── hidden options ─────────────────────────

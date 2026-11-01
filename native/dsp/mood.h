@@ -357,7 +357,7 @@ struct Params {
     bool trails = false, dryKill = false, latch = false, spread = false, smooth = false;
     bool sync = false;
     double balance = 0.5, bpm = 120.0;
-    double loopStart = 0, loopEnd = 1, memory = 0;   // playback trim + capture ceiling
+    double loopEnd = 1, memory = 0;                 // playback trim + capture ceiling
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
@@ -678,18 +678,17 @@ private:
         loopWaveDirty = true;
     }
 
-    // Playback region of the captured loop: START/END trim the capture, then TAPE
-    // length takes its window from the tail of that region.
+    // Playback region of the captured loop. LENGTH decides where the loop sits
+    // (TAPE takes the tail of the capture, ENV and STRETCH play all of it); END
+    // then decides how much of that window sounds before it wraps, so END only
+    // moves the loop's end point. Mirrors loopWindow() in src/mood-worklet.js.
     Window loopWindow() const {
-        const double a = std::min(clampd(p.loopStart, 0, 1), 0.98);
-        const double b = std::max(clampd(p.loopEnd, 0, 1), 0.02);
-        int r0 = static_cast<int>(std::floor(lsrc * std::min(a, b)));
-        int len = static_cast<int>(std::floor(lsrc * std::max(a, b))) - r0;
-        if (len <= 0 || len < 64) { r0 = 0; len = std::max(64, lsrc); }
-        len = std::min(len, lsrc - r0);
-        if (p.loopMode != 1) return {std::max(64, len), r0};
-        const int W = std::max(64, static_cast<int>(std::floor(len * expMap(e.length, 0.02, 1))));
-        return {W, r0 + len - W};
+        const int len = std::max(64, lsrc);
+        const double trim = clampd(p.loopEnd, 0.02, 1);
+        if (p.loopMode != 1)
+            return {std::max(64, static_cast<int>(std::floor(len * trim))), 0};
+        const int W0 = std::max(64, static_cast<int>(std::floor(len * expMap(e.length, 0.02, 1))));
+        return {std::max(64, static_cast<int>(std::floor(W0 * trim))), len - W0};
     }
 
     double loopTick(double x) {

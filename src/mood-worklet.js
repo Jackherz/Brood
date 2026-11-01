@@ -364,7 +364,7 @@ class MoodCore {
       wetMode: 0, routing: 0, loopMode: 0,
       trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
-      loopStart: 0, loopEnd: 1, memory: 0,
+      loopEnd: 1, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0,
       rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
     };
@@ -512,20 +512,17 @@ class MoodCore {
     this.events.push('loop-wave');
   }
 
-  // Loop region being played. In TAPE, LENGTH trims the loop to its most recent
-  // part; in ENV and STRETCH LENGTH sets slice size, so the whole capture plays.
-  // Playback region of the captured loop: START/END trim the capture, then TAPE
-  // length takes its window from the tail of that region.
+  // Loop region being played. LENGTH decides where the loop sits: in TAPE it
+  // takes the most recent part of the capture, so the loop's start point follows
+  // that knob; in ENV and STRETCH the whole capture plays. END then decides how
+  // much of that window sounds before it wraps, so it only ever moves the loop's
+  // end point — it used to shorten the capture and drag the start around with it.
   loopWindow() {
-    const a = Math.min(clamp(this.p.loopStart), 0.98);
-    const b = Math.max(clamp(this.p.loopEnd), 0.02);
-    let r0 = Math.floor(this.lsrc * Math.min(a, b));
-    let len = Math.floor(this.lsrc * Math.max(a, b)) - r0;
-    if (!(len > 0) || len < 64) { r0 = 0; len = Math.max(64, this.lsrc); }
-    len = Math.min(len, this.lsrc - r0);
-    if (this.p.loopMode !== 1) return { W: Math.max(64, len), start: r0 };
-    const W = Math.max(64, Math.floor(len * expMap(this.e.length, 0.02, 1)));
-    return { W, start: r0 + len - W };
+    const len = Math.max(64, this.lsrc);
+    const trim = clamp(this.p.loopEnd, 0.02, 1);
+    if (this.p.loopMode !== 1) return { W: Math.max(64, Math.floor(len * trim)), start: 0 };
+    const W0 = Math.max(64, Math.floor(len * expMap(this.e.length, 0.02, 1)));
+    return { W: Math.max(64, Math.floor(W0 * trim)), start: len - W0 };
   }
 
   rand() { this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0; return this.rng / 4294967296; }

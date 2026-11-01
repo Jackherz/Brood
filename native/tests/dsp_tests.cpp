@@ -135,18 +135,30 @@ int main() {
         CHECK(std::fabs(capturedSeconds(1, 1) - 30.0) < 0.05, "memory max = %.2f s", capturedSeconds(1, 1));
         CHECK(capturedSeconds(0.5, 1) > 4.0 && capturedSeconds(0.5, 1) < 7.0, "memory mid = %.2f s", capturedSeconds(0.5, 1));
     }
-    {   // START/END trim the captured loop; an inverted pair still leaves a region
-        mood::Core c; c.prepare(FS); tap(c, 1);
+    {   // END trims the end of the loop and never moves where it starts
+        for (int mode = 0; mode < 3; ++mode) {
+            mood::Core c; c.p.loopMode = mode; c.p.length = 0.72; c.prepare(FS); tap(c, 1);
+            render(c, 3, tone(330, 10), [&](mood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
+            const auto full = c.state();
+            c.p.loopEnd = 0.5;
+            const auto half = c.state();
+            CHECK(half.winStart == full.winStart, "mode %d: END leaves the start alone (%d vs %d)", mode, half.winStart, full.winStart);
+            CHECK(std::abs(half.winLen - full.winLen / 2) <= 1, "mode %d: END halves what plays (%d of %d)", mode, half.winLen, full.winLen);
+            c.p.loopEnd = 0.02;
+            CHECK(c.state().winLen >= 64, "mode %d: the trim has a floor", mode);
+            CHECK(c.state().winStart == full.winStart, "mode %d: still no movement at the extreme", mode);
+        }
+    }
+    {   // LENGTH is what moves a TAPE loop's start point, from the tail of the capture
+        mood::Core c; c.p.loopMode = 1; c.p.length = 1.0; c.prepare(FS); tap(c, 1);
         render(c, 3, tone(330, 10), [&](mood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
-        const auto full = c.state();
-        CHECK(full.winStart == 0 && full.winLen == c.capturedLength(), "untrimmed window is the whole loop");
-        c.p.loopStart = 0.5; c.p.loopEnd = 1.0;
-        const auto half = c.state();
-        CHECK(std::abs(half.winStart - c.capturedLength() / 2) <= 1, "trim start %d of %d", half.winStart, c.capturedLength());
-        CHECK(std::abs(half.winLen - c.capturedLength() / 2) <= 1, "trim length %d", half.winLen);
-        c.p.loopStart = 0.9; c.p.loopEnd = 0.1;
-        const auto swapped = c.state();
-        CHECK(swapped.winLen > 0 && swapped.winLen < c.capturedLength(), "inverted trim yields a region");
+        const auto longLoop = c.state();
+        c.p.length = 0.4;
+        render(c, 0.2, tone(330, 10));   // the smoothed knob only moves in process()
+        const auto shortLoop = c.state();
+        CHECK(shortLoop.winLen < longLoop.winLen, "a shorter LENGTH is a shorter loop");
+        CHECK(shortLoop.winStart > longLoop.winStart, "and it starts later in the capture");
+        CHECK(std::abs(shortLoop.winStart - (c.capturedLength() - shortLoop.winLen)) <= 1, "the window ends at the capture end");
     }
     {   // tempo sync puts the echo on the divisiuon, independent of the clock
         auto echoAt = [](double time, double bpm, double clock) {

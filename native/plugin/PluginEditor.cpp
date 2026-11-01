@@ -339,10 +339,8 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         addAndMakeVisible(sl);
     };
     loopSlider(memory, "memory", "Loop memory");
-    loopSlider(loopStart, "loopStart", "Loop start");
-    loopSlider(loopEnd, "loopEnd", "Loop end");
+    loopSlider(loopEnd, "loopEnd", "How much of the loop plays");
     memoryAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "memory", memory);
-    startAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopStart", loopStart);
     endAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopEnd", loopEnd);
     const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"dryKill", "Dry"}, {"latch", "Latch"},
                                                           {"spread", "Spread"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
@@ -450,7 +448,7 @@ void MoodEditor::touch(const juce::String& id) {
     if (id == "clock") repaintDesign(pedalArea);
     // The small readouts beside the trim and hood sliders are drawn by this
     // editor rather than by the control, so they need a repaint to follow it.
-    if (id == "memory" || id == "loopStart" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
+    if (id == "memory" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
     if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv") repaintDesign(hoodArea);
 }
 
@@ -511,40 +509,48 @@ void MoodEditor::resized() {
 
     auto src = srcArea.withTrimmedTop(24).reduced(12, 6);
     auto r1 = src.removeFromTop(26);
-    place(sourceBox, r1.removeFromLeft(170));
+    sourceBoxDesign = r1.removeFromLeft(170);
+    place(sourceBox, sourceBoxDesign);
     r1.removeFromLeft(6);
-    place(loadButton, r1);
+    loadButtonDesign = r1;
+    place(loadButton, loadButtonDesign);
     src.removeFromTop(6);
     auto r2 = src.removeFromTop(24);
     r2.removeFromLeft(44);                       // "LEVEL" is painted in the gap
     meterArea = r2.removeFromRight(76).withSizeKeepingCentre(76, 18);
     place(inputGain, r2.withTrimmedRight(6));
 
+    // Three rows now that START has gone (LENGTH is what moves the loop's start),
+    // so the extra 19 px goes to the waveform rather than to a gap.
     auto inner = loopArea.withTrimmedTop(24).reduced(12, 6);
-    place(loopView, inner.removeFromTop(36));
+    place(loopView, inner.removeFromTop(55));
     inner.removeFromTop(2);
     memoryDesign = inner.removeFromTop(19).withTrimmedLeft(54).withTrimmedRight(40);
-    loopStartDesign = inner.removeFromTop(19).withTrimmedLeft(38).withTrimmedRight(40);
     loopEndDesign = inner.removeFromTop(19).withTrimmedLeft(26).withTrimmedRight(40);
     balanceDesign = inner.removeFromTop(19).withTrimmedLeft(58).withTrimmedRight(40);
     place(memory, memoryDesign);
-    place(loopStart, loopStartDesign);
     place(loopEnd, loopEndDesign);
     place(balance, balanceDesign);
 
     auto dipRow = dipArea.withTrimmedTop(24).reduced(12, 5);
     const int dw = dipRow.getWidth() / juce::jmax(1, static_cast<int>(dips.size()));
-    for (auto& d : dips) place(*d.button, dipRow.removeFromLeft(dw));
+    for (size_t i = 0; i < dips.size(); ++i) {
+        dipCellDesign[i] = dipRow.removeFromLeft(dw);
+        place(*dips[i].button, dipCellDesign[i]);
+    }
 
     auto ramp = rampArea.withTrimmedTop(24).reduced(12, 5);
     auto rampRow = ramp.removeFromTop(26);
     const int half = (rampRow.getWidth() - 6) / 2;
-    place(*rampWet, rampRow.removeFromLeft(half));
+    rampWetDesign = rampRow.removeFromLeft(half);
+    place(*rampWet, rampWetDesign);
     rampRow.removeFromLeft(6);
-    place(*rampLoop, rampRow);
+    rampLoopDesign = rampRow;
+    place(*rampLoop, rampLoopDesign);
     ramp.removeFromTop(3);
     rampRow = ramp.removeFromTop(26);
-    place(*rampWave, rampRow.removeFromLeft(half));
+    rampWaveDesign = rampRow.removeFromLeft(half);
+    place(*rampWave, rampWaveDesign);
     rampRow.removeFromLeft(6);
     rampRateDesign = rampRow;                    // "RATE" is painted over its left end
     place(rampRate, rampRateDesign.withTrimmedLeft(38).reduced(0, 3));
@@ -571,6 +577,68 @@ void MoodEditor::resized() {
     for (size_t i = 0; i < hood.size(); ++i) place(hood[i].slider, hoodCellDesign[i].withY(hoodArea.getY() + 23).withHeight(22));
     place(hoodClassic, hoodCellDesign[5].withY(hoodArea.getY() + 23).withHeight(22));
     place(presetBox, presetBoxDesign);
+    rebuildHoverHelp();
+}
+
+// Everything that has no explanation of its own: the switches, the steppers, the
+// sliders whose label is only a label, the source row, the footswitches. The six
+// knobs are left out on purpose — they already whisper, and two explanations of
+// the same control in two different voices is worse than one.
+void MoodEditor::rebuildHoverHelp() {
+    hoverHelp.clear();
+    auto add = [this](juce::Rectangle<int> r, const char* label, const char* text) {
+        hoverHelp.push_back({r, juce::String(label), juce::String(text)});
+    };
+    static const char* dipText[] = {
+        "the tails keep falling after you switch the wet side off.",
+        "the dry signal steps aside. only what the pedal made comes out.",
+        "a held footswitch stays held: tap once and it is still pressed.",
+        "the two channels stop sharing. each one gets its own copy.",
+        "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
+        "the delay stops being a length of time and becomes a division of the beat.",
+    };
+    static const char* dipNames[] = {"TRAILS", "DRY KILL", "LATCH", "SPREAD", "SMOOTH", "SYNC"};
+    for (size_t i = 0; i < dips.size() && i < 6; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
+
+    add(rampWetDesign, "RAMP / WET", "which part of the wet side the first generator moves, on top of that knob.");
+    add(rampLoopDesign, "RAMP / LOOP", "which part of the loop the second generator moves. MODIFY means this side's own.");
+    add(rampWaveDesign, "RAMP SHAPE", "the shape of the tide: triangle, square, sine, random, smooth random.");
+    add(rampRateDesign, "RAMP RATE", "how slowly the tide turns. both sides share it, so they stay in step with each other.");
+    static const char* rampSwitchText[] = {
+        "the swing sits above the knob instead of either side of it.",
+        "the swing reflects instead of snapping back, so nothing jumps.",
+        "the shape is ignored and the knob just climbs, again and again.",
+    };
+    static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP"};
+    for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
+
+    add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left waits about a second, like the pedal.");
+    add(loopEndDesign.expanded(0, 2), "END", "how much of the loop plays before it wraps. where it starts is LENGTH's job.");
+    add(balanceDesign.expanded(0, 2), "WET / LOOP", "a crossfade between the two worlds. hard right is the loop on its own.");
+
+    add(sourceBoxDesign, "SOURCE", "what the pedal listens to: the track, a phrase made here, or a file.");
+    add(loadButtonDesign, "LOAD FILE", "drop a recording in. it starts looping from the moment it arrives.");
+    add(inputGainDesign.expanded(0, 3), "LEVEL", "how hard the input hits the machine. easy to overdo.");
+
+    add(wetModeDesign, "WET MODE", "four ways of treating time: reverb, delay, slip, weave.");
+    add(routingDesign, "ROUTING", "what the wet side is allowed to hear: the input, the loop, or both.");
+    add(loopModeDesign, "LOOP MODE", "three ways of holding a moment: envelope, tape, stretch.");
+
+    add(fsWetDesign, "WET FOOTSWITCH", "tap for the wet side, hold to freeze it where it stands.");
+    add(fsLoopDesign, "LOOP FOOTSWITCH", "tap to catch the recent past, hold to overdub on top of it.");
+
+    add(presetBoxDesign, "PATCH", "five places to start. what the knobs do afterwards is yours.");
+
+    static const char* hoodText[] = {
+        "a hi-cut on the wet side. right is open, left is soft and far away.",
+        "what survives an overdub. left keeps the pedal's slow erosion.",
+        "how far apart the two speakers sit. the middle is the image as built.",
+        "the wet side runs on a divided clock, so the room and the echo stretch out.",
+        "the loop runs on a divided clock: lower, longer, further from the other side.",
+        "the MK I in the room: a noisy clock, a loop that never sits still.",
+    };
+    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV", "CLASSIC"};
+    for (int i = 0; i < 6; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
 }
 
 void MoodEditor::paint(juce::Graphics& g) {
@@ -651,7 +719,6 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.drawText("WET/LOOP", lx, balanceDesign.getY(), 56, balanceDesign.getHeight(), juce::Justification::centredLeft);
     g.setColour(kInk); g.setFont(font(13));
     g.drawText("MEMORY", lx, memoryDesign.getY(), 52, memoryDesign.getHeight(), juce::Justification::centredLeft);
-    g.drawText("START", lx, loopStartDesign.getY(), 36, loopStartDesign.getHeight(), juce::Justification::centredLeft);
     g.drawText("END", lx, loopEndDesign.getY(), 24, loopEndDesign.getHeight(), juce::Justification::centredLeft);
     // RATE sits inside the rate cell, so it costs no extra row.
     g.setFont(font(11)); g.setColour(kMuted);
@@ -669,7 +736,6 @@ void MoodEditor::paint(juce::Graphics& g) {
         g.drawText(txt, r, juce::Justification::centredRight);
     };
     readout("memory", memoryDesign.withX(memoryDesign.getRight() + 3).withWidth(36), false);
-    readout("loopStart", loopStartDesign.withX(loopStartDesign.getRight() + 3).withWidth(36), true);
     readout("loopEnd", loopEndDesign.withX(loopEndDesign.getRight() + 3).withWidth(36), true);
     readout("balance", balanceDesign.withX(balanceDesign.getRight() + 3).withWidth(36), true);   // loop side, %
     g.setColour(kInk); g.setFont(font(14));
@@ -726,14 +792,46 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.setColour(kPaper); g.fillRect(lcdArea);
     g.setColour(kInk); g.drawRect(lcdArea, 2);
     auto lcdHead = lcdArea.withHeight(21); g.fillRect(lcdHead);
-    g.setColour(kPaper); g.setFont(font(15)); g.drawText("*  THE SIGNAL  /  " + lcdLabel, lcdHead.reduced(10, 0), juce::Justification::centredLeft);
+    // While the mouse rests on something that has no explanation of its own, this
+    // panel explains it; otherwise it is the readout for the last thing you moved.
+    const bool helping = hoverText.isNotEmpty();
+    g.setColour(kPaper); g.setFont(font(15));
+    g.drawText("*  THE SIGNAL  /  " + (helping ? hoverLabel : lcdLabel), lcdHead.reduced(10, 0), juce::Justification::centredLeft);
     auto lr = lcdArea.reduced(12, 6).withTrimmedTop(20);
-    g.setColour(kInk); g.setFont(font(20)); g.drawFittedText(lcdValue.toUpperCase(), lr.removeFromTop(27), juce::Justification::centredLeft, 1);
+    if (helping) {
+        g.setColour(kInk); g.setFont(font(14));
+        g.drawFittedText(hoverText, lr.removeFromTop(30), juce::Justification::topLeft, 2);
+    } else {
+        g.setColour(kInk); g.setFont(font(20));
+        g.drawFittedText(lcdValue.toUpperCase(), lr.removeFromTop(27), juce::Justification::centredLeft, 1);
+    }
     g.setColour(kMuted); g.setFont(font(14)); g.drawText(lcdMeta, lr, juce::Justification::centredLeft);
 }
 
 void MoodEditor::timerCallback() {
     auto& ui = proc.ui;
+
+    // Hover help. The mouse position is mapped back into design coordinates and
+    // matched against the table, so no control needs its own enter/exit handler
+    // and a click is never intercepted: this only ever changes what the readout
+    // panel says.
+    // While a slider is being dragged the readout is the more useful thing to
+    // show, so help stands down for the duration of the gesture.
+    const HoverItem* hovered = nullptr;
+    if (!hoverHelp.empty() && !juce::ModifierKeys::currentModifiers.isAnyMouseButtonDown()) {
+        const auto at = getMouseXYRelative();
+        float mx = static_cast<float>(at.x), my = static_cast<float>(at.y);
+        view.inverted().transformPoint(mx, my);
+        const juce::Point<float> mouse(mx, my);
+        for (const auto& item : hoverHelp)
+            if (item.rect.toFloat().contains(mouse)) { hovered = &item; break; }
+    }
+    const juce::String newLabel = hovered != nullptr ? hovered->label : juce::String();
+    const juce::String newText = hovered != nullptr ? hovered->text : juce::String();
+    if (newLabel != hoverLabel || newText != hoverText) {
+        hoverLabel = newLabel; hoverText = newText;
+        repaintDesign(lcdArea);
+    }
     const double now = juce::Time::getMillisecondCounterHiRes();
     blink = static_cast<int>(now / 160.0) % 2 == 0;
     const uint32_t cycles = ui.histCycles.load();

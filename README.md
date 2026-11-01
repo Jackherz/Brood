@@ -34,10 +34,10 @@ reset it. Tap **WET CHANNEL** to turn the effect on/off; hold it to freeze.
 The looper is always listening: tap **MICRO-LOOPER** to capture the recent past,
 tap again to stop, or hold while playing to overdub. Holding while listening
 records a new loop for the duration of the hold, up to the buffer capacity.
-The **TRIM THE MOMENT** row under the waveform sets how much past the looper may
-keep (**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour) and the two edges
-of what it plays back (**START**, **END**). The waveform dims whatever the trim has
-left outside.
+The **LOOP TRIM** row under the waveform sets how much past the looper may keep
+(**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour) and how much of the
+captured loop plays (**END**). Where the loop starts is **LENGTH**'s job. The
+waveform dims whatever the trim has left outside.
 The A and L keys trigger the wet and loop switches when focus is not in another
 control. **HOW TO PLAY** opens the in-app field guide.
 
@@ -252,6 +252,11 @@ Earlier versions of this project shipped cross-compiled bundles
 through the patch channel at all — the download button and the ZIP are gone.
 Build locally with the steps above; that is the supported route.
 
+Resting the mouse on any switch, stepper, slider or button that has no
+explanation of its own makes the readout at the top of the side column explain it
+— the six knobs are left out on purpose, since they already whisper. The browser
+version says the same thing in its footer line.
+
 The editor is a 900 × 712 panel that can be resized from 675 × 534 up to
 1800 × 1280; the layout is drawn in design coordinates and scaled as a whole, so
 the proportions never break and labels cannot collide when the window changes.
@@ -286,7 +291,7 @@ by automating the `wetMode` parameter (value 3) instead. CC 20 is ramp speed and
 66/67 are the two ramp dips, as on the pedal. The ramp destinations (RAMPS wet and
 loop), the shape and polarity have no CC in the MOOD map — they live in the hidden
 menu there — so automate the `rampWet`, `rampLoop`, `rampWave` and `rampUni`
-parameters instead. Loop memory, START and END are host-only parameters too.
+parameters instead. Loop memory and END are host-only parameters too.
 
 Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
 it on in the editor.
@@ -343,17 +348,18 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
 - CLOCK selects 2–64 kHz steps, changing pitch, timing, bandwidth and loop
   capacity together. **SMOOTH** makes the clock continuous. The fixed 64,000
   sample history holds approximately 1–32 seconds depending on clock rate.
-- **LOOP MEMORY**, **START** and **END** are our addition. On the pedal the
-  capture window is whatever the 64,000-sample buffer holds at the current
-  clock; MEMORY lifts that ceiling to a chosen length in *real time* (1–30 s, and
-  the clock is clamped up if it could not fill the window). At the far left it
-  reads `PEDAL` and behaves exactly like the hardware. START and END trim the
-  region that plays out of the captured buffer, expressed as a fraction of it;
-  the loop window, the playhead and the overdub head all follow the trim, and an
-  inverted pair falls back to the full region instead of going silent. The
-  waveform display dims everything outside the trim. Both cores allocate for the
-  longest possible loop up front (about 32 MB), so MEMORY never reallocates on the
-  audio thread.
+- **LOOP MEMORY** and **END** are our addition. On the pedal the capture window is
+  whatever the 64,000-sample buffer holds at the current clock; MEMORY lifts that
+  ceiling to a chosen length in *real time* (1–30 s, and the clock is clamped up
+  if it could not fill the window). At the far left it reads `PEDAL` and behaves
+  exactly like the hardware. END then sets how much of that window sounds before
+  it wraps: it only ever moves the loop's *end*. The start point belongs to
+  LENGTH — in TAPE the loop window is the most recent part of the capture, so
+  turning LENGTH walks the start forward, exactly as the pedal does. (An earlier
+  version had a separate START trim, which meant END silently dragged the start
+  around with it; it is gone.) The waveform display dims everything outside the
+  window. Both cores allocate for the longest possible loop up front (about
+  32 MB), so MEMORY never reallocates on the audio thread.
 - **WET / LOOP** is a crossfade, not two independent gains, and the loop's direct
   path is only ducked by as much as the wet path is audible. Earlier versions
   hard-muted the direct loop whenever the wet channel was on with routing BOTH or

@@ -1,5 +1,5 @@
-# LOOP MEMORY + START/END TRIM: a long capture at a high clock, then the playback
-# region is trimmed and re-trimmed while the loop runs.
+# LOOP MEMORY + END TRIM: a long capture at a high clock, then the playback end is
+# trimmed and re-trimmed while the loop runs (the start must stay where LENGTH put it).
 rate 48000
 seconds 12
 0 param loopMode 1
@@ -10,16 +10,13 @@ seconds 12
 0 param routing 0
 200 fs loop down
 230 fs loop up
-600 param loopStart 0.25
 600 param loopEnd 0.75
 900 param length 0.35
-1200 param loopStart 0.6
 1200 param loopEnd 1
 1500 param memory 0
 1500 param clock 0.2
 1800 fs loop down
 1830 fs loop up
-2400 param loopStart 0
 2400 param loopEnd 0.5
 2800 param modLoop 0.15
 3200 param loopMode 0

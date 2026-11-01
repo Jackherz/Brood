@@ -51,7 +51,6 @@ MoodProcessor::MoodProcessor()
                       [this, paramId](float v, int) { return describe(paramId, v); }));
           };
           layout.add(loopParam("memory", "Loop memory", 0.f));
-          layout.add(loopParam("loopStart", "Loop start", 0.f));
           layout.add(loopParam("loopEnd", "Loop end", 1.f));
           // Hidden options: on the pedal these live behind holding both footswitches.
           layout.add(loopParam("tone", "Wet tone (hi-cut)", 1.f));
@@ -132,8 +131,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         if (v <= 0.001f) return "pedal " + fmtTime(mood::kLoopSamples / hz);
         return "up to " + fmtTime(mood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
     }
-    if (id == "loopStart") return "from " + pct(v);
-    if (id == "loopEnd") return "to " + pct(v);
+    if (id == "loopEnd") return v >= 0.999f ? "the whole loop" : "plays " + pct(v);
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
     if (id == "width") return v < 0.49f ? "narrow " + pct(v * 2) : v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
@@ -215,7 +213,7 @@ void MoodProcessor::pullParams() {
     p.trails = param("trails") > 0.5f; p.dryKill = param("dryKill") > 0.5f; p.latch = param("latch") > 0.5f;
     p.spread = param("spread") > 0.5f; p.smooth = param("smooth") > 0.5f;
     p.sync = param("sync") > 0.5f;
-    p.memory = param("memory"); p.loopStart = param("loopStart"); p.loopEnd = param("loopEnd");
+    p.memory = param("memory"); p.loopEnd = param("loopEnd");
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
     p.classic = param("classic") > 0.5f;

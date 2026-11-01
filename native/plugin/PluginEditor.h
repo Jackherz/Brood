@@ -81,8 +81,8 @@ private:
     juce::Slider inputGain;
     juce::Slider balance;
     // Loop edit: capture ceiling, and the trim markers that decide what plays.
-    juce::Slider memory, loopStart, loopEnd;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, startAtt, endAtt;
+    juce::Slider memory, loopEnd;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, endAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::vector<Dip> dips;
@@ -107,10 +107,21 @@ private:
     juce::Rectangle<int> pedalArea, lcdArea, ledWet, ledLoop, meterArea, loopArea;
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
-    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopStartDesign, loopEndDesign;
-    juce::Rectangle<int> hoodArea, hoodCellDesign[6];
+    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopEndDesign;
+    juce::Rectangle<int> hoodArea, hoodCellDesign[6], dipCellDesign[6];
+
+    // Hover help. The readout at the top of the side column used to hold whatever
+    // you last touched; now anything without an explanation of its own explains
+    // itself there for as long as the mouse is over it. Rectangles are in design
+    // coordinates and the timer hit-tests the real mouse against them, which needs
+    // no per-control event plumbing and cannot steal a click.
+    struct HoverItem { juce::Rectangle<int> rect; juce::String label, text; };
+    std::vector<HoverItem> hoverHelp;
+    juce::String hoverLabel, hoverText;
+    void rebuildHoverHelp();
     // The four stacked panels of the side column, in design coordinates.
     juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[3], presetBoxDesign;
+    juce::Rectangle<int> rampWetDesign, rampLoopDesign, rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.
     float viewScale = 1.f;
