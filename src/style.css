@@ -299,6 +299,10 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
   .knob-whisper { min-height: 0; }
   .capture-strip { grid-template-columns: 1fr; gap: 7px; }.loop-wave { height: 42px; }
   .trim-strip { grid-template-columns: 1fr; gap: 6px; }.trim-title { display: none; }.trim-row { grid-template-columns: 1fr; gap: 5px; }
+  .trim-strip { grid-template-columns: 1fr; gap: 6px; }
+  .trim-title { display: none; }
+  .trim-row { grid-template-columns: 1fr; gap: 5px; }
+  .ramp-grid { grid-template-columns: 1fr; }
   .side-inner { display: block; }.scope-head { margin-bottom: 8px; }.scope-screen { height: 120px; }.meter-row { margin: 9px 0 13px; }.side-rule:not(.dip-heading) { margin-top: 10px; }
   .dip-heading { margin-top: 12px; }.side-note { margin-top: 12px; }
   .window-footer > span:last-child, .below-window > span:nth-child(2) { display: none; }
