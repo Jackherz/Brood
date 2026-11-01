@@ -73,28 +73,32 @@ button:disabled { cursor: wait; opacity: .65; }
 .column-title strong { display: block; font: clamp(13px, 1.35vw, 17px)/1 'Terminal', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .column-title small { display: block; font: clamp(9px, .95vw, 11px)/1.15 'Terminal', monospace; color: #77776e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; letter-spacing: .06em; }
 .column-no { font: 15px 'Terminal', monospace; color: #808078; align-self: flex-start; }
-.knob-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; padding: 10px 0 6px; }
+.knob-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 10px; padding: 14px 0 8px; }
 .knob-block { min-width: 0; padding: 4px 0 2px; display: flex; flex-direction: column; align-items: center; }
-.knob-whisper { margin: 5px 0 3px; font: clamp(11px, 1vw, 12px)/1.25 'Terminal', monospace; overflow-wrap: break-word; color: #6f6f67; text-align: center; min-height: 30px; letter-spacing: .01em; }
+.knob-whisper { margin: 8px 0 4px; font: clamp(11px, 1vw, 12px)/1.25 'Terminal', monospace; overflow-wrap: break-word; color: #6f6f67; text-align: center; min-height: 30px; letter-spacing: .01em; }
 .knob-block .knob-heading { width: 100%; }
 .knob-heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; font: clamp(13px, 1.15vw, 17px)/1 'Terminal', monospace; letter-spacing: .04em; }
 .knob-heading strong { font-weight: normal; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.knob-index { font-size: .75em; color: #9b9b92; flex: none; }
-.knob { width: min(102px, 100%); aspect-ratio: 1; height: auto; margin: -1px auto; touch-action: none; user-select: none; cursor: ns-resize; color: #1a1a17; }
+.knob-index { font-size: .72em; color: #6f6f67; flex: none; border: 1px solid #b9b8ad; padding: 1px 4px 0; line-height: 1.25; }
+.knob { width: min(104px, 100%); aspect-ratio: 1; height: auto; margin: 0 auto; padding: 3px; touch-action: none; user-select: none; cursor: ns-resize; color: #b3b2a7; }
 .knob svg { display: block; width: 100%; height: 100%; overflow: visible; }
+/* The face is one flat disc: a hairline rim, a thin pointer, no bevels. The hard
+   offset shadow is the one nod to the pixel panel it sits in. */
 .knob-shadow { fill: #181815; }
-.knob-outer { fill: #fbfaf5; stroke: #181815; stroke-width: 2.5; }
-.knob-inner { fill: #ecebe3; stroke: #181815; stroke-width: 1.4; }
-.knob-pointer, .knob-center { fill: #181815; }
-.knob-dark .knob-outer { fill: #171714; }
-.knob-dark .knob-inner { fill: #272723; stroke: #f9f8f2; }
-.knob-dark .knob-pointer, .knob-dark .knob-center { fill: #f9f8f2; }
-.knob:hover .knob-inner { fill: #e1e0d7; }
-.knob-dark:hover .knob-inner { fill: #42423c; }
+.knob-face { fill: #e8e5db; stroke: #181815; stroke-width: 1.2; }
+.knob-ring { fill: none; stroke: #b3b2a7; stroke-width: 1; }
+.knob-pointer { fill: #181815; }
+.knob:hover .knob-ring, .knob:focus-visible .knob-ring { stroke: #181815; }
+.knob:hover .knob-face { fill: #f1eee4; }
+.knob-dark .knob-face { fill: #191916; stroke: #191916; }
+.knob-dark .knob-pointer { fill: #f7f5ec; }
+.knob-dark:hover .knob-face { fill: #2b2b26; }
+.knob:focus-visible { outline: none; }
+.knob:active { cursor: grabbing; }
 .knob-caption { display: flex; justify-content: center; align-items: baseline; gap: 4px; font: 12px/1.1 'Terminal', monospace; letter-spacing: .02em; color: #77776f; min-height: 15px; }
 .knob-caption b { font: 14px/1 'Terminal', monospace; color: #181815; white-space: nowrap; }
 .mode-selector { padding: 4px 0 9px; }
-.mode-selector + .knob-row { border-top: 1px dashed #aaa9a0; }
+.mode-selector + .knob-row { border-top: 1px solid #d8d6ca; }
 .micro-label { display: flex; justify-content: space-between; color: #77776f; font: 12px 'Terminal', monospace; letter-spacing: .06em; margin-bottom: 5px; }
 .micro-dots { letter-spacing: 2px; }
 .mode-buttons { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); border: 1.5px solid #181815; }
@@ -160,7 +164,7 @@ input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: #1
 input[type="range"]::-webkit-slider-thumb { appearance: none; width: 9px; height: 11px; background: #181815; border: 1px solid #181815; margin-top: -4px; }
 input[type="range"]::-moz-range-track { height: 2px; background: #181815; }
 input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #181815; border: 0; border-radius: 0; }
-.notice { margin-top: 8px; border: 1px dashed #8f8f85; padding: 5px 6px; font: 13px/1.05 'Terminal', monospace; }
+.notice { margin-top: 8px; border: 1px solid #b9b8ad; background: #faf9f3; padding: 5px 6px; font: 13px/1.05 'Terminal', monospace; }
 .dip-heading { margin-top: 12px; }
 .dips { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: 2px; }
 .dip { display: flex; flex-direction: column; align-items: center; gap: 4px; background: transparent; border: 0; padding: 0; font: 10px/1 'Terminal', monospace; color: #66665e; min-width: 0; text-align: center; white-space: normal; }
@@ -201,7 +205,7 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
 .guide-whispers > b { font: 9px 'Pixel', monospace; letter-spacing: .02em; }
 .guide-whispers-note { margin: 6px 0 10px; font: 11px/1.5 'Space Mono', monospace; color: #6d6d65; max-width: 68ch; }
 .guide-whispers dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px 18px; margin: 0; }
-.guide-whispers dl > div { border-top: 1px dashed #c3c3bb; padding-top: 5px; }
+.guide-whispers dl > div { border-top: 1px solid #d8d6ca; padding-top: 5px; }
 .guide-whispers dt { font: 13px 'Terminal', monospace; letter-spacing: .05em; }
 .guide-whispers dt span { color: #8a8a82; font-size: 12px; letter-spacing: 0; }
 .guide-whispers dd { margin: 2px 0 0; font: 12px/1.35 'Terminal', monospace; color: #52524c; }
@@ -209,7 +213,7 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
 .guide-disclaimer a { color: #181815; }
 
 /* ── loop trim: one thin band under the waveform, three even sliders ── */
-.trim-strip { display: grid; grid-template-columns: 74px minmax(0,1fr); align-items: center; gap: 10px; padding: 7px 13px 8px; border-top: 1px dashed #aaa9a0; background: #f1f0e9; }
+.trim-strip { display: grid; grid-template-columns: 74px minmax(0,1fr); align-items: center; gap: 10px; padding: 7px 13px 8px; border-top: 1px solid #d8d6ca; background: #f1f0e9; }
 .trim-title { font: 11px/.98 'Pixel', monospace; color: #77776f; }
 .trim-row { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px 14px; min-width: 0; }
 .trim-control { display: grid; grid-template-columns: auto minmax(0,1fr) 40px; align-items: center; gap: 6px; min-width: 0; color: #77776f; font: 11px 'Terminal', monospace; }

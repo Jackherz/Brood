@@ -298,6 +298,14 @@ parameters instead. Loop memory and END are host-only parameters too.
 Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
 it on in the editor.
 
+The knobs are flat discs with a hairline rim and a thin pointer, five marks around
+the outside and a hard offset shadow — a plainer, more analogue face than the
+bevelled pixel knob it replaces, which is why the panel reads quieter now. The
+wet channel's two knobs are black, the shared and loop knobs are pale, the same
+way a pedal marks the primary control. The panel keeps two rules and no more:
+ink for structure (window, panels, controls), hairline grey for grouping (rows
+inside a panel). Everything dashed is gone.
+
 The browser version does not receive MIDI. MIDI clock sync, expression/CV, synth
 mode, MISO, true bypass, the direct micro-loop blend and the remaining hardware
 DIP switches are not implemented. Automatable native parameters are

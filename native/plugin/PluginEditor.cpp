@@ -71,46 +71,42 @@ MoodEditor::KnobLook::KnobLook() {
 }
 
 void MoodEditor::KnobLook::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider& slider) {
-    // Proportional so the knob looks the same at every window size: the tick marks
-    // used to sit a fixed distance outside a shrinking face and got clipped.
+    // A flat disc with a thin pointer, after the SR-01: one hairline rim, a line
+    // standing up from the middle, no bevels. The hard offset shadow is the one
+    // nod to the pixel panel it sits in. Everything is proportional so the knob
+    // looks the same at every window size (fixed tick radii used to get clipped).
     const float u = std::min(static_cast<float>(w), static_cast<float>(h)) / 104.f;
-    const auto area = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h)).reduced(13.f * u);
+    const auto area = juce::Rectangle<float>(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h)).reduced(15.f * u);
     const float r = std::min(area.getWidth(), area.getHeight()) / 2;
     const auto c = area.getCentre();
-    g.setColour(kInk);
-    for (int i = 0; i <= 20; ++i) {
-        const float a = a0 + (a1 - a0) * static_cast<float>(i) / 20.f;
-        const float r1 = r + (i % 5 == 0 ? 3.f : 5.f) * u, r2 = r + 9.f * u;
-        g.drawLine(c.x + r1 * std::sin(a), c.y - r1 * std::cos(a), c.x + r2 * std::sin(a), c.y - r2 * std::cos(a), (i % 5 == 0 ? 1.7f : 1.f) * u);
+    // Five marks, not twenty-one: the scale reads at a glance and the knob stays
+    // the loudest thing in the cell.
+    g.setColour(juce::Colour(0xffb3b2a7));
+    for (int i = 0; i <= 4; ++i) {
+        const float a = a0 + (a1 - a0) * static_cast<float>(i) / 4.f;
+        g.drawLine(c.x + (r + 4.f * u) * std::sin(a), c.y - (r + 4.f * u) * std::cos(a),
+                   c.x + (r + 9.f * u) * std::sin(a), c.y - (r + 9.f * u) * std::cos(a), 1.f * u);
     }
-    auto stepped = [](juce::Point<float> centre, float rad) {
+    // The wet channel's two knobs are the black discs, as on the pedal that lent
+    // us the shape; the shared and loop knobs are the pale ones.
+    const bool dark = slider.getTitle().startsWith("TIME") || slider.getTitle().startsWith("MODIFY (wet)");
+    auto face = [&](juce::Point<float> centre, float rad) {
         juce::Path p;
-        const float a = rad * 0.54f, b = rad * 0.86f;
-        p.startNewSubPath(centre.x-a, centre.y-rad);
-        p.lineTo(centre.x+a, centre.y-rad); p.lineTo(centre.x+a, centre.y-b);
-        p.lineTo(centre.x+b, centre.y-b); p.lineTo(centre.x+b, centre.y-a);
-        p.lineTo(centre.x+rad, centre.y-a); p.lineTo(centre.x+rad, centre.y+a);
-        p.lineTo(centre.x+b, centre.y+a); p.lineTo(centre.x+b, centre.y+b);
-        p.lineTo(centre.x+a, centre.y+b); p.lineTo(centre.x+a, centre.y+rad);
-        p.lineTo(centre.x-a, centre.y+rad); p.lineTo(centre.x-a, centre.y+b);
-        p.lineTo(centre.x-b, centre.y+b); p.lineTo(centre.x-b, centre.y+a);
-        p.lineTo(centre.x-rad, centre.y+a); p.lineTo(centre.x-rad, centre.y-a);
-        p.lineTo(centre.x-b, centre.y-a); p.lineTo(centre.x-b, centre.y-b);
-        p.lineTo(centre.x-a, centre.y-b); p.closeSubPath(); return p;
+        p.addEllipse(centre.x - rad, centre.y - rad, rad * 2.f, rad * 2.f);
+        return p;
     };
-    const bool dark = slider.getTitle().equalsIgnoreCase("CLOCK");
-    auto shadow = stepped(c.translated(2.f * u, 3.f * u), r);
-    g.setColour(kInk); g.fillPath(shadow);
-    auto face = stepped(c, r);
-    g.setColour(dark ? kInk : kPaper); g.fillPath(face);
-    g.setColour(kInk); g.strokePath(face, juce::PathStrokeType(2.f * u));
-    auto inner = stepped(c, r * 0.80f);
-    g.setColour(dark ? juce::Colour(0xff292924) : juce::Colour(0xffecebe3)); g.fillPath(inner);
-    g.setColour(dark ? kPaper : kInk); g.strokePath(inner, juce::PathStrokeType(1.2f * u));
+    g.setColour(kInk); g.fillPath(face(c.translated(2.6f * u, 3.f * u), r));      // the hard shadow
+    g.setColour(dark ? juce::Colour(0xff191916) : juce::Colour(0xffe8e5db));
+    g.fillPath(face(c, r));
+    g.setColour(kInk); g.strokePath(face(c, r), juce::PathStrokeType(1.2f * u));
+    // The rim sits just outside the face: hairline, muted, and it darkens on hover.
+    const bool hot = slider.isMouseOverOrDragging();
+    g.setColour(hot ? kInk : juce::Colour(0xffb3b2a7));
+    g.strokePath(face(c, r + 5.5f * u), juce::PathStrokeType(1.f * u));
     juce::Path pointer;
-    pointer.addRectangle(-2.5f * u, -r * 0.72f, 5.f * u, r * 0.47f);
-    pointer.addRectangle(-2.f * u, -2.f * u, 4.f * u, 4.f * u);
+    pointer.addRectangle(-1.4f * u, -r * 0.83f, 2.8f * u, r * 0.83f);
     const float angle = a0 + pos * (a1 - a0);
+    g.setColour(dark ? juce::Colour(0xfff7f5ec) : kInk);
     g.fillPath(pointer, juce::AffineTransform::rotation(angle).translated(c));
 }
 

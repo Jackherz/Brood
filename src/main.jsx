@@ -201,11 +201,12 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false }
     onTouch(id);
     onChange(id, clamp(v));
   };
-  const ticks = Array.from({ length: 21 }, (_, i) => {
-    const a = (-135 + 270 * i / 20) * Math.PI / 180;
-    const r1 = i % 5 === 0 ? 48 : 50;
-    const r2 = 54;
-    return <line key={i} x1={60 + Math.sin(a) * r1} y1={60 - Math.cos(a) * r1} x2={60 + Math.sin(a) * r2} y2={60 - Math.cos(a) * r2} stroke="currentColor" strokeWidth={i % 5 === 0 ? 2.4 : 1.5} />;
+  // Five marks instead of a ring of twenty-one: the scale still reads at a
+  // glance, and the knob stays the loudest thing in the cell.
+  const ticks = Array.from({ length: 5 }, (_, i) => {
+    const a = (-135 + 270 * i / 4) * Math.PI / 180;
+    return <line key={i} x1={60 + Math.sin(a) * 50} y1={60 - Math.cos(a) * 50}
+      x2={60 + Math.sin(a) * 55} y2={60 - Math.cos(a) * 55} stroke="currentColor" strokeWidth={1.4} />;
   });
   return <div className="knob-block">
     <div className="knob-heading"><span>{title}</span><span className="knob-index">{id === 'time' ? '01' : id === 'mix' ? '02' : id === 'length' ? '03' : id === 'modWet' ? '04' : id === 'clock' ? '05' : '06'}</span></div>
@@ -215,11 +216,14 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false }
       onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
       onKeyDown={key} onFocus={() => onTouch(id)} onDoubleClick={() => onChange(id, KNOB_DEFAULTS[id])}>
       <svg viewBox="0 0 120 120" aria-hidden="true">
-        <g>{ticks}</g>
-        <path className="knob-shadow" d="M42 22H78V25H88V30H94V40H97V80H94V90H88V95H78V98H42V95H32V90H26V80H23V40H26V30H32V25H42Z" transform="translate(2 3)" />
-        <path className="knob-outer" d="M42 22H78V25H88V30H94V40H97V80H94V90H88V95H78V98H42V95H32V90H26V80H23V40H26V30H32V25H42Z" />
-        <path className="knob-inner" d="M43 29H77V32H85V37H90V44H92V76H90V83H85V88H77V91H43V88H35V83H30V76H28V44H30V37H35V32H43Z" />
-        <g transform={`rotate(${-135 + value * 270} 60 60)`}><rect className="knob-pointer" x="57" y="32" width="6" height="22"/><rect className="knob-center" x="57" y="57" width="6" height="6"/></g>
+        <g className="knob-ticks">{ticks}</g>
+        {/* A flat disc with a thin pointer, after the SR-01: one hairline ring,
+            one line standing up from the middle, and a hard offset shadow so it
+            still belongs to this panel. */}
+        <circle className="knob-shadow" cx="62.6" cy="63" r="41" />
+        <circle className="knob-face" cx="60" cy="60" r="41" />
+        <circle className="knob-ring" cx="60" cy="60" r="46.5" />
+        <g transform={`rotate(${-135 + value * 270} 60 60)`}><rect className="knob-pointer" x="58.6" y="26" width="2.8" height="34" /></g>
       </svg>
     </div>
     <p className="knob-whisper">{sub}</p>
@@ -560,8 +564,8 @@ function App() {
               <div className="column-title"><span className="pixel-icon">✳</span><div><strong>WET CHANNEL</strong><small>SPACE &amp; TIME</small></div><span className="column-no">A</span></div>
               <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)} help={help} hint="four ways of treating time: reverb, delay, slip, weave."/>
               <div className="knob-row">
-                <Knob id="time" title="TIME" sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}/>
-                <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} dark/>
               </div>
               <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
             </div>
@@ -569,7 +573,7 @@ function App() {
               <div className="column-title"><span className="pixel-icon globe-icon">◎</span><div><strong>THE IN-BETWEEN</strong><small>SHARED CONTROLS</small></div><span className="column-no">✦</span></div>
               <div className="knob-row">
                 <Knob id="mix" title="MIX" sub={SHARED_WHISPER.mix} value={params.mix} params={params} onChange={update} onTouch={touch}/>
-                <Knob id="clock" title="CLOCK" sub={params.smooth ? 'the heartbeat, breathing freely' : SHARED_WHISPER.clock} value={params.clock} params={params} onChange={update} onTouch={touch} dark/>
+                <Knob id="clock" title="CLOCK" sub={params.smooth ? 'the heartbeat, breathing freely' : SHARED_WHISPER.clock} value={params.clock} params={params} onChange={update} onTouch={touch}/>
               </div>
               <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)} help={help} hint="what the wet side is allowed to hear: the input, the loop, or both."/>
               <div className="between-card"><div className="between-art"><span>IN</span><span className="between-dash">···▶</span><Spark size={18}/><span className="between-dash">▶···</span><span>OUT</span></div><p>ONE CLOCK. TWO WORLDS.</p></div>
