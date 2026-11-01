@@ -50,6 +50,13 @@ MoodProcessor::MoodProcessor()
           layout.add(loopParam("memory", "Loop memory", 0.f));
           layout.add(loopParam("loopStart", "Loop start", 0.f));
           layout.add(loopParam("loopEnd", "Loop end", 1.f));
+          // Hidden options: on the pedal these live behind holding both footswitches.
+          layout.add(loopParam("tone", "Wet tone (hi-cut)", 1.f));
+          layout.add(loopParam("fade", "Overdub fade", 0.f));
+          layout.add(loopParam("width", "Stereo width", 0.5f));
+          layout.add(loopParam("wetDiv", "Wet clock division", 0.f));
+          layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
+          layout.add(std::make_unique<APB>(juce::ParameterID("classic", 1), "Classic (MK I quirks)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
           return layout;
@@ -116,6 +123,13 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     }
     if (id == "loopStart") return "from " + pct(v);
     if (id == "loopEnd") return "to " + pct(v);
+    if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
+    if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
+    if (id == "width") return v < 0.49f ? "narrow " + pct(v * 2) : v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
+    if (id == "wetDiv" || id == "loopDiv") {
+        const int div = mood::divMap(v);
+        return div == 1 ? juce::String("1x clock") : juce::String(div) + "x slower";
+    }
     return juce::String(v, 3);
 }
 
@@ -185,6 +199,9 @@ void MoodProcessor::pullParams() {
     p.spread = param("spread") > 0.5f; p.smooth = param("smooth") > 0.5f;
     p.sync = param("sync") > 0.5f;
     p.memory = param("memory"); p.loopStart = param("loopStart"); p.loopEnd = param("loopEnd");
+    p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
+    p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
+    p.classic = param("classic") > 0.5f;
     p.bpm = hostBpm_.load();
     coreRight_.p = p;
 }
@@ -251,6 +268,9 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
             else if (cc == 103) midiWet = value != 0;
             else if (cc == 105) midiFreeze = value != 0;
             else if (cc == 20) { if (auto* parameter = apvts.getParameter("memory")) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 71) id = "classic";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }
     }

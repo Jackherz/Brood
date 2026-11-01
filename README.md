@@ -270,6 +270,8 @@ the effect. Changes are applied at audio-block boundaries:
 | --- | --- |
 | 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
 | 20 | Loop memory (the pedal's Ramp Speed slot, reused) |
+| 53, 54 | Wet and loop clock division |
+| 71 | Classic mode (`0` off, `1–127` on) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
 | 73–76, 78 | Spread, Dry Kill, Trails, Latch, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
@@ -284,9 +286,10 @@ the pedal's map and are host-only parameters.
 Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
 it on in the editor.
 
-The browser version does not receive MIDI. MIDI clock/sync, expression, synth
-mode, MISO, Classic, Bounce/Sweep ramping and the remaining hardware DIP switches
-or hidden-menu features are not implemented. Automatable native parameters are
+The browser version does not receive MIDI. The ramp engine — RAMPS, BOUNCE,
+SWEEP, POLARITY, RAMP SPEED and the ramping waveform — is the one large thing still
+missing; see [ROADMAP.md](ROADMAP.md). MIDI clock sync, expression/CV, synth mode,
+MISO, true bypass and the remaining hardware DIP switches are not implemented. Automatable native parameters are
 available to the host; the wet/loop footswitch parameters are momentary controls.
 
 ## The whispers
@@ -352,6 +355,17 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   hard-muted the direct loop whenever the wet channel was on with routing BOTH or
   LOOP, so a balance fully to LOOP went silent; that is fixed and covered by
   tests in both implementations.
+- **The hidden menu** holds the options the pedal keeps behind both footswitches
+  (plugin: the `HIDDEN` button in the title bar; browser: `HIDDEN MENU ↓` under the
+  window). **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
+  bit-transparent, so it can stay open. **FADE** sets how much of the old loop
+  survives each overdub pass: 0 is the pedal's slow erosion, 1 lets the new layer
+  replace it entirely. **WIDTH** is mid/side on the effect bus only (the dry never
+  moves); 0.5 is the image as built. **WET DIV** and **LOOP DIV** run one side on
+  a divided clock — 2× or 4× slower — so the wet side's room and echo stretch out
+  while the loop drops an octave or two, or the other way round. **CLASSIC**
+  restores MK I manners: a noisy clock that hisses most at low settings, a loop
+  that never sits still (wow and flutter), and a reverb that rings far longer.
 - **TRAILS**, **DRY KILL**, **LATCH**, **SPREAD**, **SYNC** and wet/loop balance
   are modelled. Stereo input is kept separate with SPREAD off. The exact stereo
   movement, filters, transient response, control curves, reverb and grains differ

@@ -52,6 +52,22 @@ const char* kWhisper[6][4] = {
 
 // Which knob listens to which mode: 0 = wet modes, 1 = loop modes, 2 = shared.
 constexpr int kKnobMode[6] = {0, 2, 1, 0, 2, 1};
+
+// A bare ink-and-paper switch for the hidden panel's CLASSIC row: the same
+// language as the DIP row, at a size that suits a full-width row.
+struct SwitchLook : juce::LookAndFeel_V4 {
+    void drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool, bool) override {
+        const float u = b.getWidth() / 44.f;
+        g.addTransform(juce::AffineTransform::scale(u));
+        const auto track = juce::Rectangle<float>(0, 0, 44.f, b.getHeight() / u).withSizeKeepingCentre(44.f, 24.f);
+        g.setColour(kInk); g.fillRect(track);
+        const bool on = b.getToggleState();
+        const auto handle = juce::Rectangle<float>(18, 20).withCentre({on ? track.getRight() - 11 : track.getX() + 11, track.getCentreY()});
+        g.setColour(kPaper); g.fillRect(handle);
+        if (b.hasKeyboardFocus(true)) { g.setColour(kMuted); g.drawRect(track.expanded(3), 1.5f); }
+    }
+};
+SwitchLook switchLook;
 }  // namespace
 
 // ───────── look and feel ─────────
@@ -329,6 +345,27 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         showReadout("PATCH", presetBox.getText().toLowerCase());
     };
     addAndMakeVisible(presetBox);
+    hiddenButton.setButtonText("HIDDEN  *");
+    hiddenButton.setTitle("Hidden options");
+    hiddenButton.setColour(juce::TextButton::buttonColourId, kInk);
+    hiddenButton.setColour(juce::TextButton::buttonOnColourId, kInk);
+    hiddenButton.setColour(juce::TextButton::textColourOffId, kPaper);
+    hiddenButton.setColour(juce::TextButton::textColourOnId, kPaper);
+    hiddenButton.onClick = [this] {
+        hiddenOpen = !hiddenOpen;
+        hiddenButton.setButtonText(hiddenOpen ? "CLOSE  x" : "HIDDEN  *");
+        // Invert while open: the button then sits on the panel's black title band.
+        hiddenButton.setColour(juce::TextButton::buttonColourId, hiddenOpen ? kPaper : kInk);
+        hiddenButton.setColour(juce::TextButton::buttonOnColourId, hiddenOpen ? kPaper : kInk);
+        hiddenButton.setColour(juce::TextButton::textColourOffId, hiddenOpen ? kInk : kPaper);
+        if (hiddenPanel != nullptr) { hiddenPanel->setVisible(hiddenOpen); if (hiddenOpen) hiddenPanel->toFront(false); }
+        hiddenButton.toFront(false);
+        showReadout(hiddenOpen ? "HIDDEN" : "READY", hiddenOpen ? "the options under the options" : "Tap L to loop, A for wet");
+    };
+    addAndMakeVisible(hiddenButton);
+    hiddenPanel = std::make_unique<HiddenPanel>(proc);
+    hiddenPanel->setVisible(false);
+    addAndMakeVisible(*hiddenPanel);
     setWantsKeyboardFocus(true);
     setResizable(true, true);
     setResizeLimits(675, 480, 1800, 1280);   // 900x640 design size, 0.75x to 2x
@@ -354,6 +391,73 @@ void MoodEditor::showReadout(const juce::String& label, const juce::String& valu
     if (label == lcdLabel && value == lcdValue) return;
     lcdLabel = label; lcdValue = value;
     repaintDesign(lcdArea);
+}
+
+
+// ───────── hidden options ─────────
+MoodEditor::HiddenPanel::HiddenPanel(MoodProcessor& p) : proc(p) {
+    const std::pair<const char*, juce::Slider*> defs[] = {
+        {"tone", &tone}, {"fade", &fade}, {"width", &width}, {"wetDiv", &wetDiv}, {"loopDiv", &loopDiv}};
+    for (size_t i = 0; i < 5; ++i) {
+        auto* sl = defs[i].second;
+        sl->setSliderStyle(juce::Slider::LinearHorizontal);
+        sl->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        addAndMakeVisible(*sl);
+        sliderAtt[i] = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, defs[i].first, *sl);
+    }
+    classic.setTitle("Classic (MK I quirks)");
+    classic.setLookAndFeel(&switchLook);
+    addAndMakeVisible(classic);
+    classicAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "classic", classic);
+}
+
+void MoodEditor::HiddenPanel::resized() {
+    const float u = getWidth() / 520.f;
+    auto place = [u](juce::Component& c, juce::Rectangle<int> d) { c.setBounds(d.transformedBy(juce::AffineTransform::scale(u))); };
+    for (int i = 0; i < 5; ++i) {
+        rowDesign[i] = {92, 68 + i * 56, 340, 22};
+        place(*sliders[static_cast<size_t>(i)], rowDesign[i]);
+    }
+    place(classic, {16, 404, 220, 64});
+}
+
+void MoodEditor::HiddenPanel::paint(juce::Graphics& g) {
+    const float u = getWidth() / 520.f;
+    g.addTransform(juce::AffineTransform::scale(u));
+    const auto b = juce::Rectangle<int>(0, 0, 520, juce::roundToInt(getHeight() / u));
+    g.setColour(kPaper); g.fillRect(b);
+    g.setColour(kInk); g.drawRect(b, 2);
+    auto head = b.withHeight(34);
+    g.fillRect(head);
+    g.setColour(kPaper); g.setFont(font(15));
+    g.drawText("*  HIDDEN OPTIONS", head.reduced(12, 0), juce::Justification::centredLeft);
+    g.setColour(kMuted); g.setFont(font(13));
+    g.drawText("On the pedal these live behind both footswitches.", 16, 40, 488, 18, juce::Justification::centredLeft);
+
+    // One short line under each control: what it is, and what moving it costs.
+    static const char* names[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV"};
+    static const char* ids[] = {"tone", "fade", "width", "wetDiv", "loopDiv"};
+    static const char* hints[] = {
+        "hi-cut on the wet side. right is open, left is soft and far away.",
+        "what survives an overdub. left keeps the pedal's slow erosion.",
+        "how far apart the two speakers sit. middle is the image as built.",
+        "the wet side runs slower, so the room and the echo stretch out.",
+        "the loop runs slower: lower, longer, further from the other side."};
+    for (int i = 0; i < 5; ++i) {
+        g.setColour(kInk); g.setFont(font(14));
+        g.drawText(names[i], 16, rowDesign[i].getY(), 74, rowDesign[i].getHeight(), juce::Justification::centredLeft);
+        g.setColour(kMuted); g.setFont(font(12));
+        g.drawText(proc.describe(ids[i]), 436, rowDesign[i].getY(), 68, rowDesign[i].getHeight(), juce::Justification::centredRight);
+        g.setColour(kLine);
+        g.drawHorizontalLine(rowDesign[i].getBottom() + 2, 16.f, 504.f);
+        g.setColour(kMuted); g.setFont(font(11));
+        g.drawFittedText(hints[i], 16, rowDesign[i].getBottom() + 4, 488, 16, juce::Justification::centredLeft, 1);
+    }
+    g.setColour(kInk); g.setFont(font(14));
+    g.drawText("CLASSIC", 16, 404, 74, 18, juce::Justification::centredLeft);
+    g.setColour(kMuted); g.setFont(font(11));
+    g.drawFittedText("the MK I in the room: a noisy clock, a loop that never sits still, a reverb that rings.",
+                     16, 470, 488, 32, juce::Justification::centredLeft, 2);
 }
 
 void MoodEditor::resized() {
@@ -424,6 +528,10 @@ void MoodEditor::resized() {
     dipArea.removeFromTop(4);
     balanceDesign = dipArea.removeFromTop(22).withTrimmedLeft(66).withTrimmedRight(34);
     place(balance, balanceDesign);
+
+    hiddenButtonDesign = {pedalArea.getRight() - 146, pedalArea.getY() + 3, 136, 19};
+    place(hiddenButton, hiddenButtonDesign);
+    if (hiddenPanel != nullptr) hiddenPanel->setBounds(pedalArea.transformedBy(view));
     place(presetBox, {574, 556, 292, 26});
 }
 
@@ -438,7 +546,7 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.fillRect(bar);
     g.setColour(kPaper); g.setFont(font(15));
     g.drawText("*  MOOD.EXE   /   A SOUND EXPERIMENT", bar.reduced(11, 0), juce::Justification::centredLeft);
-    for (int x = bar.getX() + 278; x < bar.getRight() - 10; x += 5)
+    for (int x = bar.getX() + 278; x < bar.getRight() - 168; x += 5)
         for (int y = bar.getY() + 7; y < bar.getBottom() - 5; y += 5) g.fillRect(x, y, 2, 2);
     g.setColour(kInk); g.setFont(pixel(30));
     g.drawText("MOOD.", pedalArea.getX() + 23, pedalArea.getY() + 42, 280, 42, juce::Justification::centredLeft);

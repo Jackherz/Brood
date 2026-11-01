@@ -1,0 +1,46 @@
+# HIDDEN OPTIONS: tone hi-cut, stereo width, per-side clock division, overdub
+# fade and classic mode, moved while audio is running so the smoothers are
+# exercised too.
+rate 48000
+seconds 14
+0 param wetMode 0
+0 param loopMode 1
+0 param routing 1
+0 param clock 0.85
+0 param time 0.55
+0 param mix 0.8
+0 param length 0.6
+0 fs wet down
+3 fs wet up
+60 param tone 0.3
+120 param width 1
+180 param width 0
+240 param width 0.62
+300 param wetDiv 0.5
+420 param wetDiv 1
+540 param wetDiv 0
+600 param clock 0.4
+660 param wetMode 1
+700 fs loop down
+760 fs loop up
+800 param modWet 0.35
+900 param fade 0
+1000 fs loop down
+1080 fs loop up
+1100 param fade 1
+1150 param loopDiv 0.5
+1250 param loopDiv 1
+1350 param loopMode 2
+1450 param loopMode 0
+1500 param classic 1
+1700 param tone 1
+1800 param width 0.5
+1900 param classic 0
+2000 param loopDiv 0
+2100 param wetMode 3
+2200 param routing 0
+2300 param wetDiv 0.5
+2400 param clock 0.1
+2500 param tone 0
+2600 fs wet down
+2650 fs wet up

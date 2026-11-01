@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
+const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, divMap, DIV_STEPS, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -416,4 +416,131 @@ test('LOOP START and END trim the region that plays', () => {
   render(core, 0.1, () => 0);
   const swapped = core.state();
   assert.ok(swapped.winLen > 0 && swapped.winLen < core.lsrc, 'inverted markers still leave a region');
+});
+
+// ───────────────────────── hidden options ─────────────────────────
+
+const hfEnergy = (a, from, to) => { let acc = 0; for (let i = Math.floor(from * FS) + 1; i < Math.floor(to * FS); i++) acc += Math.pow(a[i] - a[i - 1], 2); return Math.sqrt(acc / Math.floor((to - from) * FS)); };
+const sideEnergy = (L, R) => { let acc = 0; for (let i = 0; i < L.length; i++) { const d = (L[i] - R[i]) * 0.5; acc += d * d; } return Math.sqrt(acc / L.length); };
+const crossings = (a, from, to) => { let n = 0; for (let i = Math.floor(from * FS) + 1; i < Math.floor(to * FS); i++) if ((a[i - 1] <= 0) !== (a[i] <= 0)) n++; return n / 2 / (to - from); };
+
+const wetCore = (patch) => {
+  const core = new MoodCore(FS);
+  for (const [k, v] of Object.entries(patch)) { core.setParam(k, v); }
+  core.wetOn = true;
+  core.s.mix = patch.mix ?? core.p.mix;
+  return core;
+};
+
+test('clock divisions are stepped 1x, 2x, 4x', () => {
+  assert.deepStrictEqual(DIV_STEPS, [1, 2, 4]);
+  assert.deepStrictEqual([0, 0.2, 0.5, 0.7, 0.8, 1].map(divMap), [1, 1, 2, 2, 4, 4]);
+});
+
+test('TONE is a hi-cut on the wet bus; fully open is bit-transparent', () => {
+  const hf = (value) => {
+    const core = wetCore({ wetMode: 0, mix: 1, time: 0.7, tone: value });
+    core.s.tone = value;
+    const { L } = render(core, 3, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t) + 0.2 * Math.sin(2 * Math.PI * 7000 * t));
+    return hfEnergy(L, 1, 3);
+  };
+  const open = hf(1), shut = hf(0);
+  assert.ok(shut < open * 0.8, `closed ${shut.toFixed(4)} should be darker than open ${open.toFixed(4)}`);
+
+  const plain = new MoodCore(FS);
+  plain.setParam('wetMode', 0); plain.setParam('mix', 1); plain.wetOn = true; plain.s.mix = 1;
+  const a = render(plain, 1, tone(220, 1));
+  const openCore = new MoodCore(FS);
+  openCore.setParam('wetMode', 0); openCore.setParam('mix', 1); openCore.setParam('tone', 1);
+  openCore.wetOn = true; openCore.s.mix = 1; openCore.s.tone = 1;
+  const b = render(openCore, 1, tone(220, 1));
+  assert.deepStrictEqual(Array.from(a.L), Array.from(b.L), 'tone fully open must not filter');
+});
+
+test('STEREO WIDTH keeps 0.5 as built, folds to mono at 0 and doubles at 1', () => {
+  const image = (width) => {
+    const core = wetCore({ wetMode: 0, mix: 1, time: 0.7, width });
+    core.s.width = width;
+    const { L, R } = render(core, 2.5, (t) => 0.3 * Math.sin(2 * Math.PI * 220 * t) + 0.1 * Math.sin(2 * Math.PI * 3100 * t));
+    return sideEnergy(L.slice(FS), R.slice(FS));
+  };
+  const mid = image(0.5), mono = image(0), wide = image(1);
+  assert.ok(mid > 0.005, 'the reverb is stereo to begin with');
+  assert.ok(mono < mid * 0.05, `width 0 should collapse the sides (${mono.toFixed(5)} vs ${mid.toFixed(4)})`);
+  assert.ok(wide > mid * 1.6, `width 1 should widen (${wide.toFixed(4)} vs ${mid.toFixed(4)})`);
+
+  // The neutral setting must be exactly the old behaviour, not just close.
+  const plain = new MoodCore(FS);
+  plain.setParam('wetMode', 0); plain.setParam('mix', 1); plain.wetOn = true; plain.s.mix = 1;
+  const a = render(plain, 1, tone(220, 1));
+  const withWidth = new MoodCore(FS);
+  withWidth.setParam('wetMode', 0); withWidth.setParam('mix', 1); withWidth.setParam('width', 0.5);
+  withWidth.wetOn = true; withWidth.s.mix = 1;
+  const b = render(withWidth, 1, tone(220, 1));
+  assert.deepStrictEqual(Array.from(a.L), Array.from(b.L), 'width 0.5 must be the built image');
+});
+
+test('WET CLOCK DIVISION stretches the wet side only', () => {
+  const echoGap = (wetDiv) => {
+    const core = new MoodCore(FS);
+    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.3);
+    core.setParam('time', 0.3); core.setParam('wetDiv', wetDiv);
+    core.wetOn = true; core.s.mix = 1; core.s.time = 0.3; core.s.modWet = 0.3; core.modeGain = [0, 1, 0, 0];
+    const { L } = render(core, 4, click);
+    return peakTime(L, 0.02, 3.9);
+  };
+  const one = echoGap(0), two = echoGap(0.5), four = echoGap(1);
+  assert.ok(Math.abs(two / one - 2) < 0.1, `2x division: ${one.toFixed(3)} -> ${two.toFixed(3)}`);
+  assert.ok(Math.abs(four / one - 4) < 0.2, `4x division: ${one.toFixed(3)} -> ${four.toFixed(3)}`);
+});
+
+test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
+  const pitch = (loopDiv, loopMode) => {
+    const core = new MoodCore(FS);
+    core.setParam('loopMode', loopMode); core.setParam('mix', 1); core.setParam('loopDiv', loopDiv);
+    core.setParam('clock', 1); core.setParam('time', 0.5);
+    core.s.mix = 1;
+    const { L } = render(core, 6, (t) => 0.35 * Math.sin(2 * Math.PI * 220 * t), {
+      [blk(0.1)]: (c) => { c.footswitch('loop', 'down'); },
+      [blk(0.3)]: (c) => { c.footswitch('loop', 'up'); },
+    });
+    return crossings(L, 3, 5);
+  };
+  const env1 = pitch(0, 0), env2 = pitch(0.5, 0), env4 = pitch(1, 0);
+  assert.ok(Math.abs(env1 - 220) < 12, `loop plays at source pitch (${env1.toFixed(1)})`);
+  assert.ok(Math.abs(env2 - 110) < 8, `half clock, half pitch (${env2.toFixed(1)})`);
+  assert.ok(Math.abs(env4 - 55) < 6, `quarter clock, quarter pitch (${env4.toFixed(1)})`);
+  // The capture itself is not shortened by a division — only its playback.
+  const core = new MoodCore(FS);
+  render(core, 1.2, () => 0.2);
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  const lsrc = core.lsrc;
+  assert.ok(lsrc > 20000, 'the loop still holds a full capture');
+});
+
+test('FADE decides how much of the old loop survives an overdub', () => {
+  const levelAfterOverdub = (fade) => {
+    const core = new MoodCore(FS);
+    core.setParam('loopMode', 1); core.setParam('mix', 0.6); core.setParam('clock', 1); core.setParam('fade', fade);
+    core.s.mix = 0.6; core.s.fade = fade;
+    let src = (t) => 0.3 * Math.sin(2 * Math.PI * 200 * t);
+    render(core, 0.4, src, { [blk(0.1)]: (c) => c.footswitch('loop', 'down'), [blk(0.3)]: (c) => c.footswitch('loop', 'up') });
+    // Two passes of silence through the overdub head.
+    render(core, 4.5, () => 0, { [blk(0.1)]: (c) => c.footswitch('loop', 'down') });
+    return rms(render(core, 0.4, () => 0).L, 0.2, 0.4);
+  };
+  const keep = levelAfterOverdub(0), gone = levelAfterOverdub(1);
+  assert.ok(keep > 0.005, 'FADE 0 keeps the loop, as before');
+  assert.ok(gone < keep * 0.05, `FADE 1 lets the silent overdub wipe it (${gone.toFixed(5)} vs ${keep.toFixed(4)})`);
+});
+
+test('CLASSIC makes the slow clock noisy and the reverb ring', () => {
+  const noiseFloor = (classic) => {
+    const core = wetCore({ wetMode: 0, mix: 1, time: 0.6, clock: 0, classic: classic ? 1 : 0 });
+    const { L } = render(core, 2, () => 0);
+    return rms(L, 1, 2);
+  };
+  const clean = noiseFloor(false), noisy = noiseFloor(true);
+  assert.ok(clean < 1e-6, 'without CLASSIC a silent input stays silent');
+  assert.ok(noisy > 1e-4, `CLASSIC adds clock noise (${noisy.toFixed(5)})`);
 });

@@ -40,6 +40,20 @@ public:
         juce::String keyName;
         bool isDown = false;
     };
+    // The pedal's hidden menu: on the hardware you hold both footswitches. Here it
+    // is a panel over the front panel, so the normal layout stays uncluttered.
+    struct HiddenPanel : juce::Component {
+        explicit HiddenPanel(MoodProcessor& p);
+        void paint(juce::Graphics&) override;
+        void resized() override;
+        MoodProcessor& proc;
+        juce::Slider tone, fade, width, wetDiv, loopDiv;
+        juce::ToggleButton classic;
+        std::array<juce::Slider*, 5> sliders { &tone, &fade, &width, &wetDiv, &loopDiv };
+        std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 5> sliderAtt;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> classicAtt;
+        juce::Rectangle<int> rowDesign[5];
+    };
     struct LoopView : juce::Component {
         explicit LoopView(MoodProcessor& p) : proc(p) {}
         void paint(juce::Graphics&) override;
@@ -74,6 +88,8 @@ private:
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::vector<Dip> dips;
     std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<HiddenPanel> hiddenPanel;
+    juce::TextButton hiddenButton { "HIDDEN" };
 
     // All of these are in DESIGN coordinates (the 900x640 panel); view maps them
     // into the real window. Paint and layout both work in that space.
@@ -81,6 +97,8 @@ private:
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopStartDesign, loopEndDesign;
+    juce::Rectangle<int> hiddenButtonDesign;
+    bool hiddenOpen = false;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.
     float viewScale = 1.f;

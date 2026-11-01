@@ -24,6 +24,8 @@ constexpr int kMaxLoopSamples = kLoopSamples * kMaxLoopSeconds;
 constexpr double kClockMinHz = 2000.0;
 constexpr double kClockMaxHz = 64000.0;
 constexpr double kCoreFs = 64000.0;
+// TONE is a hi-cut on the wet bus: a fixed 2.6 kHz one-pole, blended in by amount.
+constexpr double kToneHz = 2600.0;
 constexpr double kDelayMaxSec = 2.1;
 constexpr double kSlipBufSec = 5.5;
 constexpr double kWeaveBufSec = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
@@ -40,6 +42,14 @@ inline double clockHz(double knob, bool smooth = false) {
 }
 inline double sgn(double x) { return x > 0 ? 1.0 : x < 0 ? -1.0 : 0.0; }
 inline double jsRound(double x) { return std::floor(x + 0.5); }
+
+// Hidden options (on the pedal you hold both footswitches to reach these). The two
+// sides can run on different clock divisions, so the wet side and the loop can
+// drift apart in time and pitch. Mirrors divMap in src/mood-worklet.js.
+inline int divMap(double knob) {
+    static const int steps[3] = {1, 2, 4};
+    return steps[static_cast<size_t>(jsRound(clampd(knob, 0, 1) * (3 - 1)))];
+}
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles
 
 // Tempo sync for time-based effects. The knob becomes a musical division
@@ -335,6 +345,9 @@ struct Params {
     bool sync = false;
     double balance = 0.5, bpm = 120.0;
     double loopStart = 0, loopEnd = 1, memory = 0;   // playback trim + capture ceiling
+    double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
+    double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
+    bool classic = false;                            // hidden: MK I quirks
 };
 
 struct State {
@@ -349,7 +362,7 @@ public:
 
     void prepare(double sampleRate) {
         fs = sampleRate;
-        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance};
+        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width};
         hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1;
         aa = reconL = reconR = LowPass4{};
         prev[0] = prev[1] = cur[0] = cur[1] = 0;
@@ -366,6 +379,7 @@ public:
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         grain[0] = {0, 0}; grain[1] = {0.5, 0};
         rng = 22222;
+        toneL = toneR = 0; wowPh = 0; toneC = 0;
         fsWet = FsWet{}; fsLoop = FsLoop{};
         engaged = 0; peakIn = peakOut = 0;
         loopWaveDirty = false;
@@ -429,6 +443,9 @@ public:
             s.modLoop += (p.modLoop - s.modLoop) * a;
             s.balance += (p.balance - s.balance) * a;
             s.clock += (p.clock - s.clock) * aClock;
+            s.tone += (p.tone - s.tone) * a;
+            s.fade += (p.fade - s.fade) * a;
+            s.width += (p.width - s.width) * a;
             if ((i & 31) == 0) {
                 const double c = clockHz(s.clock, p.smooth) / fs;
                 clockRatio = c;
@@ -444,8 +461,14 @@ public:
             phase += clockRatio;
             while (phase >= 1) { phase -= 1; coreTick(xa); }
             const double f = phase;
-            const double el = reconL.run(prev[0] + (cur[0] - prev[0]) * f);
-            const double er = reconR.run(prev[1] + (cur[1] - prev[1]) * f);
+            double el = reconL.run(prev[0] + (cur[0] - prev[0]) * f);
+            double er = reconR.run(prev[1] + (cur[1] - prev[1]) * f);
+            // STEREO WIDTH: mid/side on the effect bus only — the dry signal must
+            // not move. 0.5 is the image as built, so that setting is untouched.
+            if (std::fabs(s.width - 0.5) > 0.002) {
+                const double mid = (el + er) * 0.5, side = (el - er) * 0.5 * (s.width * 2);
+                el = mid + side; er = mid - side;
+            }
             const double engagedT = wetOn || loopState == LoopState::Play ? 1.0 : 0.0;
             engaged += (engagedT - engaged) * 0.001;
             const double dg = p.dryKill ? 0.0 : 1 - engaged * (1 - std::min(1.0, 2 * (1 - s.mix)));
@@ -490,7 +513,7 @@ public:
     int capturedLength() const { return lsrc; }
 
 private:
-    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance; };
+    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width; };
     struct FsWet { bool active = false; int64_t t = 0; bool held = false; };
     struct FsLoop { bool active = false; int64_t t = 0; bool held = false; int histIdx = 0; uint32_t histCycle = 0; bool playing = false; };
     struct Grain { double ph, start; };
@@ -522,8 +545,15 @@ private:
     FsWet fsWet; FsLoop fsLoop;
     double engaged = 0, peakIn = 0, peakOut = 0;
     bool loopWaveDirty = false;
+    double toneL = 0, toneR = 0, wowPh = 0, toneC = 0;   // hidden-option state
 
     double rand01() { rng = rng * 1103515245u + 12345u; return rng / 4294967296.0; }
+
+    // One-pole coefficient for the TONE hi-cut; the blend amount is the caller's.
+    double toneCoeff() {
+        if (toneC == 0) toneC = 1 - std::exp((-kTau * kToneHz) / kCoreFs);
+        return toneC;
+    }
 
     // How much history a capture may use, in core samples. MEMORY 0 keeps the
     // pedal's clock-derived capacity; above that it is 1–30 s of real time.
@@ -575,6 +605,10 @@ private:
         const double Wd = W;
         const int mode = p.loopMode;
         const double m = s.modLoop;
+        // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
+        // loop plays back slower and lower and takes div times as long to come round.
+        const double ldivd = divMap(p.loopDiv);
+        const double lstep = 1 / ldivd;
         double pos = jsMod(loopPos, Wd); if (pos < 0) pos += Wd;
         auto rd = [&](double q0) {
             double q = jsMod(q0, Wd); if (q < 0) q += Wd;
@@ -589,10 +623,13 @@ private:
 
         if (mode == 2) {
             const double G = std::min(expMap(s.length, 0.01 * kCoreFs, 0.5 * kCoreFs), Wd);
+            // A divided loop stretches each grain by div as well, or the grains
+            // would still be read at full speed.
+            const double Gs = G * ldivd;
             const double dir = stretchSpeed < 0 ? -1.0 : 1.0;
             y = 0;
             for (auto& g : grain) {
-                g.ph += 1 / G;
+                g.ph += 1 / Gs;
                 if (g.ph >= 1) { g.ph -= 1; g.start = pos + (rand01() - 0.5) * 0.2 * G; }
                 const double q = g.start + dir * g.ph * G;
                 const double sw = std::sin(kPi * g.ph);
@@ -601,11 +638,11 @@ private:
             const double normal = clampd((m - 0.97) / 0.03, 0, 1);
             y = y * (1 - normal) + rd(pos) * edgeAt(pos) * normal;
             stretchSpeed += (stretchMap(m) - stretchSpeed) * 0.001;
-            pos += stretchSpeed;
+            pos += stretchSpeed * lstep;
         } else if (mode == 1) {
             y = rd(pos) * edgeAt(pos);
             tapeSpeed += (speedMap(m, 0.04) - tapeSpeed) * 0.00025;
-            pos += tapeSpeed;
+            pos += tapeSpeed * lstep;
         } else {
             const double thr = expMap(1 - m, 0.008, 0.35);
             if (env > thr) {
@@ -620,16 +657,26 @@ private:
                 if (slicePh >= S) slicePh -= S;
                 const double F2 = std::min(0.004 * kCoreFs, S / 4);
                 sl = rd(sliceStart + slicePh) * std::min({1.0, slicePh / F2, (S - slicePh) / F2});
-                slicePh += 1;
+                slicePh += lstep;
             }
             y = mainV * (1 - envMix) + sl * envMix;
-            pos += 1;
+            pos += lstep;
+        }
+
+        // CLASSIC: the MK I looper never sat still — a slow wow with a little flutter.
+        if (p.classic) {
+            wowPh += (kTau * 0.9) / kCoreFs;
+            if (wowPh > kTau) wowPh -= kTau;
+            pos += 0.006 * std::sin(wowPh) + 0.002 * std::sin(wowPh * 5.7);
         }
 
         if (overdub) {
+            // FADE: how much of the old loop survives each overdub pass. 0 keeps
+            // the pedal's slow decay; 1 lets the new layer replace it completely.
+            const double keep = 0.97 * (1 - clampd(s.fade, 0, 1));
             int q = static_cast<int>(jsMod(std::floor(mode == 1 ? loopPos : pos), Wd)); if (q < 0) q += W;
             float& cell = loopBuf[static_cast<size_t>(start + q)];
-            cell = static_cast<float>(cell * 0.97 + x);
+            cell = static_cast<float>(cell * keep + x);
         }
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);
         return y * loopGain;
@@ -644,10 +691,16 @@ private:
         wetOut += (outT - wetOut) * 0.003;
         for (int k = 0; k < 4; ++k) modeGain[k] += ((p.wetMode == k ? 1.0 : 0.0) - modeGain[k]) * 0.002;
 
-        const double wIn = wetSrc * wetIn;
+        // WET CLOCK DIVISION: the wet side runs at 1/div of the clock, so every
+        // time constant on that side is div times longer.
+        const double wdiv = divMap(p.wetDiv);
+        // CLASSIC: the MK I clock was noisy, most of all when it was slow.
+        const double hiss = p.classic ? (rand01() * 2 - 1) * (0.0006 + 0.01 * (1 - clockRatio)) : 0.0;
+        const double wIn = wetSrc * wetIn + hiss;
         double wl = 0, wr = 0;
         if (modeGain[0] > 1e-4) {
-            reverb.setDecay(expMap(s.time, 0.4, 25), expMap(s.time, 0.35, 1));
+            // CLASSIC: the MK I reverb rings far longer than the MK II's.
+            reverb.setDecay(expMap(s.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(s.time, 0.35, 1));
             const double* o = reverb.tick(wIn, s.modWet, freeze, s.time > 0.985);
             wl += o[0] * modeGain[0]; wr += o[1] * modeGain[0];
         }
@@ -657,12 +710,13 @@ private:
             // current clock so the echoed note stays on the beat at any clock setting.
             double delayTicks = expMap(s.time, 0.02 * kCoreFs, 2 * kCoreFs);
             if (p.sync) delayTicks = clampd(syncSeconds(p.bpm, s.time) * clockRatio * fs, 1.0, kDelayMaxSec * kCoreFs * 0.95);
+            delayTicks = clampd(delayTicks * wdiv, 1.0, kDelayMaxSec * kCoreFs * 0.95);
             mono += delay.tick(wIn, delayTicks, s.modWet, freeze) * modeGain[1];
         }
-        if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(s.time, 0.05 * kCoreFs, 1.5 * kCoreFs), slipSpeedMap(s.modWet), freeze) * modeGain[2];
+        if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(s.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(s.modWet), freeze) * modeGain[2];
         if (modeGain[3] > 1e-4) {
             double o[2];
-            weave.tick(wIn, 0.2 + s.time * 2.6, s.modWet, freeze, o);
+            weave.tick(wIn, std::min(2.8, (0.2 + s.time * 2.6) * wdiv), s.modWet, freeze, o);
             wl += o[0] * modeGain[3]; wr += o[1] * modeGain[3];
         }
         wl += mono;
@@ -670,6 +724,14 @@ private:
         if (p.spread) {
             const double mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * 1.6;
             wl = mid + side; wr = mid - side;
+        }
+        // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
+        const double toneAmt = 1 - clampd(s.tone, 0, 1);
+        if (toneAmt > 1e-4) {
+            const double c = toneCoeff();
+            toneL += c * (wl - toneL); toneR += c * (wr - toneR);
+            wl += (toneL - wl) * toneAmt;
+            wr += (toneR - wr) * toneAmt;
         }
         wl *= wetOut; wr *= wetOut;
 

@@ -45,6 +45,14 @@ const SYNC_DIVISIONS = [
 const syncIndex = (knob) => Math.round(clamp(knob, 0, 1) * (SYNC_DIVISIONS.length - 1));
 const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
 const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, DELAY_MAX_SEC * 0.95);
+// Hidden options (on the pedal you hold both footswitches to reach these).
+// The two sides can run on different clock divisions, so the wet side and the
+// loop can drift apart in time and pitch.
+const DIV_STEPS = [1, 2, 4];
+const divMap = (knob) => DIV_STEPS[Math.round(clamp(knob, 0, 1) * (DIV_STEPS.length - 1))];
+// TONE is a hi-cut on the wet bus: a fixed 2.6 kHz one-pole, blended in by amount.
+const TONE_HZ = 2600;
+
 const clockHz = (knob, smooth = false) => smooth
   ? expMap(clamp(knob, 0, 1), CLOCK_MIN_HZ, CLOCK_MAX_HZ)
   : CLOCK_STEPS[Math.round(clamp(knob, 0, 1) * (CLOCK_STEPS.length - 1))];
@@ -346,9 +354,11 @@ class MoodCore {
       trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
       loopStart: 0, loopEnd: 1, memory: 0,
+      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0,
     };
     // host-rate smoothed knobs
-    this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5 };
+    this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5,
+      tone: 1, fade: 0, width: 0.5 };
     this.hostCount = 0;
     this.phase = 0;
     this.clockRatio = 1;
@@ -393,6 +403,8 @@ class MoodCore {
     this.slice = { start: 0, ph: 0 };
     this.grain = [{ ph: 0, start: 0 }, { ph: 0.5, start: 0 }];
     this.rng = 22222;
+    this.toneL = 0; this.toneR = 0;              // TONE hi-cut state
+    this.wowPh = 0;                              // CLASSIC loop wobble
 
     this.fsDown = { wet: null, loop: null };   // press state for footswitches
     this.engaged = 0;
@@ -495,6 +507,13 @@ class MoodCore {
 
   rand() { this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0; return this.rng / 4294967296; }
 
+  // One-pole coefficient for the TONE hi-cut. The amount of cut is the caller's;
+  // this is only the filter's corner, worked out once.
+  toneCoeff() {
+    if (this.toneC === undefined) this.toneC = 1 - Math.exp((-TAU * TONE_HZ) / CORE_FS);
+    return this.toneC;
+  }
+
   loopTick(x) {
     // The detector and overdub use clean input, even when the wet channel is on.
     const fs = CORE_FS;
@@ -510,6 +529,10 @@ class MoodCore {
     const buf = this.loopBuf;
     const mode = this.p.loopMode;
     const m = this.s.modLoop;
+    // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
+    // loop plays back slower and lower and takes div times as long to come round.
+    const ldiv = divMap(this.p.loopDiv);
+    const lstep = 1 / ldiv;
     let pos = this.loopPos % W; if (pos < 0) pos += W;
     const rd = (p) => {
       let q = p % W; if (q < 0) q += W;
@@ -525,11 +548,14 @@ class MoodCore {
       // STRETCH: two Hann grains at 1x pitch; LENGTH = grain (slice) size,
       // MODIFY = speed and direction of the position through the loop.
       const G = Math.min(expMap(this.s.length, 0.01 * fs, 0.5 * fs), W);
+      // A divided loop stretches each grain by div as well, or the grains would
+      // still be read at full speed and the division would only thin them out.
+      const Gs = G * ldiv;
       const dir = this.stretchSpeed < 0 ? -1 : 1;
       y = 0;
       for (let k = 0; k < 2; k++) {
         const g = this.grain[k];
-        g.ph += 1 / G;
+        g.ph += 1 / Gs;
         if (g.ph >= 1) { g.ph -= 1; g.start = pos + (this.rand() - 0.5) * 0.2 * G; }
         const p = g.start + dir * g.ph * G;
         const sw = Math.sin(Math.PI * g.ph);
@@ -539,12 +565,12 @@ class MoodCore {
       const normal = clamp((m - 0.97) / 0.03, 0, 1);
       y = y * (1 - normal) + rd(pos) * edgeAt(pos) * normal;
       this.stretchSpeed += (stretchMap(m) - this.stretchSpeed) * 0.001;
-      pos += this.stretchSpeed;
+      pos += this.stretchSpeed * lstep;
     } else if (mode === 1) {
       // TAPE: LENGTH = loop length, MODIFY = speed and direction (pitch follows)
       y = rd(pos) * edgeAt(pos);
       this.tapeSpeed += (speedMap(m, 0.04) - this.tapeSpeed) * 0.00025;
-      pos += this.tapeSpeed;
+      pos += this.tapeSpeed * lstep;
     } else {
       // ENV: playing interrupts the loop. The slice under the playhead when you
       // hit a note repeats until you stop; then the loop carries on in time.
@@ -567,16 +593,26 @@ class MoodCore {
         if (sl0.ph >= S) sl0.ph -= S;
         const F2 = Math.min(0.004 * fs, S / 4);
         sl = rd(sl0.start + sl0.ph) * Math.min(1, sl0.ph / F2, (S - sl0.ph) / F2);
-        sl0.ph += 1;
+        sl0.ph += lstep;
       }
       y = main * (1 - this.envMix) + sl * this.envMix;
-      pos += 1;
+      pos += lstep;
+    }
+
+    // CLASSIC: the MK I looper never sat still — a slow wow with a little flutter.
+    if (this.p.classic) {
+      this.wowPh += (TAU * 0.9) / CORE_FS;
+      if (this.wowPh > TAU) this.wowPh -= TAU;
+      pos += 0.006 * Math.sin(this.wowPh) + 0.002 * Math.sin(this.wowPh * 5.7);
     }
 
     if (this.overdub) {
+      // FADE: how much of the old loop survives each overdub pass. 0 keeps the
+      // pedal's slow decay; 1 lets the new layer replace it completely.
+      const keep = 0.97 * (1 - clamp(this.s.fade));
       let q = Math.floor(mode === 1 ? this.loopPos : pos) % W; if (q < 0) q += W;
       const i = start + q;
-      buf[i] = buf[i] * 0.97 + x;
+      buf[i] = buf[i] * keep + x;
     }
     this.loopPos = ((pos % W) + W) % W;
     return y * this.loopGain;
@@ -596,11 +632,17 @@ class MoodCore {
     for (let k = 0; k < 4; k++) this.modeGain[k] += ((p.wetMode === k ? 1 : 0) - this.modeGain[k]) * 0.002;
 
     const freeze = this.freeze;
-    const wIn = wetSrc * this.wetIn;
+    // WET CLOCK DIVISION: the wet side runs at 1/div of the clock, so every time
+    // constant on that side is div times longer.
+    const wdiv = divMap(p.wetDiv);
+    // CLASSIC: the MK I clock was noisy, most of all when it was slow.
+    const hiss = p.classic ? (this.rand() * 2 - 1) * (0.0006 + 0.01 * (1 - this.clockRatio)) : 0;
+    const wIn = wetSrc * this.wetIn + hiss;
     let wl = 0, wr = 0;
     const fs = CORE_FS;
     if (this.modeGain[0] > 1e-4) {
-      this.reverb.setDecay(expMap(s.time, 0.4, 25), expMap(s.time, 0.35, 1));
+      // CLASSIC: the MK I reverb rings far longer than the MK II's.
+      this.reverb.setDecay(expMap(s.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(s.time, 0.35, 1));
       const o = this.reverb.tick(wIn, s.modWet, freeze, s.time > 0.985);
       wl += o[0] * this.modeGain[0]; wr += o[1] * this.modeGain[0];
     }
@@ -610,13 +652,14 @@ class MoodCore {
       // current clock so the echoed note stays on the beat at any clock setting.
       let delayTicks = expMap(s.time, 0.02 * fs, 2 * fs);
       if (p.sync) delayTicks = clamp(syncSeconds(p.bpm, s.time) * this.clockRatio * this.fs, 1, DELAY_MAX_SEC * fs * 0.95);
+      delayTicks = clamp(delayTicks * wdiv, 1, DELAY_MAX_SEC * fs * 0.95);
       mono += this.delay.tick(wIn, delayTicks, s.modWet, freeze) * this.modeGain[1];
     }
     if (this.modeGain[2] > 1e-4) {
-      mono += this.slip.tick(wIn, expMap(s.time, 0.05 * fs, 1.5 * fs), slipSpeedMap(s.modWet), freeze) * this.modeGain[2];
+      mono += this.slip.tick(wIn, expMap(s.time, 0.05 * fs, 1.5 * fs) * wdiv, slipSpeedMap(s.modWet), freeze) * this.modeGain[2];
     }
     if (this.modeGain[3] > 1e-4) {
-      const o = this.weave.tick(wIn, 0.2 + s.time * 2.6, s.modWet, freeze);
+      const o = this.weave.tick(wIn, Math.min(2.8, (0.2 + s.time * 2.6) * wdiv), s.modWet, freeze);
       wl += o[0] * this.modeGain[3]; wr += o[1] * this.modeGain[3];
     }
     wl += mono;
@@ -624,6 +667,14 @@ class MoodCore {
     if (p.spread) { // widen reverb too
       const mid = (wl + wr) * 0.5, side = (wl - wr) * 0.5 * 1.6;
       wl = mid + side; wr = mid - side;
+    }
+    // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
+    const toneAmt = 1 - clamp(s.tone);
+    if (toneAmt > 1e-4) {
+      const c = this.toneCoeff();
+      this.toneL += c * (wl - this.toneL); this.toneR += c * (wr - this.toneR);
+      wl += (this.toneL - wl) * toneAmt;
+      wr += (this.toneR - wr) * toneAmt;
     }
     wl *= this.wetOut; wr *= this.wetOut;
 
@@ -674,6 +725,9 @@ class MoodCore {
       s.modLoop += (p.modLoop - s.modLoop) * a;
       s.balance += (p.balance - s.balance) * a;
       s.clock += (p.clock - s.clock) * aClock;
+      s.tone += (p.tone - s.tone) * a;
+      s.fade += (p.fade - s.fade) * a;
+      s.width += (p.width - s.width) * a;
 
       if ((i & 31) === 0) {
         const c = clockHz(s.clock, !!p.smooth) / fs;
@@ -691,8 +745,14 @@ class MoodCore {
       this.phase += this.clockRatio;
       while (this.phase >= 1) { this.phase -= 1; this.coreTick(xa); }
       const f = this.phase;
-      const el = this.reconL.run(this.prev[0] + (this.cur[0] - this.prev[0]) * f);
-      const er = this.reconR.run(this.prev[1] + (this.cur[1] - this.prev[1]) * f);
+      let el = this.reconL.run(this.prev[0] + (this.cur[0] - this.prev[0]) * f);
+      let er = this.reconR.run(this.prev[1] + (this.cur[1] - this.prev[1]) * f);
+      // STEREO WIDTH: mid/side on the effect bus only — the dry signal must not
+      // move. 0.5 is the image as built, so the neutral setting is untouched.
+      if (Math.abs(s.width - 0.5) > 0.002) {
+        const mid = (el + er) * 0.5, side = (el - er) * 0.5 * (s.width * 2);
+        el = mid + side; er = mid - side;
+      }
 
       // dry stays at unity up to noon, then fades; true unity when nothing is engaged
       const engagedT = this.wetOn || this.loopState === 'play' ? 1 : 0;
@@ -812,5 +872,5 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, divMap, DIV_STEPS, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }

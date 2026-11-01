@@ -21,6 +21,9 @@ static void setParam(mood::Params& p, const std::string& n, double v) {
     else if (n == "sync") p.sync = v != 0; else if (n == "bpm") p.bpm = v;
     else if (n == "loopStart") p.loopStart = v; else if (n == "loopEnd") p.loopEnd = v;
     else if (n == "memory") p.memory = v;
+    else if (n == "tone") p.tone = v; else if (n == "fade") p.fade = v; else if (n == "width") p.width = v;
+    else if (n == "wetDiv") p.wetDiv = v; else if (n == "loopDiv") p.loopDiv = v;
+    else if (n == "classic") p.classic = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }
 }
 

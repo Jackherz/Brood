@@ -191,6 +191,23 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
 .below-window svg { vertical-align: middle; margin-left: 3px; color: #181815; }
 .below-window button { border: 0; padding: 0; background: transparent; color: #181815; font: 13px 'Terminal', monospace; white-space: nowrap; }
 .below-window button:hover { text-decoration: underline; }
+.below-actions { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.hidden-menu { margin-top: 19px; border: 2px solid #181815; box-shadow: 5px 5px 0 #181815; background: #f4f3ec; }
+.hidden-head { display: flex; align-items: center; gap: 12px; padding: 11px 16px; border-bottom: 1.5px solid #181815; }
+.hidden-head > span:first-child { font: 26px 'Terminal', monospace; }
+.hidden-head small { display: block; font: 9px 'Pixel', monospace; letter-spacing: .02em; color: #6d6d65; }
+.hidden-head h3 { margin: 4px 0 0; font: 15px 'Terminal', monospace; letter-spacing: .06em; }
+.hidden-note { margin-left: auto; font: 10px 'Terminal', monospace; color: #77776f; white-space: nowrap; }
+.hidden-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px 26px; padding: 14px 16px 16px; }
+.hidden-item { min-width: 0; }
+.hidden-row { display: grid; grid-template-columns: 74px minmax(0,1fr) 84px; align-items: center; gap: 9px; color: #181815; font: 13px 'Terminal', monospace; }
+.hidden-row b { font: 11px 'Terminal', monospace; color: #52524c; text-align: right; white-space: nowrap; }
+.hidden-item small { display: block; margin: 3px 0 0; font: 9px/1.5 'Space Mono', monospace; color: #6d6d65; }
+.hidden-switch { display: flex; align-items: center; gap: 9px; background: transparent; border: 0; padding: 0; font: 13px 'Terminal', monospace; color: #181815; }
+.hidden-track { display: block; position: relative; width: 44px; height: 24px; background: #181815; }
+.hidden-track span { position: absolute; top: 2px; left: 2px; width: 18px; height: 20px; background: #f7f6ef; transition: left .08s; }
+.hidden-switch.on .hidden-track span { left: 24px; }
+@media (max-width: 760px) { .hidden-grid { grid-template-columns: 1fr; } .hidden-note { display: none; } }
 .guide { margin-top: 19px; border: 2px solid #181815; box-shadow: 5px 5px 0 #181815; background: #f9f8f2; }
 .guide-title { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1.5px solid #181815; }
 .guide-title > span { font: 32px 'Terminal', monospace; }

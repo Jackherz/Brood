@@ -34,6 +34,22 @@ static double rms(const std::vector<float>& a, double s, double e) {
 }
 static bool finite(const std::vector<float>& a) { for (float v : a) if (!std::isfinite(v)) return false; return true; }
 static auto tone(double f, double dur) { return [=](double t) { return t < dur ? 0.4 * std::sin(2 * mood::kPi * f * t) : 0.0; }; }
+static double hfEnergy(const std::vector<float>& a, double s, double e) {
+    double acc = 0;
+    for (size_t i = static_cast<size_t>(s * FS) + 1; i < static_cast<size_t>(e * FS); ++i) { const double d = a[i] - a[i - 1]; acc += d * d; }
+    return std::sqrt(acc / static_cast<double>(static_cast<size_t>((e - s) * FS)));
+}
+static double sideEnergy(const std::vector<float>& L, const std::vector<float>& R) {
+    double acc = 0;
+    for (size_t i = 0; i < L.size(); ++i) { const double d = (L[i] - R[i]) * 0.5; acc += d * d; }
+    return std::sqrt(acc / static_cast<double>(L.size()));
+}
+static double crossings(const std::vector<float>& a, double s, double e) {
+    long n = 0;
+    for (size_t i = static_cast<size_t>(s * FS) + 1; i < static_cast<size_t>(e * FS); ++i)
+        if ((a[i - 1] <= 0) != (a[i] <= 0)) ++n;
+    return n / 2.0 / (e - s);
+}
 static void tap(mood::Core& c, int which) { c.footswitch(which, true); c.footswitch(which, false); }
 
 int main() {
@@ -158,6 +174,87 @@ int main() {
             const double level = rms(o.L, 0.2, 0.9);
             CHECK(level > 0.05, "routing %d: loop silent at balance 100%% (rms %.4f)", r, level);
         }
+    }
+
+    // ───────────────────────── hidden options ─────────────────────────
+    // These use only the public API (a tap on the wet footswitch engages the wet
+    // channel), like the rest of this file.
+    {   // divisions are stepped
+        CHECK(mood::divMap(0) == 1 && mood::divMap(0.5) == 2 && mood::divMap(1) == 4, "divMap steps");
+    }
+    {   // TONE is a hi-cut on the wet bus
+        auto hf = [](double value) {
+            mood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.7; c.p.tone = value;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 3, [](double t) { return 0.4 * std::sin(2 * mood::kPi * 220 * t) + 0.2 * std::sin(2 * mood::kPi * 7000 * t); });
+            return hfEnergy(o.L, 1.5, 3);
+        };
+        const double open = hf(1), shut = hf(0);
+        CHECK(shut < open * 0.8, "tone hi-cut: %.4f vs %.4f", shut, open);
+    }
+    {   // STEREO WIDTH: 0 mono, 0.5 the built image, 1 wider
+        auto image = [](double width) {
+            mood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.7; c.p.width = width;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 2.5, [](double t) { return 0.3 * std::sin(2 * mood::kPi * 220 * t) + 0.1 * std::sin(2 * mood::kPi * 3100 * t); });
+            return sideEnergy(o.L, o.R);
+        };
+        const double mid = image(0.5), mono = image(0), wide = image(1);
+        CHECK(mid > 0.005, "reverb is stereo (%.4f)", mid);
+        CHECK(mono < mid * 0.05, "width 0 collapses the sides (%.5f vs %.4f)", mono, mid);
+        CHECK(wide > mid * 1.6, "width 1 widens (%.4f vs %.4f)", wide, mid);
+    }
+    {   // WET CLOCK DIVISION stretches the wet side only
+        auto gap = [](double wetDiv) {
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.3;
+            c.p.time = 0.3; c.p.wetDiv = wetDiv;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 6, [](double t) { return t > 1.0 && t < 1.002 ? 0.8 : 0.0; });
+            size_t at = 0; float best = 0;
+            for (size_t i = static_cast<size_t>(1.02 * FS); i < o.L.size(); ++i)
+                if (std::fabs(o.L[i]) > best) { best = std::fabs(o.L[i]); at = i; }
+            return at / FS - 1.0;
+        };
+        const double one = gap(0), two = gap(0.5), four = gap(1);
+        CHECK(std::fabs(two / one - 2) < 0.1, "wet div 2x: %.3f -> %.3f", one, two);
+        CHECK(std::fabs(four / one - 4) < 0.2, "wet div 4x: %.3f -> %.3f", one, four);
+    }
+    {   // LOOP CLOCK DIVISION drops the loop pitch
+        auto pitch = [](double loopDiv) {
+            mood::Core c; c.p.loopMode = 0; c.p.mix = 1; c.p.loopDiv = loopDiv; c.p.clock = 1; c.p.time = 0.5;
+            c.prepare(FS);
+            auto o = render(c, 6, [](double t) { return 0.35 * std::sin(2 * mood::kPi * 220 * t); },
+                            [](mood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(0.3)) cc.footswitch(1, false); });
+            return crossings(o.L, 3, 5);
+        };
+        const double p1 = pitch(0), p2 = pitch(0.5), p4 = pitch(1);
+        CHECK(std::fabs(p1 - 220) < 12, "loop pitch 1x = %.1f", p1);
+        CHECK(std::fabs(p2 - 110) < 8, "loop pitch 2x = %.1f", p2);
+        CHECK(std::fabs(p4 - 55) < 6, "loop pitch 4x = %.1f", p4);
+    }
+    {   // FADE: a silent overdub can replace the old loop
+        auto level = [](double fade) {
+            mood::Core c; c.p.loopMode = 1; c.p.mix = 0.6; c.p.clock = 1; c.p.fade = fade;
+            c.prepare(FS);
+            render(c, 0.4, tone(200, 5), [](mood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(0.3)) cc.footswitch(1, false); });
+            render(c, 4.5, [](double) { return 0.0; }, [](mood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); });
+            auto o = render(c, 0.4, [](double) { return 0.0; });
+            return rms(o.L, 0.2, 0.4);
+        };
+        const double keep = level(0), gone = level(1);
+        CHECK(keep > 0.005, "fade 0 keeps the loop (%.4f)", keep);
+        CHECK(gone < keep * 0.05, "fade 1 wipes it (%.5f vs %.4f)", gone, keep);
+    }
+    {   // CLASSIC: the slow clock is noisy
+        auto noise = [](bool classic) {
+            mood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 2, [](double) { return 0.0; });
+            return rms(o.L, 1, 2);
+        };
+        const double clean = noise(false), noisy = noise(true);
+        CHECK(clean < 1e-6, "silence stays silent (%.6f)", clean);
+        CHECK(noisy > 1e-4, "classic clock noise (%.5f)", noisy);
     }
     {   // speed maps hit musical anchors
         CHECK(mood::speedMap(0.5) == 0.5 && mood::speedMap(1) == 4 && mood::speedMap(0) == -4, "speedMap");
