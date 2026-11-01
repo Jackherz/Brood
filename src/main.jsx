@@ -21,7 +21,16 @@ const syncIndex = (knob) => Math.round(clamp(knob) * (SYNC_DIVISIONS.length - 1)
 const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
 const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, 2.1 * 0.95);
 const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
+// The loop trim, mirroring the worklet: a memory ceiling of one second at the
+// far left (the pedal's own buffer) up to half a minute at the right.
 const memoryText = (v) => v <= 0.001 ? 'PEDAL' : `${expMap(v, 1, 30).toFixed(1)}s`;
+// The ramp engine, mirrored from src/mood-worklet.js.
+const RAMP_TARGETS = ['STILL', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE'];
+const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
+const rampIndex = (v, names) => Math.round(clamp(v) * (names.length - 1));
+const rampValue = (index, names) => names.length < 2 ? 0 : index / (names.length - 1);
+const rampHertz = (v) => expMap(clamp(v), 0.05, 8);
+const rampHint = (v) => `${(1 / rampHertz(v)).toFixed(1)}s A TURN`;
 // Hidden options mirror src/mood-worklet.js: the sides can run on divided clocks.
 const DIV_STEPS = [1, 2, 4];
 const divIndex = (v) => Math.round(clamp(v, 0, 1) * (DIV_STEPS.length - 1));
@@ -32,6 +41,7 @@ const BASE = {
   trails: 0, dryKill: 0, latch: 0, spread: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopStart: 0, loopEnd: 1,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0,
+  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', params: BASE },
@@ -90,7 +100,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth', 'sync'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'dryKill', 'latch', 'spread', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -126,6 +136,10 @@ function describe(id, p) {
   if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;
   if (id === 'width') return v < 0.49 ? `NARROW ${percent(v * 2)}` : v > 0.51 ? `WIDE ${percent((v - 0.5) * 2)}` : 'AS BUILT';
   if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1× CLOCK' : `${d}× SLOWER`; }
+  if (id === 'rampWet' || id === 'rampLoop') return RAMP_TARGETS[rampIndex(v, RAMP_TARGETS)];
+  if (id === 'rampWave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES)];
+  if (id === 'rampSpeed') return rampHint(v);
+  if (id === 'rampUni' || id === 'bounce' || id === 'sweep') return v ? 'ON' : 'OFF';
   return percent(v);
 }
 
@@ -375,6 +389,37 @@ function HiddenMenu({ params, onChange }) {
   </section>;
 }
 
+// One ramp destination. Arrows step through the list so the cell stays big.
+function Stepper({ label, names, value, onChange, hint }) {
+  const index = rampIndex(value, names);
+  const step = (d) => onChange(rampValue((index + d + names.length) % names.length, names));
+  return <div className="stepper" role="group" aria-label={`${label}: ${hint}`}>
+    <button type="button" aria-label={`previous ${label}`} onClick={() => step(-1)}>◀</button>
+    <span className="stepper-cap">{label}</span>
+    <b title={hint}>{names[index]}</b>
+    <button type="button" aria-label={`next ${label}`} onClick={() => step(1)}>▶</button>
+  </div>;
+}
+
+// The ramps: two tides, one shape, one rate, and the two dips that bend them.
+function RampPanel({ params, onChange }) {
+  return <div className="ramp-panel">
+    <div className="side-rule ramp-heading"><span>THE RAMPS</span><span>⇅ SLOW TIDE</span></div>
+    <div className="ramp-grid">
+      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="which part of the wet side drifts"/>
+      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="which part of the loop drifts"/>
+      <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="the shape of the tide"/>
+      <label className="rate-row"><span>RATE</span>
+        <input aria-label="Ramp speed" type="range" min="0" max="1" step="0.005" value={params.rampSpeed} onChange={(event) => onChange('rampSpeed', Number(event.target.value))}/>
+        <b>{rampHint(params.rampSpeed)}</b>
+      </label>
+    </div>
+    <div className="dips ramp-dips">
+      {[['rampUni', 'UNI'], ['bounce', 'BOUNCE'], ['sweep', 'SWEEP']].map(([id, label]) => <Dip key={id} label={label} checked={params[id]} onClick={() => onChange(id, params[id] ? 0 : 1)}/>)}
+    </div>
+  </div>;
+}
+
 function Dip({ label, checked, onClick }) {
   return <button type="button" className="dip" role="switch" aria-checked={!!checked} aria-label={label} onClick={onClick}>
     <span className={`dip-track ${checked ? 'on' : ''}`}><span /></span><span>{label}</span>
@@ -563,6 +608,7 @@ function App() {
               <b>BPM</b>
             </label>
             <label className="level-row balance-row"><span>WET / LOOP</span><input aria-label="Wet and loop balance" type="range" min="0" max="1" step="0.01" value={params.balance} onChange={(e) => update('balance', Number(e.target.value))}/><b>{Math.round(params.balance * 100)}</b></label>
+            <RampPanel params={params} onChange={update}/>
             <div className="side-note"><Heart size={15}/><span>GOOD THINGS HAPPEN<br/>WHEN YOU GET LOST.</span><Spark size={14}/></div>
           </div>
         </aside>
@@ -589,6 +635,7 @@ function App() {
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>START / END <span>/ loop trim</span></dt><dd>The two edges of what you kept. Move START in and you begin later in the moment; pull END back and you let go sooner. Everything outside the pair still shows in the waveform, dimmed, so you can hear where you were.</dd></div>
+          <div><dt>THE RAMPS <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
           <div><dt>HIDDEN MENU <span>/ the options under the options</span></dt><dd>Five more controls and one switch, kept off the front panel the way the pedal hides them behind both footswitches. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>

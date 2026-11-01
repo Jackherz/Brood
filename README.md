@@ -269,7 +269,8 @@ the effect. Changes are applied at audio-block boundaries:
 | CC | Control |
 | --- | --- |
 | 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
-| 20 | Loop memory (the pedal's Ramp Speed slot, reused) |
+| 20 | Ramp speed (the pedal's own automation target) |
+| 66, 67 | Bounce, Sweep (`0` off, `1–127` on) |
 | 53, 54 | Wet and loop clock division |
 | 71 | Classic mode (`0` off, `1–127` on) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
@@ -279,17 +280,18 @@ the effect. Changes are applied at audio-block boundaries:
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware MOOD controller
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
-by automating the `wetMode` parameter (value 3) instead. CC 20 drives loop memory
-because this build has no ramp generator to put there; START and END have no CC in
-the pedal's map and are host-only parameters.
+by automating the `wetMode` parameter (value 3) instead. CC 20 is ramp speed and
+66/67 are the two ramp dips, as on the pedal. The ramp destinations (RAMPS wet and
+loop), the shape and polarity have no CC in the MOOD map — they live in the hidden
+menu there — so automate the `rampWet`, `rampLoop`, `rampWave` and `rampUni`
+parameters instead. Loop memory, START and END are host-only parameters too.
 
 Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
 it on in the editor.
 
-The browser version does not receive MIDI. The ramp engine — RAMPS, BOUNCE,
-SWEEP, POLARITY, RAMP SPEED and the ramping waveform — is the one large thing still
-missing; see [ROADMAP.md](ROADMAP.md). MIDI clock sync, expression/CV, synth mode,
-MISO, true bypass and the remaining hardware DIP switches are not implemented. Automatable native parameters are
+The browser version does not receive MIDI. MIDI clock sync, expression/CV, synth
+mode, MISO, true bypass, the direct micro-loop blend and the remaining hardware
+DIP switches are not implemented. Automatable native parameters are
 available to the host; the wet/loop footswitch parameters are momentary controls.
 
 ## The whispers
@@ -366,6 +368,18 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   while the loop drops an octave or two, or the other way round. **CLASSIC**
   restores MK I manners: a noisy clock that hisses most at low settings, a loop
   that never sits still (wow and flutter), and a reverb that rings far longer.
+- **THE RAMPS** are the pedal's function generators, one per channel, and the
+  reason it is more than four effects. Each side has a destination — TIME, MIX,
+  LENGTH, MODIFY (that channel's own modify knob), CLOCK or BALANCE — and a
+  generator writes into it, added on top of where the knob sits and rebuilt from
+  the knob every sample. Five shapes (triangle, square, sine, random, smooth
+  random), one rate for both sides, from one cycle every twenty seconds up to
+  eight a second. **UNI** keeps the swing above the knob instead of either side
+  of it; **BOUNCE** reflects the phase so it never snaps back; **SWEEP** drops the
+  shape and climbs, restarting from the bottom. In the editor the two destination
+  cells step with their arrows, the rate is the RATE slider and the three
+  switches sit in the same panel — on the pedal these are the dips, so the editor
+  is the comfortable place to reach them.
 - **TRAILS**, **DRY KILL**, **LATCH**, **SPREAD**, **SYNC** and wet/loop balance
   are modelled. Stereo input is kept separate with SPREAD off. The exact stereo
   movement, filters, transient response, control curves, reverb and grains differ

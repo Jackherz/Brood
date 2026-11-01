@@ -50,6 +50,19 @@ inline int divMap(double knob) {
     static const int steps[3] = {1, 2, 4};
     return steps[static_cast<size_t>(jsRound(clampd(knob, 0, 1) * (3 - 1)))];
 }
+
+// ───── RAMPS ─────
+// Each channel has a function generator that can drive one control. The first
+// position is off; MODIFY means this channel's own MODIFY knob. Mirrors the
+// RAMP_* helpers in src/mood-worklet.js.
+constexpr int kRampTargetCount = 7;
+constexpr int kRampWaveCount = 5;
+inline const char* const kRampTargets[kRampTargetCount] = {"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"};
+inline const char* const kRampWaves[kRampWaveCount] = {"TRI", "SQR", "SIN", "RND", "SMTH"};
+inline int rampTargetIndex(double k) { return static_cast<int>(jsRound(clampd(k, 0, 1) * (kRampTargetCount - 1))); }
+inline int rampWaveIndex(double k) { return static_cast<int>(jsRound(clampd(k, 0, 1) * (kRampWaveCount - 1))); }
+inline double rampHertz(double k) { return expMap(clampd(k, 0, 1), 0.05, 8); }   // one cycle every 20 s … eight a second
+constexpr double kRampDepth = 0.5;
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles
 
 // Tempo sync for time-based effects. The knob becomes a musical division
@@ -348,6 +361,9 @@ struct Params {
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
+    double rampWet = 0, rampLoop = 0;                // RAMPS destination per channel
+    double rampSpeed = 0.45, rampWave = 0;           // rate and shape
+    bool rampUni = false, bounce = false, sweep = false;
 };
 
 struct State {
@@ -362,7 +378,8 @@ public:
 
     void prepare(double sampleRate) {
         fs = sampleRate;
-        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width};
+        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width, p.rampSpeed};
+        e = Eff{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance};
         hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1;
         aa = reconL = reconR = LowPass4{};
         prev[0] = prev[1] = cur[0] = cur[1] = 0;
@@ -443,11 +460,14 @@ public:
             s.modLoop += (p.modLoop - s.modLoop) * a;
             s.balance += (p.balance - s.balance) * a;
             s.clock += (p.clock - s.clock) * aClock;
+            s.rampSpeed += (p.rampSpeed - s.rampSpeed) * a;
+            rampTick();
+            applyRamps(a);
             s.tone += (p.tone - s.tone) * a;
             s.fade += (p.fade - s.fade) * a;
             s.width += (p.width - s.width) * a;
             if ((i & 31) == 0) {
-                const double c = clockHz(s.clock, p.smooth) / fs;
+                const double c = clockHz(e.clock, p.smooth) / fs;
                 clockRatio = c;
                 if (std::fabs(c - filterClock) > 0.002 * c) {
                     filterClock = c;
@@ -471,8 +491,8 @@ public:
             }
             const double engagedT = wetOn || loopState == LoopState::Play ? 1.0 : 0.0;
             engaged += (engagedT - engaged) * 0.001;
-            const double dg = p.dryKill ? 0.0 : 1 - engaged * (1 - std::min(1.0, 2 * (1 - s.mix)));
-            const double wg = std::min(1.0, 2 * s.mix);
+            const double dg = p.dryKill ? 0.0 : 1 - engaged * (1 - std::min(1.0, 2 * (1 - e.mix)));
+            const double wg = std::min(1.0, 2 * e.mix);
             double l = dry * dg + el * wg;
             double r = dry * dg + er * wg;
             const bool fullyBypassed = !p.dryKill && !p.trails && !wetOn && loopState == LoopState::Off && engaged < 1e-4;
@@ -509,11 +529,25 @@ public:
     }
 
     bool takeLoopWaveDirty() { const bool d = loopWaveDirty; loopWaveDirty = false; return d; }
+    // Raw generator output (0..1), for the UI and the ramp tests.
+    double rampValue(int which) const { return rampRaw[which & 1]; }
+    // What the DSP is using right now (knob + any ramp), in RAMP_KEYS order:
+    // 0 time, 1 mix, 2 length, 3 wet modify, 4 clock, 5 loop modify, 6 balance.
+    double effective(int which) const {
+        switch (which) {
+            case 0: return e.time; case 1: return e.mix; case 2: return e.length;
+            case 3: return e.modWet; case 4: return e.clock; case 5: return e.modLoop;
+            default: return e.balance;
+        }
+    }
     bool envGateOpen() const { return envGate; }
     int capturedLength() const { return lsrc; }
 
 private:
-    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width; };
+    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width, rampSpeed; };
+    // What the DSP reads: the smoothed knobs plus whatever a ramp is moving.
+    struct Eff { double time, mix, length, modWet, clock, modLoop, balance; };
+    struct Ramp { double ph = 0, dir = 1, prev = 0.5, next = 0.5; uint32_t rng = 0; };
     struct FsWet { bool active = false; int64_t t = 0; bool held = false; };
     struct FsLoop { bool active = false; int64_t t = 0; bool held = false; int histIdx = 0; uint32_t histCycle = 0; bool playing = false; };
     struct Grain { double ph, start; };
@@ -521,6 +555,7 @@ private:
 
     double fs = 48000;
     Smoothed s{};
+    Eff e{};
     int64_t hostCount = 0;
     double phase = 0, clockRatio = 1, filterClock = -1;
     LowPass4 aa, reconL, reconR;
@@ -547,7 +582,73 @@ private:
     bool loopWaveDirty = false;
     double toneL = 0, toneR = 0, wowPh = 0, toneC = 0;   // hidden-option state
 
+    // Two generators, each with its own phase and its own seeded stream (never the
+    // shared rng: STRETCH grains and CLASSIC hiss draw from that one).
+    Ramp ramp[2] = {{0, 1, 0.5, 0.5, 0x9e3779b9u}, {0.5, 1, 0.5, 0.5, 0x5bd1e995u}};
+    double rampRaw[2] = {0, 0};     // per host sample
+    double rampVal[2] = {0, 0};     // smoothed to audio rate
+
     double rand01() { rng = rng * 1103515245u + 12345u; return rng / 4294967296.0; }
+
+    // A second, private random stream per generator: the shared rng belongs to the
+    // STRETCH grains and CLASSIC hiss, and drawing from it here would move them.
+    double rampRand(Ramp& g) {
+        g.rng = g.rng * 1664525u + 1013904223u;
+        return g.rng / 4294967296.0;
+    }
+
+    // Value of the chosen shape at the current phase, 0..1.
+    double rampShape(const Ramp& g, int wave) const {
+        const double ph = g.ph;
+        if (p.sweep) return ph;                                   // SWEEP: it only ever climbs
+        if (wave == 1) return ph < 0.5 ? 1.0 : 0.0;               // square
+        if (wave == 2) return 0.5 + 0.5 * std::sin(kTau * ph);
+        if (wave == 3) return g.next;                             // sample and hold
+        if (wave == 4) {                                          // smooth random
+            const double t = ph * ph * (3 - 2 * ph);
+            return g.prev + (g.next - g.prev) * t;
+        }
+        return 1 - std::fabs(2 * ph - 1);                         // triangle
+    }
+
+    // Advance both generators. Once per host sample, not per core tick: the ramp is
+    // a time function, so turning CLOCK down must not slow it down. BOUNCE
+    // ping-pongs the phase instead of letting it reset.
+    void rampTick() {
+        const double rate = rampHertz(s.rampSpeed) / fs;
+        const int wave = rampWaveIndex(p.rampWave);
+        for (int k = 0; k < 2; ++k) {
+            Ramp& g = ramp[k];
+            if (rampTargetIndex(k == 0 ? p.rampWet : p.rampLoop) == 0) { rampRaw[k] = 0; continue; }
+            g.ph += rate * g.dir;
+            if (g.ph >= 1) {
+                if (p.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
+                g.prev = g.next; g.next = rampRand(g);
+            } else if (g.ph <= 0) {
+                if (p.bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
+                g.prev = g.next; g.next = rampRand(g);
+            }
+            rampRaw[k] = rampShape(g, wave);
+        }
+    }
+
+    // Rebuild the effective controls from the smoothed knobs, then let the ramps
+    // push whichever control they are pointed at.
+    void applyRamps(double a) {
+        rampVal[0] += (rampRaw[0] - rampVal[0]) * a;
+        rampVal[1] += (rampRaw[1] - rampVal[1]) * a;
+        e.time = s.time; e.mix = s.mix; e.length = s.length; e.modWet = s.modWet;
+        e.clock = s.clock; e.modLoop = s.modLoop; e.balance = s.balance;
+        for (int k = 0; k < 2; ++k) {
+            const int idx = rampTargetIndex(k == 0 ? p.rampWet : p.rampLoop);
+            if (idx == 0) continue;
+            const double v = rampVal[k];
+            const double off = (p.rampUni ? v : v * 2 - 1) * kRampDepth;
+            double* field = idx == 1 ? &e.time : idx == 2 ? &e.mix : idx == 3 ? &e.length
+                            : idx == 4 ? (k == 1 ? &e.modLoop : &e.modWet) : idx == 5 ? &e.clock : &e.balance;
+            *field = clampd(*field + off, 0, 1);
+        }
+    }
 
     // One-pole coefficient for the TONE hi-cut; the blend amount is the caller's.
     double toneCoeff() {
@@ -558,7 +659,7 @@ private:
     // How much history a capture may use, in core samples. MEMORY 0 keeps the
     // pedal's clock-derived capacity; above that it is 1–30 s of real time.
     int maxCaptureSamples() const {
-        const double clock = clockHz(s.clock, p.smooth);
+        const double clock = clockHz(e.clock, p.smooth);
         const double user = p.memory > 0.001 ? expMap(clampd(p.memory, 0, 1), 1, 30) * clock : kLoopSamples;
         return static_cast<int>(std::min<double>(kMaxLoopSamples - 1, std::max(64.0, std::min(user, kMaxLoopSeconds * clock))));
     }
@@ -570,8 +671,8 @@ private:
         int r = histW - n; if (r < 0) r += N;
         for (int i = 0; i < n; ++i) { loopBuf[static_cast<size_t>(i)] = hist[static_cast<size_t>(r)]; if (++r >= N) r = 0; }
         lsrc = n; loopPos = 0;
-        tapeSpeed = speedMap(s.modLoop, 0.04);
-        stretchSpeed = stretchMap(s.modLoop);
+        tapeSpeed = speedMap(e.modLoop, 0.04);
+        stretchSpeed = stretchMap(e.modLoop);
         grain[0] = {0, 0}; grain[1] = {0.5, 0};
         loopState = LoopState::Play;
         loopWaveDirty = true;
@@ -587,7 +688,7 @@ private:
         if (len <= 0 || len < 64) { r0 = 0; len = std::max(64, lsrc); }
         len = std::min(len, lsrc - r0);
         if (p.loopMode != 1) return {std::max(64, len), r0};
-        const int W = std::max(64, static_cast<int>(std::floor(len * expMap(s.length, 0.02, 1))));
+        const int W = std::max(64, static_cast<int>(std::floor(len * expMap(e.length, 0.02, 1))));
         return {W, r0 + len - W};
     }
 
@@ -604,7 +705,7 @@ private:
         const int W = win.W, start = win.start;
         const double Wd = W;
         const int mode = p.loopMode;
-        const double m = s.modLoop;
+        const double m = e.modLoop;
         // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
         // loop plays back slower and lower and takes div times as long to come round.
         const double ldivd = divMap(p.loopDiv);
@@ -622,7 +723,7 @@ private:
         double y;
 
         if (mode == 2) {
-            const double G = std::min(expMap(s.length, 0.01 * kCoreFs, 0.5 * kCoreFs), Wd);
+            const double G = std::min(expMap(e.length, 0.01 * kCoreFs, 0.5 * kCoreFs), Wd);
             // A divided loop stretches each grain by div as well, or the grains
             // would still be read at full speed.
             const double Gs = G * ldivd;
@@ -653,7 +754,7 @@ private:
             const double mainV = rd(pos) * edgeAt(pos);
             double sl = 0;
             if (envMix > 1e-4) {
-                const double S = std::min(expMap(s.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
+                const double S = std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
                 if (slicePh >= S) slicePh -= S;
                 const double F2 = std::min(0.004 * kCoreFs, S / 4);
                 sl = rd(sliceStart + slicePh) * std::min({1.0, slicePh / F2, (S - slicePh) / F2});
@@ -700,23 +801,23 @@ private:
         double wl = 0, wr = 0;
         if (modeGain[0] > 1e-4) {
             // CLASSIC: the MK I reverb rings far longer than the MK II's.
-            reverb.setDecay(expMap(s.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(s.time, 0.35, 1));
-            const double* o = reverb.tick(wIn, s.modWet, freeze, s.time > 0.985);
+            reverb.setDecay(expMap(e.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(e.time, 0.35, 1));
+            const double* o = reverb.tick(wIn, e.modWet, freeze, e.time > 0.985);
             wl += o[0] * modeGain[0]; wr += o[1] * modeGain[0];
         }
         double mono = 0;
         if (modeGain[1] > 1e-4) {
             // Synced: the division is real seconds, converted into core ticks at the
             // current clock so the echoed note stays on the beat at any clock setting.
-            double delayTicks = expMap(s.time, 0.02 * kCoreFs, 2 * kCoreFs);
-            if (p.sync) delayTicks = clampd(syncSeconds(p.bpm, s.time) * clockRatio * fs, 1.0, kDelayMaxSec * kCoreFs * 0.95);
+            double delayTicks = expMap(e.time, 0.02 * kCoreFs, 2 * kCoreFs);
+            if (p.sync) delayTicks = clampd(syncSeconds(p.bpm, e.time) * clockRatio * fs, 1.0, kDelayMaxSec * kCoreFs * 0.95);
             delayTicks = clampd(delayTicks * wdiv, 1.0, kDelayMaxSec * kCoreFs * 0.95);
-            mono += delay.tick(wIn, delayTicks, s.modWet, freeze) * modeGain[1];
+            mono += delay.tick(wIn, delayTicks, e.modWet, freeze) * modeGain[1];
         }
-        if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(s.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(s.modWet), freeze) * modeGain[2];
+        if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(e.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(e.modWet), freeze) * modeGain[2];
         if (modeGain[3] > 1e-4) {
             double o[2];
-            weave.tick(wIn, std::min(2.8, (0.2 + s.time * 2.6) * wdiv), s.modWet, freeze, o);
+            weave.tick(wIn, std::min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, freeze, o);
             wl += o[0] * modeGain[3]; wr += o[1] * modeGain[3];
         }
         wl += mono;
@@ -746,7 +847,7 @@ private:
         // through an active wet channel — that would double it. The ducking follows
         // the wet level, so turning the balance to LOOP always restores the loop in
         // full instead of silencing both sides.
-        const double bal = s.balance;
+        const double bal = e.balance;
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
         const double directT = p.routing != 0 && wetOn ? 1.0 - wetLvl : 1.0;
         loopDirect += (directT - loopDirect) * 0.003;

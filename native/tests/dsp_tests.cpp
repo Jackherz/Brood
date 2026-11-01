@@ -256,6 +256,86 @@ int main() {
         CHECK(clean < 1e-6, "silence stays silent (%.6f)", clean);
         CHECK(noisy > 1e-4, "classic clock noise (%.5f)", noisy);
     }
+
+    // ─────────────────────────── the ramp engine ───────────────────────────
+    {   // with every ramp off, the audio is exactly what it was before the engine
+        auto run = [](bool withRamps) {
+            mood::Core c; c.p.wetMode = 0; c.p.mix = 0.8; c.p.time = 0.5;
+            if (withRamps) { c.p.rampWet = 0; c.p.rampLoop = 0; c.p.rampSpeed = 1; }
+            c.prepare(FS); tap(c, 0);
+            return render(c, 1, tone(220, 1));
+        };
+        const auto a = run(false), b = run(true);
+        double worst = 0;
+        for (size_t i = 0; i < a.L.size(); ++i) worst = std::max(worst, static_cast<double>(std::fabs(a.L[i] - b.L[i])));
+        CHECK(worst == 0.0, "ramps off must not change a sample (%g)", worst);
+    }
+    {   // a TIME ramp moves the echo
+        auto echoPair = [] {
+            mood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.dryKill = true; c.p.modWet = 0.55;
+            c.p.time = 0.4; c.p.rampWet = 0.2; c.p.rampSpeed = 0.35;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 5, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
+            auto peakBetween = [&](double s0, double s1) {
+                size_t at = 0; float best = 0;
+                for (size_t i = static_cast<size_t>(s0 * FS); i < std::min(o.L.size(), static_cast<size_t>(s1 * FS)); ++i)
+                    if (std::fabs(o.L[i]) > best) { best = std::fabs(o.L[i]); at = i; }
+                return at / FS;
+            };
+            return std::pair<double, double>(peakBetween(1.02, 2.2), peakBetween(3.0, 5.0));
+        };
+        const auto p = echoPair();
+        CHECK(std::fabs(p.first - p.second) > 0.01, "the ramp moves the echo (%.3f then %.3f)", p.first, p.second);
+    }
+    {   // shapes: square sits on the ends, triangle and sine pass through the middle
+        auto collect = [](double wave) {
+            mood::Core c; c.p.rampWet = 0.2; c.p.rampWave = wave; c.p.time = 0.5; c.p.rampSpeed = 0.5;
+            c.prepare(FS);
+            std::vector<double> v;
+            render(c, 6, [](double) { return 0.0; }, [&](mood::Core& cc, long) { v.push_back(cc.rampValue(0)); });
+            return v;
+        };
+        auto ends = [](const std::vector<double>& v) {
+            size_t n = 0; for (double x : v) if (x < 0.15 || x > 0.85) ++n; return double(n) / double(v.size());
+        };
+        auto middle = [](const std::vector<double>& v) {
+            size_t n = 0; for (double x : v) if (std::fabs(x - 0.5) < 0.15) ++n; return double(n) / double(v.size());
+        };
+        const auto sq = collect(0.25), tri = collect(0), sin = collect(0.5);
+        CHECK(ends(sq) > 0.9, "square is two levels (%.2f)", ends(sq));
+        CHECK(ends(sin) > ends(tri), "sine hangs on the ends more than the triangle");
+        CHECK(middle(tri) > middle(sin), "the triangle passes through the middle more");
+        CHECK(middle(sq) < 0.05, "the square skips the middle");
+    }
+    {   // SWEEP climbs and restarts; BOUNCE takes the snap out
+        auto collect = [](bool bouncy) {
+            mood::Core c; c.p.rampWet = 0.2; c.p.sweep = true; c.p.bounce = bouncy; c.p.rampSpeed = 0.5;
+            c.prepare(FS);
+            std::vector<double> v;
+            render(c, 8, [](double) { return 0.0; }, [&](mood::Core& cc, long) { v.push_back(cc.rampValue(0)); });
+            return v;
+        };
+        auto resets = [](const std::vector<double>& v) { size_t n = 0; for (size_t i = 1; i < v.size(); ++i) if (v[i] < v[i - 1] - 0.5) ++n; return n; };
+        auto rising = [](const std::vector<double>& v) { size_t n = 0; for (size_t i = 1; i < v.size(); ++i) if (v[i] > v[i - 1]) ++n; return double(n) / double(v.size() - 1); };
+        const auto saw = collect(false), bouncy = collect(true);
+        CHECK(resets(saw) >= 2, "the sweep restarts (%zu)", resets(saw));
+        CHECK(rising(saw) > 0.9, "the sweep only climbs (%.2f)", rising(saw));
+        CHECK(resets(bouncy) == 0, "BOUNCE removes the snap-back (%zu)", resets(bouncy));
+        CHECK(rising(bouncy) > 0.3 && rising(bouncy) < 0.7, "and turns it into a tide (%.2f)", rising(bouncy));
+    }
+    {   // POLARITY: unipolar never dips under the knob
+        auto range = [](bool uni) {
+            mood::Core c; c.p.rampWet = 0.2; c.p.rampUni = uni; c.p.time = 0.5; c.p.rampSpeed = 0.5;
+            c.prepare(FS);
+            double lo = 2, hi = -1;
+            render(c, 6, [](double) { return 0.0; }, [&](mood::Core& cc, long) { const double v = cc.effective(0); lo = std::min(lo, v); hi = std::max(hi, v); });
+            return std::pair<double, double>(lo, hi);
+        };
+        const auto uni = range(true), bi = range(false);
+        CHECK(uni.first > 0.49, "unipolar never dips under the knob (%.2f)", uni.first);
+        CHECK(bi.first < 0.1, "bipolar goes all the way down (%.2f)", bi.first);
+        CHECK(uni.second > 0.9 && bi.second > 0.95, "both reach the top");
+    }
     {   // speed maps hit musical anchors
         CHECK(mood::speedMap(0.5) == 0.5 && mood::speedMap(1) == 4 && mood::speedMap(0) == -4, "speedMap");
         CHECK(mood::stretchMap(0.5) == 0 && mood::stretchMap(1) == 1 && mood::stretchMap(0) == -1, "stretchMap");

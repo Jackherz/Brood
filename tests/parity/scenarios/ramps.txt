@@ -1,0 +1,36 @@
+# RAMPS: both generators, every shape, sweep and bounce, polarity, and a
+# destination change while the loop is running.
+rate 48000
+seconds 16
+0 param wetMode 1
+0 param loopMode 1
+0 param routing 1
+0 param clock 0.7
+0 param time 0.5
+0 param mix 0.8
+0 param modWet 0.5
+0 param length 0.6
+0 fs wet down
+3 fs wet up
+10 param rampWet 0.2
+20 param rampLoop 0.67
+40 param rampSpeed 0.55
+80 fs loop down
+100 fs loop up
+120 param rampWave 0.25
+160 param rampWave 0.5
+200 param rampWave 0.75
+240 param rampWave 1
+280 param bounce 1
+320 param sweep 1
+340 param bounce 0
+380 param sweep 0
+400 param rampUni 1
+440 param rampWet 0.33
+480 param rampLoop 0.5
+520 param rampWet 0.83
+560 param rampSpeed 0.9
+600 param rampWave 0.5
+640 param rampWet 0
+680 param rampLoop 0
+700 param rampUni 0

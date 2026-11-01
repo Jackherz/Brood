@@ -57,6 +57,14 @@ MoodProcessor::MoodProcessor()
           layout.add(loopParam("wetDiv", "Wet clock division", 0.f));
           layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("classic", 1), "Classic (MK I quirks)", false));
+          // The ramp engine: two generators, one per channel.
+          layout.add(loopParam("rampWet", "Ramp: wet", 0.f));
+          layout.add(loopParam("rampLoop", "Ramp: loop", 0.f));
+          layout.add(loopParam("rampSpeed", "Ramp speed", 0.45f));
+          layout.add(loopParam("rampWave", "Ramp wave", 0.f));
+          layout.add(std::make_unique<APB>(juce::ParameterID("rampUni", 1), "Ramp unipolar", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("bounce", 1), "Dip: Bounce", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("sweep", 1), "Dip: Sweep", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
           return layout;
@@ -126,6 +134,12 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
     if (id == "width") return v < 0.49f ? "narrow " + pct(v * 2) : v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
+    if (id == "rampWet" || id == "rampLoop") {
+        const int t = mood::rampTargetIndex(v);
+        return t == 0 ? juce::String("still") : juce::String(mood::kRampTargets[t]).toLowerCase();
+    }
+    if (id == "rampWave") return juce::String(mood::kRampWaves[mood::rampWaveIndex(v)]).toLowerCase();
+    if (id == "rampSpeed") return fmtTime(1.0 / mood::rampHertz(v)) + " a turn";
     if (id == "wetDiv" || id == "loopDiv") {
         const int div = mood::divMap(v);
         return div == 1 ? juce::String("1x clock") : juce::String(div) + "x slower";
@@ -202,6 +216,9 @@ void MoodProcessor::pullParams() {
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
     p.classic = param("classic") > 0.5f;
+    p.rampWet = param("rampWet"); p.rampLoop = param("rampLoop"); p.rampSpeed = param("rampSpeed");
+    p.rampWave = param("rampWave");
+    p.rampUni = param("rampUni") > 0.5f; p.bounce = param("bounce") > 0.5f; p.sweep = param("sweep") > 0.5f;
     p.bpm = hostBpm_.load();
     coreRight_.p = p;
 }
@@ -267,7 +284,9 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
             else if (cc == 105) midiFreeze = value != 0;
-            else if (cc == 20) { if (auto* parameter = apvts.getParameter("memory")) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 20) { if (auto* parameter = apvts.getParameter("rampSpeed")) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 66) { if (auto* parameter = apvts.getParameter("bounce")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
+            else if (cc == 67) { if (auto* parameter = apvts.getParameter("sweep")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 71) id = "classic";

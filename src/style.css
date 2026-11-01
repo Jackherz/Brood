@@ -230,6 +230,29 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
 .guide-whispers dd { margin: 2px 0 0; font: 12px/1.35 'Terminal', monospace; color: #52524c; }
 .guide-disclaimer { padding: 11px 16px; border-top: 1px solid #181815; color: #6d6d65; font: 10px/1.6 'Space Mono', monospace; }
 .guide-disclaimer a { color: #181815; }
+
+/* ── loop trim: one thin band under the waveform, three even sliders ── */
+.trim-strip { display: grid; grid-template-columns: 74px minmax(0,1fr); align-items: center; gap: 10px; padding: 7px 13px 8px; border-top: 1px dashed #aaa9a0; background: #f1f0e9; }
+.trim-title { font: 11px/.98 'Pixel', monospace; color: #77776f; }
+.trim-row { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px 14px; min-width: 0; }
+.trim-control { display: grid; grid-template-columns: auto minmax(0,1fr) 40px; align-items: center; gap: 6px; min-width: 0; color: #77776f; font: 11px 'Terminal', monospace; }
+.trim-control > span { white-space: nowrap; }
+.trim-control b { color: #181815; font: 11px 'Terminal', monospace; text-align: right; white-space: nowrap; }
+.trim-control input[type="range"] { height: 12px; }
+
+/* ── the ramps: two destinations, a shape, a rate, and two bends ── */
+.ramp-panel { margin-top: 13px; }
+.ramp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 6px; align-items: stretch; }
+.stepper { display: grid; grid-template-columns: 16px auto minmax(0,1fr) 16px; align-items: center; gap: 3px; height: 26px; padding: 0 2px; border: 1px solid #181815; background: #faf9f3; font: 11px 'Terminal', monospace; }
+.stepper button { border: 0; background: transparent; padding: 0; font: 10px 'Terminal', monospace; line-height: 1; color: #181815; height: 20px; }
+.stepper button:hover { background: #181815; color: #faf9f3; }
+.stepper-cap { color: #77776f; white-space: nowrap; }
+.stepper b { font: 12px 'Terminal', monospace; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rate-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 5px; height: 26px; margin: 0; padding: 0 5px; border: 1px solid #181815; background: #faf9f3; color: #77776f; font: 11px 'Terminal', monospace; white-space: nowrap; }
+.rate-row input[type="range"] { height: 12px; }
+.rate-row b { color: #181815; font: 11px 'Terminal', monospace; }
+.ramp-dips { grid-template-columns: repeat(3, minmax(0,1fr)); margin-top: 7px; gap: 4px; }
+
 @media (max-width: 1050px) {
   .page { padding-left: 18px; padding-right: 18px; }
   .hero { grid-template-columns: 1fr 100px minmax(270px, 320px); gap: 10px; }
@@ -255,9 +278,10 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 11px; background: #1
   .side-rule:not(.dip-heading), .source-buttons, .source-description, .power-button, .level-row:not(.balance-row), .notice { grid-column: 2; }
   .side-rule:not(.dip-heading) { grid-row: 1; }
   .source-buttons { grid-row: 2; }.source-description { grid-row: 3; }.power-button { grid-row: 4; }.level-row:not(.balance-row) { grid-row: 5; }
-  .dip-heading, .dips, .balance-row, .side-note { grid-column: 1 / -1; }
+  .dip-heading, .dips, .balance-row, .ramp-panel, .side-note { grid-column: 1 / -1; }
   .dip-heading { margin-top: 5px; }.side-note { margin-top: 2px; }
   .dips { max-width: 400px; width: 100%; margin: auto; }
+  .ramp-grid { max-width: 400px; margin: 0 auto; }
   .guide-grid { grid-template-columns: 1fr 1fr; }
   .guide-grid > div:nth-child(odd) { border-left: 0; }
   .guide-grid > div:nth-child(n + 3) { border-top: 1px solid #bebeb5; }

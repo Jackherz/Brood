@@ -130,6 +130,21 @@ void MoodEditor::KnobLook::drawRotarySlider(juce::Graphics& g, int x, int y, int
 }
 
 void MoodEditor::KnobLook::drawToggleButton(juce::Graphics& g, juce::ToggleButton& b, bool, bool) {
+    if (b.getHeight() < 34) {
+        // Wide, short cell (the ramp panel): switch on the left, name beside it,
+        // so UNI / BOUNCE / SWEEP sit in one comfortable row.
+        const float u = b.getHeight() / 26.f;
+        g.addTransform(juce::AffineTransform::scale(u));
+        const auto bounds = juce::Rectangle<float>(0, 0, b.getWidth() / u, 26.f);
+        const auto sw = juce::Rectangle<float>(24, 14).withCentre({13, bounds.getCentreY()});
+        g.setColour(kInk); g.fillRect(sw);
+        const auto handle = juce::Rectangle<float>(9, 10).withCentre({b.getToggleState() ? sw.getRight() - 6 : sw.getX() + 6, sw.getCentreY()});
+        g.setColour(kPaper); g.fillRect(handle);
+        if (b.hasKeyboardFocus(true)) { g.setColour(kMuted); g.drawRect(sw.expanded(3), 1.5f); }
+        g.setColour(b.getToggleState() ? kInk : kMuted); g.setFont(font(12));
+        g.drawFittedText(b.getButtonText().toUpperCase(), bounds.withTrimmedLeft(30).toNearestInt(), juce::Justification::centredLeft, 1);
+        return;
+    }
     // One sixth of the 292 px switch row: drawing in that design slot and scaling
     // keeps the switch and its name together at any window size. The name is fitted
     // because "SPREAD" and "SMOOTH" are wider than the slot at full size.
@@ -170,6 +185,42 @@ void MoodEditor::ThreeWay::paint(juce::Graphics& g) {
 void MoodEditor::ThreeWay::mouseDown(const juce::MouseEvent& e) {
     const int count = juce::jmax(1, labels.size());
     const int next = juce::jlimit(0, count - 1, e.y * count / juce::jmax(1, getHeight()));
+    attach.setValueAsCompleteGesture(static_cast<float>(next));
+}
+
+
+// ───────── ramp destination stepper ─────────
+MoodEditor::Stepper::Stepper(juce::RangedAudioParameter& p, juce::String caption, juce::StringArray l, std::function<void()> onChange)
+    : param(p), cap(std::move(caption)), names(std::move(l)),
+      attach(p, [this](float v) { index = juce::jlimit(0, juce::jmax(0, names.size() - 1), juce::roundToInt(v)); repaint(); if (changed) changed(); }),
+      changed(std::move(onChange)) {
+    attach.sendInitialUpdate();
+    setTitle(cap);
+}
+void MoodEditor::Stepper::paint(juce::Graphics& g) {
+    auto r = getLocalBounds();
+    const bool hot = isMouseOver(true);
+    g.setColour(kPaper); g.fillRect(r);
+    g.setColour(kInk); g.drawRect(r, 1);
+    const int arrow = juce::jmax(16, r.getWidth() / 7);   // the whole cell steps; the arrows just say so
+    auto tri = [&](juce::Rectangle<int> zone, bool right) {
+        juce::Path t;
+        const float w = 5.f, h = 7.f, cx = zone.getCentreX(), cy = zone.getCentreY();
+        t.addTriangle(cx + (right ? w / 2 : -w / 2), cy - h / 2, cx + (right ? w / 2 : -w / 2), cy + h / 2, cx + (right ? -w / 2 : w / 2), cy);
+        g.setColour(hot ? kInk : kMuted); g.fillPath(t);
+    };
+    tri(r.removeFromLeft(arrow), false);
+    tri(r.removeFromRight(arrow), true);
+    g.setFont(font(11)); g.setColour(kMuted);
+    const int capW = juce::jmin(r.getWidth() / 2, 40);
+    g.drawFittedText(cap, r.removeFromLeft(capW), juce::Justification::centredLeft, 1);
+    g.setFont(font(13)); g.setColour(kInk);
+    g.drawFittedText(index >= 0 && index < names.size() ? names[index] : juce::String(), r, juce::Justification::centred, 1);
+}
+void MoodEditor::Stepper::mouseDown(const juce::MouseEvent& e) {
+    const int count = juce::jmax(1, names.size());
+    const int step = e.x < getWidth() / 6 ? -1 : 1;
+    const int next = (index + step + count) % count;
     attach.setValueAsCompleteGesture(static_cast<float>(next));
 }
 
@@ -319,6 +370,33 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         d.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, id, *d.button);
         dips.push_back(std::move(d));
     }
+    auto rampChanged = [this](const char* label, const char* id) {
+        return [this, label, id] {
+            auto* prm = proc.apvts.getParameter(id);
+            if (lastTouched.isNotEmpty() || isVisible()) showReadout(label, prm->getCurrentValueAsText().toLowerCase());
+        };
+    };
+    rampWet = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWet"), "WET", juce::StringArray{"STILL", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("RAMP / WET", "rampWet"));
+    rampLoop = std::make_unique<Stepper>(*proc.apvts.getParameter("rampLoop"), "LOOP", juce::StringArray{"STILL", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("RAMP / LOOP", "rampLoop"));
+    rampWave = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWave"), "SHAPE", juce::StringArray{"TRI", "SQR", "SIN", "RND", "SMTH"}, rampChanged("RAMP SHAPE", "rampWave"));
+    for (auto* st : {rampWet.get(), rampLoop.get(), rampWave.get()}) addAndMakeVisible(*st);
+    rampRate.setSliderStyle(juce::Slider::LinearHorizontal);
+    rampRate.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    rampRate.setTitle("Ramp speed");
+    rampRate.setDoubleClickReturnValue(true, static_cast<double>(proc.apvts.getParameter("rampSpeed")->getDefaultValue()));
+    rampRate.onValueChange = [this] { touch("rampSpeed"); };
+    addAndMakeVisible(rampRate);
+    rampRateAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "rampSpeed", rampRate);
+    // The two dips that bend the shape, and the polarity that keeps it above the knob.
+    const std::pair<const char*, const char*> rampSwitchDefs[] = {{"rampUni", "UNI"}, {"bounce", "BOUNCE"}, {"sweep", "SWEEP"}};
+    for (size_t i = 0; i < rampSwitches.size(); ++i) {
+        auto& rs = rampSwitches[i];
+        const juce::String lab = rampSwitchDefs[i].second;
+        rs.button = std::make_unique<juce::ToggleButton>(lab);
+        rs.button->onClick = [this, lab, b = rs.button.get()] { showReadout("RAMP", lab.toLowerCase() + (b->getToggleState() ? " on" : " off")); };
+        addAndMakeVisible(*rs.button);
+        rs.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, rampSwitchDefs[i].first, *rs.button);
+    }
     presetBox.addItem("A LITTLE DAYDREAM", 1);
     presetBox.addItem("SOFT FOCUS", 2);
     presetBox.addItem("GLASS ECHO", 3);
@@ -340,7 +418,9 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         for (int i = 0; i < 9; ++i) if (auto* parameter = proc.apvts.getParameter(ids[i])) {
             parameter->beginChangeGesture(); parameter->setValueNotifyingHost(patches[which][i]); parameter->endChangeGesture();
         }
-        for (auto* id : {"trails", "dryKill", "latch", "spread", "smooth"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
+        for (auto* id : {"trails", "dryKill", "latch", "spread", "smooth", "rampUni", "bounce", "sweep"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
+        for (auto* id : {"rampWet", "rampLoop"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
+        if (auto* parameter = proc.apvts.getParameter("rampWave")) parameter->setValueNotifyingHost(0.f);
         if (auto* parameter = proc.apvts.getParameter("balance")) parameter->setValueNotifyingHost(0.5f);
         showReadout("PATCH", presetBox.getText().toLowerCase());
     };
@@ -458,6 +538,10 @@ void MoodEditor::HiddenPanel::paint(juce::Graphics& g) {
     g.setColour(kMuted); g.setFont(font(11));
     g.drawFittedText("the MK I in the room: a noisy clock, a loop that never sits still, a reverb that rings.",
                      16, 470, 488, 32, juce::Justification::centredLeft, 2);
+    g.setColour(kLine); g.drawHorizontalLine(512, 16.f, 504.f);
+    g.setColour(kMuted); g.setFont(font(11));
+    g.drawFittedText("UNOFFICIAL MOOD-INSPIRED STUDY / NOT AFFILIATED WITH CHASE BLISS",
+                     16, 520, 488, 30, juce::Justification::centredLeft, 2);
 }
 
 void MoodEditor::resized() {
@@ -491,48 +575,77 @@ void MoodEditor::resized() {
     ledWet = juce::Rectangle<int>(14, 14).withCentre({cx[0] + 20, fy - 56});
     ledLoop = juce::Rectangle<int>(14, 14).withCentre({cx[2] - 20, fy - 56});
 
+    // ── the side column ──
+    // Five stacked blocks in a 600 px column. The pitch is set by the controls,
+    // not by the panels: 1 px borders, 24 px title bands and 9 px gutters do the
+    // separating, so nothing had to shrink to make room for the ramp section.
     auto side = juce::Rectangle<int>(560, 20, 320, 600);
-    lcdArea = side.removeFromTop(92);
-    side.removeFromTop(14);
-    auto src = side.removeFromTop(118).reduced(14, 10);
-    src.removeFromTop(18);
-    auto r1 = src.removeFromTop(28);
-    place(sourceBox, r1.removeFromLeft(170));
-    r1.removeFromLeft(8);
-    place(loadButton, r1);
-    src.removeFromTop(8);
-    inputGainDesign = src.removeFromTop(22).withTrimmedLeft(52);
-    place(inputGain, inputGainDesign);
-    meterArea = src.removeFromTop(22).translated(0, 2);
-
-    side.removeFromTop(14);
+    lcdArea = side.removeFromTop(78);
+    side.removeFromTop(9);
+    srcArea = side.removeFromTop(92);
+    side.removeFromTop(9);
     loopArea = side.removeFromTop(150);
-    auto inner = loopArea.reduced(14, 10);
-    inner.removeFromTop(18);
-    auto wave = inner.removeFromTop(52);
-    place(loopView, wave);
+    side.removeFromTop(9);
+    dipArea = side.removeFromTop(90);
+    side.removeFromTop(9);
+    rampArea = side.removeFromTop(118);
+    side.removeFromTop(9);
+    auto presetRow = side.removeFromTop(26);
+
+    auto src = srcArea.withTrimmedTop(24).reduced(12, 6);
+    auto r1 = src.removeFromTop(26);
+    place(sourceBox, r1.removeFromLeft(170));
+    r1.removeFromLeft(6);
+    place(loadButton, r1);
+    src.removeFromTop(6);
+    auto r2 = src.removeFromTop(24);
+    r2.removeFromLeft(44);                       // "LEVEL" is painted in the gap
+    meterArea = r2.removeFromRight(76).withSizeKeepingCentre(76, 18);
+    place(inputGain, r2.withTrimmedRight(6));
+
+    auto inner = loopArea.withTrimmedTop(24).reduced(12, 6);
+    place(loopView, inner.removeFromTop(36));
     inner.removeFromTop(2);
-    memoryDesign = inner.removeFromTop(19).withTrimmedLeft(58).withTrimmedRight(40);
-    loopStartDesign = inner.removeFromTop(19).withTrimmedLeft(42).withTrimmedRight(40);
-    loopEndDesign = inner.removeFromTop(19).withTrimmedLeft(30).withTrimmedRight(40);
+    memoryDesign = inner.removeFromTop(19).withTrimmedLeft(54).withTrimmedRight(40);
+    loopStartDesign = inner.removeFromTop(19).withTrimmedLeft(38).withTrimmedRight(40);
+    loopEndDesign = inner.removeFromTop(19).withTrimmedLeft(26).withTrimmedRight(40);
+    balanceDesign = inner.removeFromTop(19).withTrimmedLeft(58).withTrimmedRight(40);
     place(memory, memoryDesign);
     place(loopStart, loopStartDesign);
     place(loopEnd, loopEndDesign);
+    place(balance, balanceDesign);
 
-    side.removeFromTop(12);
-    auto dipArea = side.removeFromTop(112).reduced(14, 10);
-    dipArea.removeFromTop(18);
-    auto dipRow = dipArea.removeFromTop(58);
+    auto dipRow = dipArea.withTrimmedTop(24).reduced(12, 5);
     const int dw = dipRow.getWidth() / juce::jmax(1, static_cast<int>(dips.size()));
     for (auto& d : dips) place(*d.button, dipRow.removeFromLeft(dw));
-    dipArea.removeFromTop(4);
-    balanceDesign = dipArea.removeFromTop(22).withTrimmedLeft(66).withTrimmedRight(34);
-    place(balance, balanceDesign);
+
+    auto ramp = rampArea.withTrimmedTop(24).reduced(12, 5);
+    auto rampRow = ramp.removeFromTop(26);
+    const int half = (rampRow.getWidth() - 6) / 2;
+    place(*rampWet, rampRow.removeFromLeft(half));
+    rampRow.removeFromLeft(6);
+    place(*rampLoop, rampRow);
+    ramp.removeFromTop(3);
+    rampRow = ramp.removeFromTop(26);
+    place(*rampWave, rampRow.removeFromLeft(half));
+    rampRow.removeFromLeft(6);
+    rampRateDesign = rampRow;                    // "RATE" is painted over its left end
+    place(rampRate, rampRateDesign.withTrimmedLeft(38).reduced(0, 3));
+    ramp.removeFromTop(3);
+    rampRow = ramp.removeFromTop(26);
+    const int swCell = (rampRow.getWidth() - 14) / 3;   // three even cells, 7 px apart
+    for (size_t i = 0; i < rampSwitches.size(); ++i) {
+        const bool last = i + 1 == rampSwitches.size();
+        rampSwitchDesign[i] = last ? rampRow : rampRow.removeFromLeft(swCell);
+        if (!last) rampRow.removeFromLeft(7);
+        place(*rampSwitches[i].button, rampSwitchDesign[i]);
+    }
 
     hiddenButtonDesign = {pedalArea.getRight() - 146, pedalArea.getY() + 3, 136, 19};
     place(hiddenButton, hiddenButtonDesign);
     if (hiddenPanel != nullptr) hiddenPanel->setBounds(pedalArea.transformedBy(view));
-    place(presetBox, {574, 556, 292, 26});
+    presetBoxDesign = presetRow.withTrimmedLeft(44);   // "PATCH" is painted to its left
+    place(presetBox, presetBoxDesign);
 }
 
 void MoodEditor::paint(juce::Graphics& g) {
@@ -593,18 +706,24 @@ void MoodEditor::paint(juce::Graphics& g) {
         g.setColour(kInk); g.drawHorizontalLine(head.getBottom(), static_cast<float>(head.getX()), static_cast<float>(head.getRight()));
         g.setFont(font(16)); g.drawText(title, head.reduced(10, 0), juce::Justification::centredLeft);
     };
-    panel({560, 126, 320, 118}, "01  /  INPUT SOURCE");
-    panel({560, 258, 320, 150}, "02  /  LOOP MEMORY");   // same rects resized() fills
-    panel({560, 420, 320, 112}, "03  /  THE LITTLE SWITCHES");
+    panel(srcArea, "01  /  INPUT SOURCE");
+    panel(loopArea, "02  /  LOOP MEMORY");   // same rects resized() fills
+    panel(dipArea, "03  /  THE LITTLE SWITCHES");
+    panel(rampArea, "04  /  THE RAMPS");
+    const int sx = srcArea.getX() + 14, lx = loopArea.getX() + 14;
     g.setColour(kInk); g.setFont(font(14));
-    g.drawText("LEVEL", 574, inputGainDesign.getY(), 50, inputGainDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("LEVEL", sx, inputGainDesign.getY(), 42, inputGainDesign.getHeight(), juce::Justification::centredLeft);
     // One label for the row: "BALANCE" plus its two end names did not fit and
     // overlapped in the 320 px side column.
-    g.drawText("WET / LOOP", 574, balanceDesign.getY(), 66, balanceDesign.getHeight(), juce::Justification::centredLeft);
+    g.setFont(font(12));
+    g.drawText("WET/LOOP", lx, balanceDesign.getY(), 56, balanceDesign.getHeight(), juce::Justification::centredLeft);
     g.setColour(kInk); g.setFont(font(13));
-    g.drawText("MEMORY", 574, memoryDesign.getY(), 54, memoryDesign.getHeight(), juce::Justification::centredLeft);
-    g.drawText("START", 574, loopStartDesign.getY(), 38, loopStartDesign.getHeight(), juce::Justification::centredLeft);
-    g.drawText("END", 574, loopEndDesign.getY(), 26, loopEndDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("MEMORY", lx, memoryDesign.getY(), 52, memoryDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("START", lx, loopStartDesign.getY(), 36, loopStartDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText("END", lx, loopEndDesign.getY(), 24, loopEndDesign.getHeight(), juce::Justification::centredLeft);
+    // RATE sits inside the rate cell, so it costs no extra row.
+    g.setFont(font(11)); g.setColour(kMuted);
+    g.drawText("RATE", rampRateDesign.getX(), rampRateDesign.getY(), 36, rampRateDesign.getHeight(), juce::Justification::centredLeft);
     g.setColour(kMuted); g.setFont(font(12));
     // Short readouts for the narrow column; the full wording lives in the host's
     // parameter display (that is what Ableton shows in its own inspector).
@@ -617,12 +736,12 @@ void MoodEditor::paint(juce::Graphics& g) {
         else txt = juce::String(mood::expMap(v->load(), 1, 30), 1) + "s";
         g.drawText(txt, r, juce::Justification::centredRight);
     };
-    readout("memory", memoryDesign.withX(memoryDesign.getRight() + 3).withWidth(38), false);
-    readout("loopStart", loopStartDesign.withX(loopStartDesign.getRight() + 3).withWidth(34), true);
-    readout("loopEnd", loopEndDesign.withX(loopEndDesign.getRight() + 3).withWidth(34), true);
-    g.setColour(kInk); g.setFont(font(15)); g.drawText("*  PATCH SELECTOR", 574, 532, 292, 18, juce::Justification::centredLeft);
-    g.setColour(kMuted); g.setFont(font(13));
-    g.drawFittedText("UNOFFICIAL MOOD-INSPIRED STUDY / NOT AFFILIATED WITH CHASE BLISS", 574, 590, 292, 30, juce::Justification::centredLeft, 2);
+    readout("memory", memoryDesign.withX(memoryDesign.getRight() + 3).withWidth(36), false);
+    readout("loopStart", loopStartDesign.withX(loopStartDesign.getRight() + 3).withWidth(36), true);
+    readout("loopEnd", loopEndDesign.withX(loopEndDesign.getRight() + 3).withWidth(36), true);
+    readout("balance", balanceDesign.withX(balanceDesign.getRight() + 3).withWidth(36), true);   // loop side, %
+    g.setColour(kInk); g.setFont(font(14));
+    g.drawText("*  PATCH", presetBoxDesign.getX() - 44, presetBoxDesign.getY(), 42, presetBoxDesign.getHeight(), juce::Justification::centredLeft);
 
     auto meter = [&](int y, const char* name, float peak) {
         g.setColour(kMuted); g.setFont(mono(12)); g.drawText(name, meterArea.getX(), y, 32, 8, juce::Justification::centredLeft);
@@ -635,10 +754,10 @@ void MoodEditor::paint(juce::Graphics& g) {
 
     g.setColour(kPaper); g.fillRect(lcdArea);
     g.setColour(kInk); g.drawRect(lcdArea, 2);
-    auto lcdHead = lcdArea.withHeight(23); g.fillRect(lcdHead);
+    auto lcdHead = lcdArea.withHeight(21); g.fillRect(lcdHead);
     g.setColour(kPaper); g.setFont(font(15)); g.drawText("*  THE SIGNAL  /  " + lcdLabel, lcdHead.reduced(10, 0), juce::Justification::centredLeft);
-    auto lr = lcdArea.reduced(12, 8).withTrimmedTop(22);
-    g.setColour(kInk); g.setFont(font(22)); g.drawFittedText(lcdValue.toUpperCase(), lr.removeFromTop(30), juce::Justification::centredLeft, 1);
+    auto lr = lcdArea.reduced(12, 6).withTrimmedTop(20);
+    g.setColour(kInk); g.setFont(font(20)); g.drawFittedText(lcdValue.toUpperCase(), lr.removeFromTop(27), juce::Justification::centredLeft, 1);
     g.setColour(kMuted); g.setFont(font(14)); g.drawText(lcdMeta, lr, juce::Justification::centredLeft);
 }
 

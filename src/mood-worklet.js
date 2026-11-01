@@ -53,6 +53,17 @@ const divMap = (knob) => DIV_STEPS[Math.round(clamp(knob, 0, 1) * (DIV_STEPS.len
 // TONE is a hi-cut on the wet bus: a fixed 2.6 kHz one-pole, blended in by amount.
 const TONE_HZ = 2600;
 
+// ───── RAMPS ─────
+// Each channel has a function generator that can drive one control. The first
+// position is off; MODIFY means this channel's own MODIFY knob.
+const RAMP_TARGETS = ['OFF', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE'];
+const RAMP_KEYS = ['', 'time', 'mix', 'length', 'modWet', 'clock', 'balance'];
+const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
+const rampTargetIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_TARGETS.length - 1));
+const rampWaveIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_WAVES.length - 1));
+const rampHz = (k) => expMap(clamp(k, 0, 1), 0.05, 8);   // one cycle every 20 s … eight a second
+const RAMP_DEPTH = 0.5;
+
 const clockHz = (knob, smooth = false) => smooth
   ? expMap(clamp(knob, 0, 1), CLOCK_MIN_HZ, CLOCK_MAX_HZ)
   : CLOCK_STEPS[Math.round(clamp(knob, 0, 1) * (CLOCK_STEPS.length - 1))];
@@ -355,10 +366,14 @@ class MoodCore {
       sync: 0, bpm: 120,
       loopStart: 0, loopEnd: 1, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0,
+      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
     };
     // host-rate smoothed knobs
     this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5,
-      tone: 1, fade: 0, width: 0.5 };
+      tone: 1, fade: 0, width: 0.5, rampSpeed: 0.45 };
+    // What the DSP actually reads: the smoothed knobs plus whatever a ramp is
+    // moving. Rebuilt every host sample, so the ramps never disturb a knob.
+    this.e = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5 };
     this.hostCount = 0;
     this.phase = 0;
     this.clockRatio = 1;
@@ -405,6 +420,14 @@ class MoodCore {
     this.rng = 22222;
     this.toneL = 0; this.toneR = 0;              // TONE hi-cut state
     this.wowPh = 0;                              // CLASSIC loop wobble
+    // Two generators, each with its own phase and its own seeded stream (never the
+    // shared rng: STRETCH grains and CLASSIC hiss draw from that one).
+    this.ramp = [
+      { ph: 0, dir: 1, prev: 0.5, next: 0.5, rng: 0x9e3779b9 },
+      { ph: 0.5, dir: 1, prev: 0.5, next: 0.5, rng: 0x5bd1e995 },
+    ];
+    this.rampRaw = [0, 0];      // per core tick
+    this.rampVal = [0, 0];      // smoothed to audio rate
 
     this.fsDown = { wet: null, loop: null };   // press state for footswitches
     this.engaged = 0;
@@ -465,7 +488,7 @@ class MoodCore {
   // How much history a capture may use, in core samples. MEMORY 0 keeps the
   // pedal's clock-derived capacity; above that it is 1–30 s of real time.
   maxCaptureSamples() {
-    const clock = clockHz(this.s.clock, this.p.smooth);
+    const clock = clockHz(this.e.clock, this.p.smooth);
     const user = this.p.memory > 0.001 ? expMap(clamp(this.p.memory), 1, 30) * clock : LOOP_SAMPLES;
     return Math.min(MAX_LOOP_SAMPLES - 1, Math.max(64, Math.min(user, MAX_LOOP_SECONDS * clock)));
   }
@@ -481,8 +504,8 @@ class MoodCore {
     }
     this.lsrc = n;
     this.loopPos = 0;
-    this.tapeSpeed = speedMap(this.s.modLoop, 0.04);
-    this.stretchSpeed = stretchMap(this.s.modLoop);
+    this.tapeSpeed = speedMap(this.e.modLoop, 0.04);
+    this.stretchSpeed = stretchMap(this.e.modLoop);
     this.grain[0].ph = 0; this.grain[1].ph = 0.5;
     this.grain[0].start = 0; this.grain[1].start = 0;
     this.loopState = 'play';
@@ -501,11 +524,74 @@ class MoodCore {
     if (!(len > 0) || len < 64) { r0 = 0; len = Math.max(64, this.lsrc); }
     len = Math.min(len, this.lsrc - r0);
     if (this.p.loopMode !== 1) return { W: Math.max(64, len), start: r0 };
-    const W = Math.max(64, Math.floor(len * expMap(this.s.length, 0.02, 1)));
+    const W = Math.max(64, Math.floor(len * expMap(this.e.length, 0.02, 1)));
     return { W, start: r0 + len - W };
   }
 
   rand() { this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0; return this.rng / 4294967296; }
+
+  // ── ramps ──
+  // A second, private random stream per generator: the shared rng belongs to the
+  // STRETCH grains and CLASSIC hiss, and drawing from it here would move them.
+  rampRand(g) {
+    g.rng = (Math.imul(g.rng, 1664525) + 1013904223) >>> 0;
+    return g.rng / 4294967296;
+  }
+
+  // Value of the chosen shape at the current phase, 0..1.
+  rampShape(g, wave) {
+    const ph = g.ph;
+    if (this.p.sweep) return ph;                      // SWEEP: it only ever climbs
+    if (wave === 1) return ph < 0.5 ? 1 : 0;          // square
+    if (wave === 2) return 0.5 + 0.5 * Math.sin(TAU * ph);
+    if (wave === 3) return g.next;                    // sample and hold
+    if (wave === 4) {                                 // smooth random
+      const t = ph * ph * (3 - 2 * ph);
+      return g.prev + (g.next - g.prev) * t;
+    }
+    return 1 - Math.abs(2 * ph - 1);                  // triangle
+  }
+
+  // Advance both generators. This runs once per host sample, not per core tick:
+  // the ramp is a time function, so turning CLOCK down must not slow it down.
+  // BOUNCE ping-pongs the phase instead of letting it reset, so nothing snaps back.
+  rampTick() {
+    const rate = rampHz(this.s.rampSpeed) / this.fs;
+    const wave = rampWaveIndex(this.p.rampWave);
+    for (let k = 0; k < 2; k++) {
+      const g = this.ramp[k];
+      if (rampTargetIndex(k === 0 ? this.p.rampWet : this.p.rampLoop) === 0) { this.rampRaw[k] = 0; continue; }
+      g.ph += rate * g.dir;
+      if (g.ph >= 1) {
+        if (this.p.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
+        g.prev = g.next; g.next = this.rampRand(g);
+      } else if (g.ph <= 0) {
+        if (this.p.bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
+        g.prev = g.next; g.next = this.rampRand(g);
+      }
+      this.rampRaw[k] = this.rampShape(g, wave);
+    }
+  }
+
+  // Rebuild the effective controls from the smoothed knobs, then let the ramps
+  // push whichever control they are pointed at. Always starts from the knob, so
+  // turning a ramp off leaves the control exactly where the knob says.
+  applyRamps(a) {
+    this.rampVal[0] += (this.rampRaw[0] - this.rampVal[0]) * a;
+    this.rampVal[1] += (this.rampRaw[1] - this.rampVal[1]) * a;
+    const e = this.e, sm = this.s;
+    e.time = sm.time; e.mix = sm.mix; e.length = sm.length; e.modWet = sm.modWet;
+    e.clock = sm.clock; e.modLoop = sm.modLoop; e.balance = sm.balance;
+    for (let k = 0; k < 2; k++) {
+      const idx = rampTargetIndex(k === 0 ? this.p.rampWet : this.p.rampLoop);
+      if (idx === 0) continue;
+      const v = this.rampVal[k];
+      const off = (this.p.rampUni ? v : v * 2 - 1) * RAMP_DEPTH;
+      let key = RAMP_KEYS[idx];
+      if (k === 1 && key === 'modWet') key = 'modLoop';   // MODIFY means this channel's own
+      e[key] = clamp(e[key] + off, 0, 1);
+    }
+  }
 
   // One-pole coefficient for the TONE hi-cut. The amount of cut is the caller's;
   // this is only the filter's corner, worked out once.
@@ -528,7 +614,7 @@ class MoodCore {
     const { W, start } = this.loopWindow();
     const buf = this.loopBuf;
     const mode = this.p.loopMode;
-    const m = this.s.modLoop;
+    const m = this.e.modLoop;
     // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
     // loop plays back slower and lower and takes div times as long to come round.
     const ldiv = divMap(this.p.loopDiv);
@@ -547,7 +633,7 @@ class MoodCore {
     if (mode === 2) {
       // STRETCH: two Hann grains at 1x pitch; LENGTH = grain (slice) size,
       // MODIFY = speed and direction of the position through the loop.
-      const G = Math.min(expMap(this.s.length, 0.01 * fs, 0.5 * fs), W);
+      const G = Math.min(expMap(this.e.length, 0.01 * fs, 0.5 * fs), W);
       // A divided loop stretches each grain by div as well, or the grains would
       // still be read at full speed and the division would only thin them out.
       const Gs = G * ldiv;
@@ -588,7 +674,7 @@ class MoodCore {
       const main = rd(pos) * edgeAt(pos);
       let sl = 0;
       if (this.envMix > 1e-4) {
-        const S = Math.min(expMap(this.s.length, 0.01 * fs, 1.0 * fs), W);
+        const S = Math.min(expMap(this.e.length, 0.01 * fs, 1.0 * fs), W);
         const sl0 = this.slice;
         if (sl0.ph >= S) sl0.ph -= S;
         const F2 = Math.min(0.004 * fs, S / 4);
@@ -619,7 +705,7 @@ class MoodCore {
   }
 
   coreTick(x) {
-    const p = this.p, s = this.s;
+    const p = this.p, e = this.e;
     const loopOut = this.loopTick(x);
 
     // Routing only changes the wet input when the loop is playing.
@@ -642,24 +728,24 @@ class MoodCore {
     const fs = CORE_FS;
     if (this.modeGain[0] > 1e-4) {
       // CLASSIC: the MK I reverb rings far longer than the MK II's.
-      this.reverb.setDecay(expMap(s.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(s.time, 0.35, 1));
-      const o = this.reverb.tick(wIn, s.modWet, freeze, s.time > 0.985);
+      this.reverb.setDecay(expMap(e.time, 0.4, p.classic ? 32 : 25) * wdiv, expMap(e.time, 0.35, 1));
+      const o = this.reverb.tick(wIn, e.modWet, freeze, e.time > 0.985);
       wl += o[0] * this.modeGain[0]; wr += o[1] * this.modeGain[0];
     }
     let mono = 0;
     if (this.modeGain[1] > 1e-4) {
       // Synced: the division is real seconds, converted into core ticks at the
       // current clock so the echoed note stays on the beat at any clock setting.
-      let delayTicks = expMap(s.time, 0.02 * fs, 2 * fs);
-      if (p.sync) delayTicks = clamp(syncSeconds(p.bpm, s.time) * this.clockRatio * this.fs, 1, DELAY_MAX_SEC * fs * 0.95);
+      let delayTicks = expMap(e.time, 0.02 * fs, 2 * fs);
+      if (p.sync) delayTicks = clamp(syncSeconds(p.bpm, e.time) * this.clockRatio * this.fs, 1, DELAY_MAX_SEC * fs * 0.95);
       delayTicks = clamp(delayTicks * wdiv, 1, DELAY_MAX_SEC * fs * 0.95);
-      mono += this.delay.tick(wIn, delayTicks, s.modWet, freeze) * this.modeGain[1];
+      mono += this.delay.tick(wIn, delayTicks, e.modWet, freeze) * this.modeGain[1];
     }
     if (this.modeGain[2] > 1e-4) {
-      mono += this.slip.tick(wIn, expMap(s.time, 0.05 * fs, 1.5 * fs) * wdiv, slipSpeedMap(s.modWet), freeze) * this.modeGain[2];
+      mono += this.slip.tick(wIn, expMap(e.time, 0.05 * fs, 1.5 * fs) * wdiv, slipSpeedMap(e.modWet), freeze) * this.modeGain[2];
     }
     if (this.modeGain[3] > 1e-4) {
-      const o = this.weave.tick(wIn, Math.min(2.8, (0.2 + s.time * 2.6) * wdiv), s.modWet, freeze);
+      const o = this.weave.tick(wIn, Math.min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, freeze);
       wl += o[0] * this.modeGain[3]; wr += o[1] * this.modeGain[3];
     }
     wl += mono;
@@ -669,7 +755,7 @@ class MoodCore {
       wl = mid + side; wr = mid - side;
     }
     // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
-    const toneAmt = 1 - clamp(s.tone);
+    const toneAmt = 1 - clamp(this.s.tone);
     if (toneAmt > 1e-4) {
       const c = this.toneCoeff();
       this.toneL += c * (wl - this.toneL); this.toneR += c * (wr - this.toneR);
@@ -690,7 +776,7 @@ class MoodCore {
     // through an active wet channel — that would double it. The ducking follows
     // the wet level, so turning the balance to LOOP always restores the loop in
     // full instead of silencing both sides.
-    const bal = s.balance;
+    const bal = e.balance;
     const wetLvl = Math.min(1, 2 * (1 - bal)), loopLvl = Math.min(1, 2 * bal);
     const directT = p.routing !== 0 && wetOn ? 1 - wetLvl : 1;
     this.loopDirect += (directT - this.loopDirect) * 0.003;
@@ -728,9 +814,12 @@ class MoodCore {
       s.tone += (p.tone - s.tone) * a;
       s.fade += (p.fade - s.fade) * a;
       s.width += (p.width - s.width) * a;
+      s.rampSpeed += (p.rampSpeed - s.rampSpeed) * a;
+      this.rampTick();
+      this.applyRamps(a);
 
       if ((i & 31) === 0) {
-        const c = clockHz(s.clock, !!p.smooth) / fs;
+        const c = clockHz(this.e.clock, !!p.smooth) / fs;
         this.clockRatio = c;
         if (Math.abs(c - this.filterClock) > 0.002 * c) {
           this.filterClock = c;
@@ -757,8 +846,8 @@ class MoodCore {
       // dry stays at unity up to noon, then fades; true unity when nothing is engaged
       const engagedT = this.wetOn || this.loopState === 'play' ? 1 : 0;
       this.engaged += (engagedT - this.engaged) * 0.001;
-      const dg = p.dryKill ? 0 : 1 - this.engaged * (1 - Math.min(1, 2 * (1 - s.mix)));
-      const wg = Math.min(1, 2 * s.mix);
+      const dg = p.dryKill ? 0 : 1 - this.engaged * (1 - Math.min(1, 2 * (1 - this.e.mix)));
+      const wg = Math.min(1, 2 * this.e.mix);
       let l = dry * dg + el * wg;
       let r = dry * dg + er * wg;
       // A fully bypassed plugin must be transparent, including signals above 0 dBFS.
@@ -872,5 +961,5 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, divMap, DIV_STEPS, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }

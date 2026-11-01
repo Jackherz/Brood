@@ -30,6 +30,19 @@ public:
         int index = 0;
         std::function<void()> changed;
     };
+    // One ramp destination as a click-cycling cell: the arrows either side step
+    // through the list, so it stays a big target instead of a tiny menu.
+    struct Stepper : juce::Component {
+        Stepper(juce::RangedAudioParameter& p, juce::String caption, juce::StringArray names, std::function<void()> onChange);
+        void paint(juce::Graphics&) override;
+        void mouseDown(const juce::MouseEvent&) override;
+        juce::RangedAudioParameter& param;
+        juce::String cap;
+        juce::StringArray names;
+        juce::ParameterAttachment attach;
+        int index = 0;
+        std::function<void()> changed;
+    };
     struct Footswitch : juce::Component {
         Footswitch(juce::RangedAudioParameter& p, juce::String key) : param(p), keyName(std::move(key)) {}
         void paint(juce::Graphics&) override;
@@ -88,6 +101,13 @@ private:
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::vector<Dip> dips;
     std::unique_ptr<juce::FileChooser> chooser;
+    // The ramp engine: two destinations, a shape, a rate and a polarity, plus the
+    // BOUNCE and SWEEP dips that bend the shape.
+    std::unique_ptr<Stepper> rampWet, rampLoop, rampWave;
+    juce::Slider rampRate;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rampRateAtt;
+    struct RampSwitch { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
+    std::array<RampSwitch, 3> rampSwitches;   // UNI, BOUNCE, SWEEP
     std::unique_ptr<HiddenPanel> hiddenPanel;
     juce::TextButton hiddenButton { "HIDDEN" };
 
@@ -98,6 +118,8 @@ private:
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopStartDesign, loopEndDesign;
     juce::Rectangle<int> hiddenButtonDesign;
+    // The four stacked panels of the side column, in design coordinates.
+    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[3], presetBoxDesign;
     bool hiddenOpen = false;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

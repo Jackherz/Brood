@@ -24,6 +24,10 @@ static void setParam(mood::Params& p, const std::string& n, double v) {
     else if (n == "tone") p.tone = v; else if (n == "fade") p.fade = v; else if (n == "width") p.width = v;
     else if (n == "wetDiv") p.wetDiv = v; else if (n == "loopDiv") p.loopDiv = v;
     else if (n == "classic") p.classic = v != 0;
+    else if (n == "rampWet") p.rampWet = v; else if (n == "rampLoop") p.rampLoop = v;
+    else if (n == "rampSpeed") p.rampSpeed = v; else if (n == "rampWave") p.rampWave = v;
+    else if (n == "rampUni") p.rampUni = v != 0; else if (n == "bounce") p.bounce = v != 0;
+    else if (n == "sweep") p.sweep = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }
 }
 

@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, divMap, DIV_STEPS, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
+const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -543,4 +543,167 @@ test('CLASSIC makes the slow clock noisy and the reverb ring', () => {
   const clean = noiseFloor(false), noisy = noiseFloor(true);
   assert.ok(clean < 1e-6, 'without CLASSIC a silent input stays silent');
   assert.ok(noisy > 1e-4, `CLASSIC adds clock noise (${noisy.toFixed(5)})`);
+});
+
+// ─────────────────────────── the ramp engine ───────────────────────────
+
+// Sample the control the DSP actually reads, once per block.
+function rampTrace(patch, seconds, field = 'time') {
+  const core = new MoodCore(FS);
+  Object.assign(core.p, patch);
+  for (const [k, v] of Object.entries(patch)) core.setParam(k, v);
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+  const out = [];
+  for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) {
+    core.process(inp, L, R);
+    out.push(core.e[field]);
+  }
+  return out;
+}
+const rminmax = (a) => [Math.min(...a), Math.max(...a)];
+const wrapsIn = (seconds, speed) => {
+  const core = new MoodCore(FS);
+  core.setParam('rampWet', 0.2); core.setParam('rampSpeed', speed);
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+  let wraps = 0, last = core.ramp[0].ph;
+  for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) {
+    core.process(inp, L, R);
+    if (core.ramp[0].ph < last) wraps++;
+    last = core.ramp[0].ph;
+  }
+  return wraps;
+};
+
+test('RAMPS destinations and waveforms are the documented lists', () => {
+  assert.deepStrictEqual(RAMP_TARGETS, ['OFF', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE']);
+  assert.deepStrictEqual(RAMP_WAVES, ['TRI', 'SQR', 'SIN', 'RND', 'SMTH']);
+  assert.deepStrictEqual([0, 1].map(rampTargetIndex), [0, 6]);
+  assert.deepStrictEqual([0, 1].map(rampWaveIndex), [0, 4]);
+});
+
+test('a ramp moves its control and stops where the knob says', () => {
+  const still = rampTrace({ rampWet: 0, time: 0.6 }, 2);
+  assert.ok(Math.abs(still[still.length - 1] - 0.6) < 1e-6, 'off is the knob, untouched');
+  const moved = rampTrace({ rampWet: 0.2, time: 0.6 }, 4);
+  const [lo, hi] = rminmax(moved);
+  assert.ok(hi - lo > 0.6, `TIME should sweep (${lo.toFixed(2)}..${hi.toFixed(2)})`);
+  assert.ok(hi <= 1 && lo >= 0, 'stays inside the knob range');
+  // Balanced around the knob: bipolar is a swing, not a one-way offset.
+  assert.ok(Math.abs((lo + hi) / 2 - 0.6) < 0.12, `centred on the knob (${((lo + hi) / 2).toFixed(2)})`);
+});
+
+test('each waveform has its own shape', () => {
+  const shapes = RAMP_WAVES.map((_, w) => rampTrace({ rampWet: 0.2, rampWave: w / 4, time: 0.5 }, 6));
+  const [tri, sqr, sin, rnd, smth] = shapes;
+  const ends = (a) => a.filter((v) => v < 0.15 || v > 0.85).length / a.length;
+  const middle = (a) => a.filter((v) => Math.abs(v - 0.5) < 0.15).length / a.length;
+  assert.ok(ends(sqr) > 0.9, 'square is two levels');
+  assert.ok(ends(sin) > ends(tri), `sine hangs at the ends more than the triangle (${ends(sin).toFixed(2)} vs ${ends(tri).toFixed(2)})`);
+  assert.ok(middle(tri) > middle(sin), 'the triangle passes through the middle more');
+  assert.ok(middle(sqr) < 0.05, 'the square skips the middle');
+  // Random and smooth random hold a value, then move.
+  const held = (a) => { let n = 0; for (let i = 1; i < a.length; i++) if (Math.abs(a[i] - a[i - 1]) < 1e-6) n++; return n / a.length; };
+  assert.ok(held(rnd) > 0.3, 'sample and hold sits still between rolls');
+  assert.ok(held(smth) < held(rnd), 'smooth random keeps moving');
+  const [rlo, rhi] = rminmax(rnd);
+  assert.ok(rhi - rlo > 0.1, 'random covers a range');
+  const distinct = new Set(shapes.map((a) => a.map((v) => v.toFixed(2)).join(','))).size;
+  assert.strictEqual(distinct, 5, 'all five shapes are different');
+});
+
+test('RAMP SPEED is a rate in hertz, and the CLOCK does not change it', () => {
+  const slow = wrapsIn(10, 0.1), fast = wrapsIn(10, 0.9);
+  assert.ok(slow <= 1, `slow speed barely moves (${slow})`);
+  assert.ok(fast >= 15, `fast speed runs (${fast})`);
+  assert.ok(rampHz(0.5) > 0.5 && rampHz(0.5) < 0.8, 'mid speed is about 0.6 Hz');
+  for (const clock of [0, 0.5, 1]) {
+    const core = new MoodCore(FS);
+    core.setParam('rampWet', 0.2); core.setParam('rampSpeed', 0.5); core.setParam('clock', clock);
+    const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+    let wraps = 0, last = core.ramp[0].ph;
+    for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) {
+      core.process(inp, L, R);
+      if (core.ramp[0].ph < last) wraps++;
+      last = core.ramp[0].ph;
+    }
+    assert.ok(wraps >= 1 && wraps <= 3, `clock ${clock} keeps the same ramp rate (${wraps} cycles in 4 s)`);
+  }
+});
+
+// The raw generator, before the 30 ms smoothing: the snap-back is visible here.
+function rawTrace(patch, seconds) {
+  const core = new MoodCore(FS);
+  for (const [k, v] of Object.entries(patch)) core.setParam(k, v);
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+  const out = [];
+  for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) {
+    core.process(inp, L, R);
+    out.push(core.rampRaw[0]);
+  }
+  return out;
+}
+
+test('SWEEP is a one-way climb and BOUNCE takes the snap out of it', () => {
+  const saw = rawTrace({ rampWet: 0.2, sweep: 1, time: 0.5 }, 8);
+  const bouncy = rawTrace({ rampWet: 0.2, sweep: 1, bounce: 1, time: 0.5 }, 8);
+  const resets = (a) => a.filter((v, i) => i > 0 && v < a[i - 1] - 0.5).length;
+  const rising = (a) => a.filter((v, i) => i > 0 && v > a[i - 1]).length / (a.length - 1);
+  assert.ok(resets(saw) >= 2, `the sweep climbs and starts again (${resets(saw)} resets)`);
+  assert.ok(rising(saw) > 0.9, `it only ever climbs (${(rising(saw) * 100).toFixed(0)}% rising steps)`);
+  assert.strictEqual(resets(bouncy), 0, 'BOUNCE removes the snap-back entirely');
+  assert.ok(rising(bouncy) > 0.3 && rising(bouncy) < 0.7, 'and turns it into a tide');
+});
+
+test('POLARITY: unipolar only ever adds to the knob', () => {
+  const bi = rampTrace({ rampWet: 0.2, time: 0.5 }, 6);
+  const uni = rampTrace({ rampWet: 0.2, time: 0.5, rampUni: 1 }, 6);
+  assert.ok(rminmax(uni)[0] >= 0.5 - 0.01, `unipolar never goes under the knob (${rminmax(uni)[0].toFixed(2)})`);
+  assert.ok(rminmax(uni)[1] > 0.8, 'and still reaches the top');
+  assert.ok(rminmax(bi)[0] < 0.3, 'bipolar goes both ways');
+});
+
+test('the two generators are independent, and MODIFY means this channel', () => {
+  const spread = (a) => rminmax(a)[1] - rminmax(a)[0];
+  const wetOnly = rampTrace({ rampWet: 0.2, rampLoop: 0, time: 0.5, modLoop: 0.5 }, 4);
+  assert.ok(spread(wetOnly) > 0.5, 'the wet generator moves TIME');
+  // The wet ramp must leave the loop's MODIFY alone.
+  const loopStill = [];
+  const core = new MoodCore(FS);
+  core.setParam('rampWet', 0.2); core.setParam('modLoop', 0.5);
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+  for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) { core.process(inp, L, R); loopStill.push(core.e.modLoop); }
+  assert.ok(spread(loopStill) < 1e-6, 'the wet ramp does not touch the loop');
+  // The loop generator pointed at MODIFY drives the loop's own MODIFY.
+  const loopRamp = rampTrace({ rampWet: 0, rampLoop: 0.67, modLoop: 0.5 }, 4, 'modLoop');
+  assert.ok(spread(loopRamp) > 0.5, 'the loop generator moves loop MODIFY');
+  // Both at once: two different controls, two different phases.
+  const both = [];
+  const c2 = new MoodCore(FS);
+  c2.setParam('rampWet', 0.2); c2.setParam('rampLoop', 0.67);
+  for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) { c2.process(inp, L, R); both.push([c2.e.time, c2.e.modLoop]); }
+  const timeSpread = spread(both.map((v) => v[0])), modSpread = spread(both.map((v) => v[1]));
+  assert.ok(timeSpread > 0.5 && modSpread > 0.5, 'both run together');
+  assert.notStrictEqual(c2.ramp[0].ph, c2.ramp[1].ph, 'the two generators are not in lockstep');
+});
+
+test('with every ramp off the audio is bit-identical to before the engine existed', () => {
+  const a = new MoodCore(FS);
+  a.setParam('wetMode', 0); a.setParam('mix', 0.8); a.wetOn = true; a.s.mix = 0.8;
+  const one = render(a, 1, tone(220, 1));
+  const b = new MoodCore(FS);
+  b.setParam('wetMode', 0); b.setParam('mix', 0.8); b.wetOn = true; b.s.mix = 0.8;
+  b.setParam('rampWet', 0); b.setParam('rampLoop', 0); b.setParam('rampSpeed', 1);
+  const two = render(b, 1, tone(220, 1));
+  assert.deepStrictEqual(Array.from(one.L), Array.from(two.L));
+});
+
+test('a TIME ramp makes the echo breathe', () => {
+  const core = new MoodCore(FS);
+  core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.55);
+  core.setParam('time', 0.4); core.setParam('rampWet', 0.2); core.setParam('rampSpeed', 0.35);
+  core.wetOn = true; core.s.mix = 1; core.modeGain = [0, 1, 0, 0];
+  const { L } = render(core, 4, click);
+  assert.ok(finite(L), 'stays finite while the ramp moves the delay');
+  const a = peakTime(L, 0.02, 1.2), b = peakTime(L, 1.6, 3.6);
+  assert.ok(Math.abs(a - b) > 0.01, `the echo moves (${a.toFixed(3)} s then ${b.toFixed(3)} s)`);
 });
