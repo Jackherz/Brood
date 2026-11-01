@@ -549,13 +549,17 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
     rampRate.onValueChange = [this] { touch("rampSpeed"); };
     addAndMakeVisible(rampRate);
     rampRateAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "rampSpeed", rampRate);
-    // The two dips that bend the shape, and the polarity that keeps it above the knob.
-    const std::pair<const char*, const char*> rampSwitchDefs[] = {{"rampUni", "UNI"}, {"bounce", "BOUNCE"}, {"sweep", "SWEEP"}};
+    // The two dips that bend the shape, the polarity that keeps it above the knob,
+    // and the switch that hands the rate to the tempo instead.
+    const std::pair<const char*, const char*> rampSwitchDefs[] = {{"rampUni", "UNI"}, {"bounce", "BOUNCE"}, {"sweep", "SWEEP"}, {"rampSync", "SYNC"}};
     for (size_t i = 0; i < rampSwitches.size(); ++i) {
         auto& rs = rampSwitches[i];
         const juce::String lab = rampSwitchDefs[i].second;
         rs.button = std::make_unique<juce::ToggleButton>(lab);
-        rs.button->onClick = [this, lab, b = rs.button.get()] { showReadout("RAMP", lab.toLowerCase() + (b->getToggleState() ? " on" : " off")); };
+        rs.button->onClick = [this, lab, b = rs.button.get()] {
+            showReadout("MOD", lab.toLowerCase() + (b->getToggleState() ? " on" : " off"));
+            repaint();   // the rate cell's caption changes with SYNC
+        };
         addAndMakeVisible(*rs.button);
         rs.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, rampSwitchDefs[i].first, *rs.button);
     }
@@ -580,7 +584,7 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         for (int i = 0; i < 9; ++i) if (auto* parameter = proc.apvts.getParameter(ids[i])) {
             parameter->beginChangeGesture(); parameter->setValueNotifyingHost(patches[which][i]); parameter->endChangeGesture();
         }
-        for (auto* id : {"trails", "smooth", "rampUni", "bounce", "sweep"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
+        for (auto* id : {"trails", "smooth", "rampUni", "bounce", "sweep", "rampSync"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
         for (auto* id : {"rampWet", "rampLoop"}) if (auto* parameter = proc.apvts.getParameter(id)) parameter->setValueNotifyingHost(0.f);
         if (auto* parameter = proc.apvts.getParameter("rampWave")) parameter->setValueNotifyingHost(0.f);
         if (auto* parameter = proc.apvts.getParameter("balance")) parameter->setValueNotifyingHost(0.5f);
@@ -743,7 +747,7 @@ void MoodEditor::resized() {
     place(rampRate, rampRateDesign.withTrimmedLeft(38).reduced(0, 3));
     ramp.removeFromTop(3);
     rampRow = ramp.removeFromTop(26);
-    const int swCell = (rampRow.getWidth() - 14) / 3;   // three even cells, 7 px apart
+    const int swCell = (rampRow.getWidth() - 21) / 4;   // four even cells, 7 px apart
     for (size_t i = 0; i < rampSwitches.size(); ++i) {
         const bool last = i + 1 == rampSwitches.size();
         rampSwitchDesign[i] = last ? rampRow : rampRow.removeFromLeft(swCell);
@@ -780,22 +784,23 @@ void MoodEditor::rebuildHoverHelp() {
     static const char* dipText[] = {
         "the tails keep falling after you switch the wet side off.",
         "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
-        "the delay stops being a length of time and becomes a division of the beat.",
+        "the delay stops being a length of time and becomes a division of the beat; in ENV the slice and in WEAVE the reach become divisions too. the modulation rate has its own SYNC in the panel below.",
     };
     static const char* dipNames[] = {"TRAILS", "SMOOTH", "SYNC"};
     for (size_t i = 0; i < dips.size() && i < 3; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
 
-    add(rampWetDesign, "RAMP / WET", "click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. off leaves the knob alone, and a filled display means the tide is running.");
-    add(rampLoopDesign, "RAMP / LOOP", "click anywhere to step the second tide through the same list; its modify means this channel's own. off leaves the knob alone, and a filled display means the tide is running.");
-    add(rampWaveDesign, "RAMP SHAPE", "click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.");
-    add(rampRateDesign, "RAMP RATE", "how slowly the tide turns. both sides share it, so they stay in step with each other.");
+    add(rampWetDesign, "MODULATION / WET", "click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. off leaves the knob alone, and a filled display means the tide is running.");
+    add(rampLoopDesign, "MODULATION / LOOP", "click anywhere to step the second tide through the same list; its modify means this channel's own. off leaves the knob alone, and a filled display means the tide is running.");
+    add(rampWaveDesign, "MODULATION SHAPE", "click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.");
+    add(rampRateDesign, "MODULATION RATE", "how slowly the tide turns. both sides share it, so they stay in step with each other. with SYNC on, the rate becomes a musical span instead of a free speed.");
     static const char* rampSwitchText[] = {
         "the swing sits above the knob instead of either side of it.",
         "the swing reflects instead of snapping back, so nothing jumps.",
         "the shape is ignored and the knob just climbs, again and again.",
+        "the rate stops being a free speed and becomes a division of the beat: eight bars down to a sixteenth, so a slow tempo turns slowly.",
     };
-    static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP"};
-    for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
+    static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP", "TEMPO SYNC"};
+    for (int i = 0; i < 4; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left waits about a second, like the pedal.");
     add(loopStartDesign.expanded(0, 2), "START", "where the loop begins inside what was recorded. in ENV and STRETCH it slides towards the present; in TAPE it reaches back. it crossfades as it moves, so it will not click.");
@@ -953,7 +958,7 @@ void MoodEditor::paint(juce::Graphics& g) {
         g.setColour(kLine); g.drawRect(cell, 1);
         cornerTicks(g, cell.reduced(1), 4, kLine);
     }
-    panel(rampArea, "04", "THE RAMPS", "2 GEN / 1 CLOCK");
+    panel(rampArea, "04", "MODULATION", "2 GEN / 1 RATE");
     g.setColour(kMuted); g.setFont(font(11));
     g.drawText("CLICK A CELL TO STEP", rampArea.withTrimmedTop(4).withTrimmedRight(10), juce::Justification::centredRight);
     const int sx = srcArea.getX() + 14, lx = loopArea.getX() + 14;
@@ -967,9 +972,12 @@ void MoodEditor::paint(juce::Graphics& g) {
     g.drawText("MEMORY", lx, memoryDesign.getY(), 52, memoryDesign.getHeight(), juce::Justification::centredLeft);
     g.drawText("START", lx, loopStartDesign.getY(), 38, loopStartDesign.getHeight(), juce::Justification::centredLeft);
     g.drawText("END", lx, loopEndDesign.getY(), 24, loopEndDesign.getHeight(), juce::Justification::centredLeft);
-    // RATE sits inside the rate cell, so it costs no extra row.
+    // RATE sits inside the rate cell, so it costs no extra row. With SYNC on it is
+    // no longer a rate at all, so the caption says what the readout now means.
+    const auto* rampSyncValue = proc.apvts.getRawParameterValue("rampSync");
+    const bool spanMode = rampSyncValue != nullptr && rampSyncValue->load() > 0.5f;
     g.setFont(font(11)); g.setColour(kMuted);
-    g.drawText("RATE", rampRateDesign.getX(), rampRateDesign.getY(), 36, rampRateDesign.getHeight(), juce::Justification::centredLeft);
+    g.drawText(spanMode ? "SPAN" : "RATE", rampRateDesign.getX(), rampRateDesign.getY(), 36, rampRateDesign.getHeight(), juce::Justification::centredLeft);
     g.setColour(kMuted); g.setFont(font(12));
     // Short readouts for the narrow column; the full wording lives in the host's
     // parameter display (that is what Ableton shows in its own inspector).

@@ -265,7 +265,10 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: va
 .rate-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 5px; height: 26px; margin: 0; padding: 0 5px; border: 1px solid #181815; background: #faf9f3; color: #77776f; font: 11px 'Terminal', monospace; white-space: nowrap; }
 .rate-row input[type="range"] { height: 12px; }
 .rate-row b { color: #181815; font: 11px 'Terminal', monospace; }
-.ramp-dips { grid-template-columns: repeat(3, minmax(0,1fr)); margin-top: 7px; gap: 4px; }
+/* Four switches now that SYNC joins them, so the row is tighter and the cells
+   narrower — the same four-across the editor draws in the rack. */
+.ramp-dips { grid-template-columns: repeat(4, minmax(0,1fr)); margin-top: 7px; gap: 4px; }
+.ramp-dips .dip { padding: 7px 1px 5px; font-size: 9px; letter-spacing: 0.02em; }
 
 @media (max-width: 1050px) {
   .page { padding-left: 18px; padding-right: 18px; }

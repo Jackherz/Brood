@@ -488,6 +488,11 @@ separate AGPLv3/commercial licensing, and the bundled fonts use the SIL Open
 Font License. See [LICENSE](LICENSE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and details.
 
+**If this is ever sold, it is sold open source** — the source stays published under
+GPLv3 and JUCE stays on its AGPLv3 path, so no commercial JUCE licence is needed. The
+reasoning, and the closed-build fallback that would have to happen before the first
+customer, are in [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md).
+
 ## Where this could go
 
 This is one pedal, emulated carefully. The direction now settled is a **series of

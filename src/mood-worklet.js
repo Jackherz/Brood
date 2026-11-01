@@ -44,7 +44,19 @@ const SYNC_DIVISIONS = [
 ];
 const syncIndex = (knob) => Math.round(clamp(knob, 0, 1) * (SYNC_DIVISIONS.length - 1));
 const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
-const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, DELAY_MAX_SEC * 0.95);
+// How long the division is at this tempo, before anything clamps it to a block's
+// own limit: the delay clamps to its line, WEAVE to its buffer, ENV to the take.
+const syncSecondsRaw = (bpm, knob) => SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300);
+const syncSeconds = (bpm, knob) => clamp(syncSecondsRaw(bpm, knob), 0.01, DELAY_MAX_SEC * 0.95);
+
+// The modulation generators sync to lengths rather than rates: one cycle is a
+// musical span, from eight bars down to a sixteenth. Beats per cycle, so a slower
+// tempo makes a longer cycle, exactly like the delay's divisions.
+const RAMP_DIV_LABELS = ['8 BARS', '4 BARS', '2 BARS', '1 BAR', '1/2', '1/4', '1/8', '1/16'];
+const RAMP_DIV_BEATS = [32, 16, 8, 4, 2, 1, 0.5, 0.25];
+const rampDivIndex = (knob) => Math.round(clamp(knob, 0, 1) * (RAMP_DIV_BEATS.length - 1));
+const rampDivLabel = (knob) => RAMP_DIV_LABELS[rampDivIndex(knob)];
+const rampCycleSeconds = (bpm, knob) => RAMP_DIV_BEATS[rampDivIndex(knob)] * 60 / clamp(bpm, 20, 300);
 // Hidden options (on the pedal you hold both footswitches to reach these).
 // The two sides can run on different clock divisions, so the wet side and the
 // loop can drift apart in time and pitch.
@@ -366,7 +378,7 @@ class MoodCore {
       sync: 0, bpm: 120,
       loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
+      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0,
     };
     // host-rate smoothed knobs
     this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5,
@@ -571,7 +583,9 @@ class MoodCore {
   // the ramp is a time function, so turning CLOCK down must not slow it down.
   // BOUNCE ping-pongs the phase instead of letting it reset, so nothing snaps back.
   rampTick() {
-    const rate = rampHz(this.s.rampSpeed) / this.fs;
+    // Free-running by default; synced, one cycle is a musical span instead.
+    const hz = this.p.rampSync ? 1 / rampCycleSeconds(this.p.bpm, this.s.rampSpeed) : rampHz(this.s.rampSpeed);
+    const rate = hz / this.fs;
     const wave = rampWaveIndex(this.p.rampWave);
     for (let k = 0; k < 2; k++) {
       const g = this.ramp[k];
@@ -717,7 +731,11 @@ class MoodCore {
       const main = rd(pos) * edgeAt(pos);
       let sl = 0;
       if (this.envMix > 1e-4) {
-        const S = Math.min(expMap(this.e.length, 0.01 * fs, 1.0 * fs), W);
+        // ENV slices to a length, so synced LENGTH is a division of the beat,
+        // converted into core ticks the same way the delay's is.
+        const S = this.p.sync
+          ? Math.min(W, Math.max(64, syncSecondsRaw(this.p.bpm, this.e.length) * this.clockRatio * fs))
+          : Math.min(expMap(this.e.length, 0.01 * fs, 1.0 * fs), W);
         const sl0 = this.slice;
         if (sl0.ph >= S) sl0.ph -= S;
         const F2 = Math.min(0.004 * fs, S / 4);
@@ -791,7 +809,12 @@ class MoodCore {
       mono += this.slip.tick(wIn, expMap(e.time, 0.05 * fs, 1.5 * fs) * wdiv, slipSpeedMap(e.modWet), freeze) * this.modeGain[2];
     }
     if (this.modeGain[3] > 1e-4) {
-      const o = this.weave.tick(wIn, Math.min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, freeze);
+      // Synced, TIME is a division of the beat: how far back the threads reach
+      // becomes a musical distance, so a stitch lands on the grid.
+      const reach = this.p.sync
+        ? Math.min(WEAVE_BUF_SEC * 0.85, syncSecondsRaw(this.p.bpm, e.time) * wdiv)
+        : Math.min(2.8, (0.2 + e.time * 2.6) * wdiv);
+      const o = this.weave.tick(wIn, reach, e.modWet, freeze);
       wl += o[0] * this.modeGain[3]; wr += o[1] * this.modeGain[3];
     }
     wl += mono; wr += mono;
@@ -1019,5 +1042,5 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }

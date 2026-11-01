@@ -23,6 +23,11 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUILD="$ROOT/native/build"
 
+# Which source this build came from. A warning report only means something if
+# the tree it came from is known: `-dirty` means local edits, `unknown` means a
+# folder that is not a clone (a downloaded zip), an old hash an old checkout.
+SRC_VERSION=$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo "unknown (not a git checkout)")
+
 INSTALL=0
 UNIVERSAL=0
 CLEAN=0
@@ -170,6 +175,7 @@ else
   fi
 fi
 
+echo "==> Source ${SRC_VERSION}"
 echo "==> Configuring (JUCE 8.0.9 is downloaded on the first run)"
 run cmake "${configure_args[@]}"
 

@@ -88,8 +88,25 @@ constexpr SyncDivision kSyncDivisions[] = {
 constexpr int kSyncCount = static_cast<int>(sizeof(kSyncDivisions) / sizeof(kSyncDivisions[0]));
 inline int syncIndex(double knob) { return static_cast<int>(jsRound(clampd(knob, 0, 1) * (kSyncCount - 1))); }
 inline const char* syncLabel(double knob) { return kSyncDivisions[syncIndex(knob)].label; }
+// How long the division is at this tempo, before anything clamps it to a block's
+// own limit. The delay clamps to its line, WEAVE to its buffer, ENV to the take.
+inline double syncSecondsRaw(double bpm, double knob) {
+    return kSyncDivisions[syncIndex(knob)].beats * 60.0 / clampd(bpm, 20, 300);
+}
 inline double syncSeconds(double bpm, double knob) {
-    return clampd(kSyncDivisions[syncIndex(knob)].beats * 60.0 / clampd(bpm, 20, 300), 0.01, kDelayMaxSec * 0.95);
+    return clampd(syncSecondsRaw(bpm, knob), 0.01, kDelayMaxSec * 0.95);
+}
+
+// The modulation generators sync to lengths rather than rates: one cycle is a
+// musical span, from eight bars down to a sixteenth. Written as beats per cycle so
+// a slower tempo makes a longer cycle, exactly like the delay's divisions.
+inline const char* const kRampDivLabels[] = {"8 BARS", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/8", "1/16"};
+constexpr double kRampDivBeats[] = {32.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25};
+constexpr int kRampDivCount = static_cast<int>(sizeof(kRampDivBeats) / sizeof(kRampDivBeats[0]));
+inline int rampDivIndex(double knob) { return rampIndexOfValue(knob, kRampDivCount); }
+inline const char* rampDivLabel(double knob) { return kRampDivLabels[rampDivIndex(knob)]; }
+inline double rampCycleSeconds(double bpm, double knob) {
+    return kRampDivBeats[rampDivIndex(knob)] * 60.0 / clampd(bpm, 20, 300);
 }
 
 // Tape follows octave steps, reverse on the left / forward on the right.
@@ -378,6 +395,7 @@ struct Params {
     double rampWet = 0, rampLoop = 0;                // RAMPS destination per channel
     double rampSpeed = 0.45, rampWave = 0;           // rate and shape
     bool rampUni = false, bounce = false, sweep = false;
+    bool rampSync = false;                          // modulation rate follows the tempo
 };
 
 struct State {
@@ -683,7 +701,9 @@ private:
     // a time function, so turning CLOCK down must not slow it down. BOUNCE
     // ping-pongs the phase instead of letting it reset.
     void rampTick() {
-        const double rate = rampHertz(s.rampSpeed) / fs;
+        // Free-running by default; synced, one cycle is a musical span instead.
+        const double hz = p.rampSync ? 1.0 / rampCycleSeconds(p.bpm, s.rampSpeed) : rampHertz(s.rampSpeed);
+        const double rate = hz / fs;
         const int wave = rampWaveIndex(p.rampWave);
         for (int k = 0; k < 2; ++k) {
             Ramp& g = ramp[k];
@@ -868,7 +888,11 @@ private:
             const double mainV = rd(pos) * edgeAt(pos);
             double sl = 0;
             if (envMix > 1e-4) {
-                const double S = std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
+                // ENV slices to a length, so synced LENGTH is a division of the beat,
+                // converted into core ticks the same way the delay's is.
+                const double S = p.sync
+                    ? std::min(Wd, std::max(64.0, syncSecondsRaw(p.bpm, e.length) * clockRatio * fs))
+                    : std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
                 if (slicePh >= S) slicePh -= S;
                 const double F2 = std::min(0.004 * kCoreFs, S / 4);
                 sl = rd(sliceStart + slicePh) * std::min({1.0, slicePh / F2, (S - slicePh) / F2});
@@ -938,7 +962,12 @@ private:
         if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(e.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(e.modWet), frozen) * modeGain[2];
         if (modeGain[3] > 1e-4) {
             double o[2];
-            weave.tick(wIn, std::min(2.8, (0.2 + e.time * 2.6) * wdiv), e.modWet, frozen, o);
+            // Synced, TIME is a division of the beat: how far back the threads reach
+            // becomes a musical distance, so a stitch lands on the grid.
+            const double reach = p.sync
+                ? std::min(kWeaveBufSec * 0.85, syncSecondsRaw(p.bpm, e.time) * wdiv)
+                : std::min(2.8, (0.2 + e.time * 2.6) * wdiv);
+            weave.tick(wIn, reach, e.modWet, frozen, o);
             wl += o[0] * modeGain[3]; wr += o[1] * modeGain[3];
         }
         wl += mono;

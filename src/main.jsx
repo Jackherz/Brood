@@ -19,7 +19,15 @@ const SYNC_DIVISIONS = [
 ];
 const syncIndex = (knob) => Math.round(clamp(knob) * (SYNC_DIVISIONS.length - 1));
 const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
-const syncSeconds = (bpm, knob) => clamp(SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300), 0.01, 2.1 * 0.95);
+// How long the division is, before a block clamps it to its own limit.
+const syncSecondsRaw = (bpm, knob) => SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300);
+const syncSeconds = (bpm, knob) => clamp(syncSecondsRaw(bpm, knob), 0.01, 2.1 * 0.95);
+// Modulation sync: one cycle is a musical span rather than a free rate.
+const RAMP_DIV_LABELS = ['8 BARS', '4 BARS', '2 BARS', '1 BAR', '1/2', '1/4', '1/8', '1/16'];
+const RAMP_DIV_BEATS = [32, 16, 8, 4, 2, 1, 0.5, 0.25];
+const rampDivIndex = (knob) => Math.round(clamp(knob) * (RAMP_DIV_BEATS.length - 1));
+const rampDivLabel = (knob) => RAMP_DIV_LABELS[rampDivIndex(knob)];
+const rampCycleSeconds = (bpm, knob) => RAMP_DIV_BEATS[rampDivIndex(knob)] * 60 / clamp(bpm, 20, 300);
 const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
 // The loop trim, mirroring the worklet: a memory ceiling of one second at the
 // far left (the pedal's own buffer) up to half a minute at the right.
@@ -41,7 +49,7 @@ const BASE = {
   trails: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0,
+  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0,
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', params: BASE },
@@ -100,7 +108,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -113,11 +121,12 @@ function describe(id, p) {
   if (id === 'clock') return `${rate.toFixed(rate < 10 && p.smooth ? 1 : 0)} kHz`;
   if (id === 'time') {
     if (p.sync && p.wetMode === 1) return `${syncLabel(v)} · ${timeText(syncSeconds(p.bpm, v))}`;
-    if (p.wetMode === 3) return `${timeText(0.2 + v * 2.6)} BACK`;
+    if (p.wetMode === 3) return p.sync ? `${syncLabel(v)} BACK · ${timeText(syncSecondsRaw(p.bpm, v))}` : `${timeText(0.2 + v * 2.6)} BACK`;
     if (p.wetMode === 0) return v > 0.985 ? 'INFINITE' : timeText(expMap(v, 0.4, 25) / ratio);
     return timeText(expMap(v, p.wetMode === 1 ? 0.02 : 0.05, p.wetMode === 1 ? 2 : 1.5) / ratio);
   }
   if (id === 'length' && p.loopMode === 1) return timeText((64 / rate) * expMap(v, 0.02, 1));
+  if (id === 'length' && p.loopMode === 0 && p.sync) return `${syncLabel(v)} SLICE · ${timeText(syncSecondsRaw(p.bpm, v))}`;
   if (id === 'length') return timeText(expMap(v, 0.01, p.loopMode === 0 ? 1 : 0.5) / ratio);
   if (id === 'modWet' && p.wetMode === 3) return v < 0.34 ? 'LONG CLOTH' : v < 0.7 ? 'MIXED' : 'STITCHES';
   if (id === 'modWet' && p.wetMode === 2) {
@@ -147,8 +156,8 @@ function describe(id, p) {
   if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1× CLOCK' : `${d}× SLOWER`; }
   if (id === 'rampWet' || id === 'rampLoop') return RAMP_TARGETS[rampIndex(v, RAMP_TARGETS)];
   if (id === 'rampWave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES)];
-  if (id === 'rampSpeed') return rampHint(v);
-  if (id === 'rampUni' || id === 'bounce' || id === 'sweep') return v ? 'ON' : 'OFF';
+  if (id === 'rampSpeed') return p.rampSync ? `${rampDivLabel(v)} · ${timeText(rampCycleSeconds(p.bpm, v))} A TURN` : rampHint(v);
+  if (id === 'rampUni' || id === 'bounce' || id === 'sweep' || id === 'rampSync') return v ? 'ON' : 'OFF';
   if (id === 'freeze') return v ? 'HELD, RINGING' : 'MOVING';
   return percent(v);
 }
@@ -419,26 +428,29 @@ function Stepper({ label, names, value, onChange, hint, help }) {
   </div>;
 }
 
-// The ramps: two tides, one shape, one rate, and the two dips that bend them.
+// The modulation panel: two tides, one shape, one rate, the two dips that bend
+// them and the switch that hands the rate to the tempo.
 function RampPanel({ params, onChange, help }) {
+  const synced = !!params.rampSync;
   return <div className="ramp-panel">
-    <div className="side-rule ramp-heading"><span>THE RAMPS</span><span>CLICK A CELL TO STEP</span></div>
+    <div className="side-rule ramp-heading"><span>MODULATION</span><span>CLICK A CELL TO STEP</span></div>
     <div className="ramp-grid">
       <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="click anywhere to step what the first tide turns"
-        help={help('RAMP / WET', 'click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
+        help={help('MODULATION / WET', 'click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
       <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="click anywhere to step what the second tide turns"
-        help={help('RAMP / LOOP', 'click anywhere to step the second tide through the same list; its MODIFY means this channel\u2019s own. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
+        help={help('MODULATION / LOOP', 'click anywhere to step the second tide through the same list; its MODIFY means this channel\u2019s own. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
       <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="click anywhere to step the shape"
-        help={help('RAMP SHAPE', 'click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.')}/>
-      <label className="rate-row" {...help('RAMP RATE', 'how slowly the tide turns. both sides share it, so they stay in step.')}><span>RATE</span>
-        <input aria-label="Ramp speed" type="range" min="0" max="1" step="0.005" value={params.rampSpeed} onChange={(event) => onChange('rampSpeed', Number(event.target.value))}/>
-        <b>{rampHint(params.rampSpeed)}</b>
+        help={help('MODULATION SHAPE', 'click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.')}/>
+      <label className="rate-row" {...help('MODULATION RATE', 'how slowly the tide turns. both sides share it, so they stay in step with each other. with SYNC on, the rate becomes a musical span instead of a free speed.')}><span>{synced ? 'SPAN' : 'RATE'}</span>
+        <input aria-label="Modulation rate" type="range" min="0" max="1" step="0.005" value={params.rampSpeed} onChange={(event) => onChange('rampSpeed', Number(event.target.value))}/>
+        <b>{synced ? `${rampDivLabel(params.rampSpeed)} · ${timeText(rampCycleSeconds(params.bpm, params.rampSpeed))}` : rampHint(params.rampSpeed)}</b>
       </label>
     </div>
     <div className="dips ramp-dips">
       {[['rampUni', 'UNI', 'the swing sits above the knob instead of either side of it.'],
         ['bounce', 'BOUNCE', 'the swing reflects instead of snapping back, so nothing jumps.'],
-        ['sweep', 'SWEEP', 'the shape is ignored and the knob just climbs, again and again.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => onChange(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
+        ['sweep', 'SWEEP', 'the shape is ignored and the knob just climbs, again and again.'],
+        ['rampSync', 'SYNC', 'the rate stops being a free speed and becomes a division of the beat: eight bars down to a sixteenth, so a slow tempo turns slowly.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => onChange(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
     </div>
   </div>;
 }
@@ -632,7 +644,7 @@ function App() {
             <div className="dips">
               {[['trails', 'TRAILS', 'the tails keep falling after you switch the wet side off.'],
               ['smooth', 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.'],
-              ['sync', 'SYNC', 'the delay stops being a length of time and becomes a division of the beat.'],
+              ['sync', 'SYNC', 'the delay stops being a length of time and becomes a division of the beat; in ENV the slice and in WEAVE the reach become divisions too. the modulation rate has its own SYNC in the panel below.'],
               ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
             </div>
             <label className={`level-row tempo-row ${params.sync ? 'live' : ''}`}>
@@ -669,7 +681,7 @@ function App() {
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>END <span>/ loop trim</span></dt><dd>How much of the captured loop plays before it wraps. Where the loop <em>starts</em> is the LENGTH knob's business — in TAPE the window is the most recent part of what you caught, so turning LENGTH moves the start and pulling END back only moves the end. Everything trimmed away still shows in the waveform, dimmed, so you can see what you let go of.</dd></div>
-          <div><dt>THE RAMPS <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
+          <div><dt>MODULATION <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over; <b>SYNC</b> makes a turn a division of the beat — eight bars down to a sixteenth — so the drift walks with the tempo instead of against it. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>

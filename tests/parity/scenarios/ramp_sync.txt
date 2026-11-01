@@ -1,0 +1,32 @@
+# MODULATION SYNC: the rate becomes a musical span, so a turn can last eight
+# bars. Sweeps the span, changes tempo underneath it, and returns to free Hz.
+rate 48000
+seconds 10
+0 param wetMode 1
+0 param loopMode 1
+0 param routing 1
+0 param clock 0.7
+0 param time 0.5
+0 param mix 0.8
+0 param modWet 0.5
+0 param length 0.6
+0 param rampWet 0.2
+0 param rampLoop 0.5
+0 param rampSync 1
+0 param bpm 120
+0 fs wet down
+3 fs wet up
+40 param rampSpeed 0.15
+90 param rampSpeed 0.45
+140 param rampSpeed 0.8
+190 param rampSpeed 1
+240 param bpm 90
+290 param bpm 150
+340 param rampWave 0.5
+390 param rampSpeed 0.05
+440 param bpm 60
+490 param sweep 1
+540 param sweep 0
+590 param rampSync 0
+640 param rampSpeed 0.6
+690 param rampWet 0

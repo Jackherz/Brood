@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
+const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -382,6 +382,93 @@ test('the tempo divisions in the UI and the worklet agree', () => {
   const ui = new Function('clamp', body)((v, a = 0, b = 1) => Math.min(b, Math.max(a, v)));
   assert.deepStrictEqual(ui.map((d) => d.label), SYNC_DIVISIONS.map((d) => d.label));
   assert.deepStrictEqual(ui.map((d) => d.beats), SYNC_DIVISIONS.map((d) => d.beats));
+});
+
+// The worklet exports the span table's beats and its label function, not the label
+// array itself; recover the labels so the UI copy can be compared against them.
+const RAMP_DIV_LABELS_FOR_TEST = () => RAMP_DIV_BEATS.map((_, i) => rampDivLabel(i / (RAMP_DIV_BEATS.length - 1)));
+
+test('the modulation spans in the UI and the worklet agree', () => {
+  // Same rule as the divisions above: main.jsx keeps its own copy of the span
+  // table, so evaluate it here and compare label for label, beat for beat.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '../src/main.jsx'), 'utf8');
+  const start = src.indexOf('const RAMP_DIV_LABELS');
+  const end = src.indexOf('const rampCycleSeconds');
+  assert.ok(start > 0 && end > start, 'could not find the UI span table');
+  const body = `${src.slice(start, end)}\n return { RAMP_DIV_LABELS, RAMP_DIV_BEATS, rampDivIndex, rampDivLabel };`;
+  const ui = new Function('clamp', body)((v, a = 0, b = 1) => Math.min(b, Math.max(a, v)));
+  assert.deepStrictEqual(ui.RAMP_DIV_LABELS, RAMP_DIV_LABELS_FOR_TEST());
+  assert.deepStrictEqual(ui.RAMP_DIV_BEATS, RAMP_DIV_BEATS);
+  // and the label the readout asks for is the label the engine divides by
+  for (let i = 0; i < RAMP_DIV_BEATS.length; i++) {
+    const v = i / (RAMP_DIV_BEATS.length - 1);
+    assert.strictEqual(ui.rampDivLabel(v), rampDivLabel(v));
+    assert.strictEqual(ui.rampDivIndex(v), i);
+  }
+});
+
+test('a synced modulation span is measured against the tempo, not the clock', () => {
+  // 8 bars at 120 bpm is 16 s: slow enough that a 1 s window barely turns.
+  assert.ok(Math.abs(rampCycleSeconds(120, 0) - 16) < 1e-9, '8 bars at 120');
+  assert.ok(Math.abs(rampCycleSeconds(120, 1) - 0.125) < 1e-9, '1/16 at 120');
+  assert.ok(Math.abs(rampCycleSeconds(60, 1) - 0.25) < 1e-9, 'half the tempo, twice the span');
+  // A whole bar must survive the delay's 2 s ceiling, or nothing slow is reachable.
+  // (The delay's knob runs fast-to-slow, so 1/1 sits at the top of its travel.)
+  assert.ok(syncSecondsRaw(40, 1) > 2, 'raw divisions are not clamped to the delay');
+});
+
+test('rampSync hands the rate to the tempo and free mode takes it back', () => {
+  // Count how often the generator wraps: the phase only ever jumps backwards.
+  const turns = (rampSync, rampSpeed, bpm, seconds) => {
+    const core = new MoodCore(FS);
+    core.setParam('rampWet', 1 / 6);          // TIME, the first target list entry after OFF
+    core.setParam('rampWave', 0);
+    core.setParam('rampSpeed', rampSpeed);
+    core.setParam('rampSync', rampSync);
+    core.setParam('bpm', bpm);
+    let wraps = 0, prev = core.ramp[0].ph;
+    const n = Math.ceil((seconds * FS) / BLOCK);
+    const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+    for (let b = 0; b < n; b++) {
+      core.process(inp, oL, oR);
+      const ph = core.ramp[0].ph;
+      if (ph < prev) wraps++;
+      prev = ph;
+    }
+    return wraps;
+  };
+  // 1/16 at 120 bpm is 0.125 s a turn: eight turns in a second.
+  assert.ok(turns(1, 1, 120, 1.2) >= 8 && turns(1, 1, 120, 1.2) <= 10, 'synced 1/16');
+  // The same knob free-running is about half a hertz, so one turn in 1.2 s.
+  assert.ok(turns(0, 0.45, 120, 1.2) <= 1, 'free rate is not the span list');
+  // Eight bars at 120 bpm is 16 s: no wrap in a short window, whichever tempo.
+  assert.strictEqual(turns(1, 0, 120, 1.2), 0, '8 bars does not wrap early');
+  // And the span really does follow the host tempo: twice as fast, twice as many.
+  const slow = turns(1, 0.8, 60, 2.4);
+  const fast = turns(1, 0.8, 120, 2.4);
+  assert.ok(fast >= slow * 2, `tempo doubles the turns (${slow} -> ${fast})`);
+});
+
+test('the tempo dip stretches the ENV slice and the WEAVE reach', () => {
+  const shimmer = (loopMode, wetMode, sync) => {
+    const core = new MoodCore(FS);
+    for (const [k, v] of Object.entries({ loopMode, wetMode, sync, bpm: 120, clock: 1, time: 0.5, length: 0.5, mix: 0.6, modWet: 0.6, routing: 1 })) core.setParam(k, v);
+    // Feed real material: a silent loop cannot show a different window.
+    render(core, 0.2, (t) => 0.3 * Math.sin(2 * Math.PI * 330 * t));
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    const { L } = render(core, 2, (t) => 0.3 * Math.sin(2 * Math.PI * 330 * t));
+    return L;
+  };
+  for (const [loopMode, wetMode] of [[0, 0], [1, 3]]) {
+    const free = shimmer(loopMode, wetMode, 0);
+    const synced = shimmer(loopMode, wetMode, 1);
+    let diff = 0;
+    for (let i = 0; i < free.length; i++) diff += Math.abs(free[i] - synced[i]);
+    assert.ok(diff > 1, `sync changes ${loopMode === 0 ? 'the ENV slice' : 'the WEAVE reach'}`);
+  }
 });
 
 test('LOOP MEMORY raises the capture ceiling, 0 keeps the pedal rule', () => {

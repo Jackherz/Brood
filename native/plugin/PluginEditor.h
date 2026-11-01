@@ -113,7 +113,7 @@ private:
     juce::Slider rampRate;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rampRateAtt;
     struct RampSwitch { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<RampSwitch, 3> rampSwitches;   // UNI, BOUNCE, SWEEP
+    std::array<RampSwitch, 4> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC
     // Under the hood: the five options and the CLASSIC switch the pedal hides
     // behind both footswitches. They live along the bottom of the window, so
     // there is no second page to dive into.
@@ -140,7 +140,7 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four stacked panels of the side column, in design coordinates.
-    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[3], presetBoxDesign;
+    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[4], presetBoxDesign;
     juce::Rectangle<int> rampWetDesign, rampLoopDesign, rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

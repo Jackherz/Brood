@@ -9,6 +9,42 @@
 Found while answering one question: what already exists that we could stand on,
 instead of writing every block twice by hand?
 
+## Decision: if this is ever sold, it is sold open source
+
+Recorded 2026-11-01, so it does not have to be re-argued later.
+
+**Lane A — sell it as open source. This is the plan.** The price buys the pedal, the
+documentation and the updates; the source stays published under GPLv3, which is what
+the repository already is. Consequences, none of them a problem:
+
+- **JUCE is fine on its AGPLv3 path.** No commercial JUCE licence is needed while the
+  whole plug-in is AGPL/GPL-compatible and the source ships. That alone is the single
+  largest cost avoided.
+- **Every dependency already on the list stays usable** — DaisySP, Airwindows,
+  Beads/stmlib, chowdsp_wdf, Signalsmith Stretch, `pedalzombie` are MIT or BSD and
+  only need attribution; Signalsmith's and Airwindows' own terms ask for nothing more
+  than credit. The GPLv3 pieces (MoodEmu as ancestor, CHOWTapeModel, GRNLR,
+  Dragonfly, SooperLooper, Faust's compiler) can be linked **only** under Lane A, and
+  that is now the lane we are in.
+- **GPLv3 does not stop anyone from reselling it, or from forking it.** That is
+  accepted, not overlooked: for a pedal the value is the sound, the panel and the
+  support, not the source text.
+- **What a sale would actually need:** a reproducible `make install`, the notices in
+  [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) kept current, the source available
+  at the same place the binary is downloaded from, and a licence line in the manual.
+  That is a payment page and a source archive, nothing structural.
+
+**Lane B — a closed build — is a fallback, not a plan.** It means replacing the
+MoodEmu-derived core with a clean-room rewrite, buying a JUCE commercial licence, and
+renaming everything (product name, `audio.brood.mood` bundle id, the `BrMd` plug-in
+code, the "unofficial, inspired by" disclaimer in `native/plugin/CMakeLists.txt`).
+If it ever happens it must happen **before the first customer**, because a rename
+breaks every saved Ableton Live set. Nothing here is on that path today.
+
+One thing open sourcing does not fix: **"Brood Mood" / "MOOD" are Chase Bliss's
+trademarks and trade dress**, which is a naming question rather than a code-licence
+question, and is answered separately by the rename in Lane B.
+
 ## Our own ancestor, and what to check before anything else
 
 The repo's first cores came from **MoodEmu** (MaxTeicheira/Cba-guitar-pedal-,

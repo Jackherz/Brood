@@ -176,6 +176,21 @@ int main() {
         CHECK(std::fabs(echoAt(1.0 / 3, 120, 1) - 1.0 / 6) < 0.01, "sync 1/8T @120 = %.3f s", echoAt(1.0 / 3, 120, 1));
         CHECK(std::fabs(echoAt(2.0 / 3, 120, 0.4) - 0.5) < 0.01, "sync ignores the clock");
         CHECK(std::string(mood::syncLabel(2.0 / 3)) == "1/4", "sync label");
+        // A whole bar must clear the delay's 2 s ceiling, or nothing slow is reachable.
+        CHECK(mood::syncSecondsRaw(40, 1.0) > mood::kDelayMaxSec * 0.95, "raw divisions are unclamped");
+    }
+    {   // modulation spans: one cycle is a musical division, not a free rate
+        CHECK(mood::kRampDivCount == 8, "eight spans");
+        CHECK(std::string(mood::rampDivLabel(0.0)) == "8 BARS", "slowest span");
+        CHECK(std::string(mood::rampDivLabel(1.0)) == "1/16", "fastest span");
+        CHECK(std::fabs(mood::rampCycleSeconds(120, 0.0) - 16.0) < 1e-9, "8 bars @120 = %.3f s", mood::rampCycleSeconds(120, 0.0));
+        CHECK(std::fabs(mood::rampCycleSeconds(60, 1.0) - 0.25) < 1e-9, "1/16 @60 = %.3f s", mood::rampCycleSeconds(60, 1.0));
+        // Every span must round-trip through the stepper's index conversion.
+        for (int i = 0; i < mood::kRampDivCount; ++i) {
+            const double v = static_cast<double>(i) / (mood::kRampDivCount - 1);
+            CHECK(mood::rampDivIndex(mood::rampValueOfIndex(i, mood::kRampDivCount)) == i, "span %d round-trips", i);
+            CHECK(mood::rampDivIndex(v) == i, "span %d reads back", i);
+        }
     }
     {   // balance fully to LOOP always returns the loop, whatever the routing
         for (int r = 0; r < 3; ++r) {
