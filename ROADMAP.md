@@ -13,12 +13,19 @@ that makes it musical rather than merely moving:
 - **DIRECT MICRO-LOOP blend** — how much of the *unprocessed* loop reaches the
   output, mixed in beside the wet side.
 
-## Parked: the pedal playground (noted 2026-11-01)
+## Parked: the pedal series (packaging decided 2026-11-01)
 
-The direction being considered is not a third pedal emulation but a **Chase Bliss /
-modular effect-pedal playground**: one instrument that wears several pedal models,
-sharing the engine, the parity harness and the design sheet. Research is in
-[docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md); nothing below is scheduled.
+Direction is settled, work is not: this becomes a **series of separate plug-ins in
+one repository**, one `juce_add_plugin` per pedal, sharing the DSP core, the parity
+harness and the design sheet — not one binary that wears several models. A pedal's
+panel is its own shape (Habit's reel is not MOOD's clock), memory is spent only in
+the instances that need it, and two CC maps never have to share a device. The
+tempting alternative — one instrument mixing blocks from several pedals — is
+recorded in [docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md) with why it is only
+half-feasible (wet blocks and tails would swap fine; there is one looper and one
+clock) and the cheap way to price it later: write pedal two as named blocks, and
+extract the looper behind an interface the day it needs one. Nothing below is
+scheduled.
 
 - **blooper** — parked for now, by decision. Reverse and smooth/stepped speed,
   stopper, loop filter and one-shot are cheap because the blocks already exist;

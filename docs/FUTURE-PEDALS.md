@@ -1,16 +1,103 @@
 # The pedal playground: feasibility notes
 
-> Status: **research only.** Nothing in this file is built, scheduled, or
-> promised. It is the dossier a future round starts from so the research does not
-> have to be done twice. Round 12 (2026-11-01) is the last shipped work.
+> Status: **research only, plus one decision.** Nothing in this file is built or
+> scheduled. It is the dossier a future round starts from so the research does not
+> have to be done twice. Packaging was decided on 2026-11-01 (below); the per-pedal
+> verdicts are the notes that decision was made from.
 
-The idea being considered: stop treating this as one pedal emulation and make it a
-**Chase Bliss / modular effect-pedal playground** — one instrument that can wear
-several pedal models, sharing the engine, the parity harness and the design sheet.
+The question this file answers: can this become a **series of pedals** — Chase
+Bliss-flavoured, sharing one engine, one parity harness and one design sheet —
+without the second pedal costing a second codebase?
 
-That changes the question from "can we clone pedal X" to "what is the cheapest
-architecture in which pedal X is a hundred lines of parameters plus one or two new
-DSP blocks". The per-pedal verdicts below are written with that in mind.
+## Packaging: a series of separate plug-ins, one repository (decided 2026-11-01)
+
+**Decision: one plug-in per pedal, one shared repository.** No model selector, no
+single binary that wears several pedal models. Nothing is built yet; this is what a
+future second pedal is measured against.
+
+Why separate, in this project's own terms:
+
+- **The identity is already per-target.** `native/plugin/CMakeLists.txt` is one
+  `juce_add_plugin` with a product name, a bundle id and a plugin code (`Brood
+  Mood`, `audio.brood.mood`, `BrMd`). A second pedal is a second block of that, and
+  the DSP header, the design sheet, the parity harness and `make install` are
+  unaffected.
+- **A selector buys one window and costs a shape.** Habit's panel is not MOOD's
+  panel: different knob count, different footswitch grammar, a reel where we have a
+  clock. Either every pedal is squeezed into the 900 × 712 sheet, or the sheet grows
+  a model-dependent layout, which is a hidden page under another name.
+- **Bad Mood is the test case.** Its nine Hidden Options are the one thing in this
+  file that contradicts the standing one-page rule. As its own plug-in that is a
+  layout problem; as a bank inside Mood it is a decision made once, badly, for
+  every pedal.
+- **Memory only where it is spent.** A three-minute Habit reel should exist in Habit
+  instances only. In a combined binary every MOOD track either pays for it or needs
+  a lazy allocator to avoid paying.
+- **MIDI maps stop colliding.** MOOD and Habit have different CC layouts; one
+  binary honouring both needs a per-device table forever.
+- **Ship order and blast radius.** One pedal can ship while another is half-built,
+  and Live's browser gives three devices that chain in any order — `Habit → Mood →
+  Bad Mood` is a legitimate want, and a selector cannot express it.
+
+What is given up: one device slot and the "one instrument" story. Live racks
+already give side-by-side panels and macros, so the ergonomic loss is small.
+
+### The real reason a single plug-in was tempting: mixing parts across pedals
+
+Not a model selector — a modular instrument where the wet channel of one pedal
+could sit beside the looper of another. The answer is uneven, and worth recording
+because it decides what a second pedal's code should look like.
+
+**Already cheap.** `mood.h` is not a monolith: `Reverb`, `Delay`, `Slip` and
+`Weave` are independent structs with their own `init`/`tick`, selected by
+`wetMode`; the ramps are a generator that drives any named control; the tails
+(Bad Mood's Glue) are a waveshaper and a crusher that drop in after the mix. So
+"wet block from any pedal" and "tail from any pedal" are additions, not surgery.
+
+**Not cheap.** The looper is not a block. `loopTick` lives inside `Core` and
+reaches into `hist`, `loopBuf`, `loopWindow()`, the routing and the mix law, and
+the overdub path writes into whatever window START and END are pointing at. Making
+it swappable means extracting it behind an interface — while it is also the most
+delicate code in the project (the 25 ms START crossfade, the frozen incoming head,
+the de-clicked capture) and the part the parity harness protects most tightly.
+
+**Never mixable.** There is one looper — MOOD's and Bad Mood's both mean "the
+buffer you are playing from", so you pick one — and one clock: a single 2–64 kHz
+core, one 64 000-sample memory, every block agreeing about it. That is also why
+cross-pedal blocks would work at all.
+
+So the honest shape of that instrument is **three lists**: wet block ← any pedal,
+looper ← any pedal, tail ← any pedal, with clock, mix, balance, ramps and routing
+always shared. The UI primitive for it is the stepping cell shipped in round 14,
+multiplied by three slots.
+
+### The cheapest way to find out (the route agreed on 2026-11-01)
+
+Do not build the three-slot shell first: that would be designing an interface for a
+vocabulary we do not have yet. Instead:
+
+1. Build pedal two (Habit, per the verdict below) as a **sibling plug-in** in this
+   repository — its own `juce_add_plugin`, its own panel, the same sheet.
+2. Write its DSP as **named blocks** rather than one `Core`: a wet/delay block, a
+   tail, and so on, each with explicit inputs and outputs. The wet side of `mood.h`
+   already shows the shape.
+3. **Do not pre-extract anything.** Copy the two or three blocks it needs; extract
+   shared code (`hist`, capture, `Delay`, filters, the ramp generator) into a common
+   header only once two working call sites exist, not before.
+4. The day Habit needs a looper, **extract the looper behind an interface instead of
+   copying it.** That single act is the experiment: it prices the modular instrument
+   without committing to it, and it leaves the option open either way.
+5. Revisit the three-list instrument with two pedals used in anger, when which
+   cross-wirings are worth having is known rather than guessed.
+
+Costs to keep an eye on: the parity matrix grows from twelve scenarios per pedal to
+a scenario per block plus a few full chains; panels-as-data (below) is what keeps
+the doubled UI from becoming the whole cost of each pedal; and identities and state
+versions should be locked per pedal, because saved Live sets cannot be migrated.
+
+**Free cross-pedal win today:** Habit in front of Mood in an Ableton chain gets
+Habit's echoes captured by MOOD's looper, because the looper records its input. That
+is a chunk of the mixing idea for the price of two inserts.
 
 ---
 
