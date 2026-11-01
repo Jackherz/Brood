@@ -252,9 +252,11 @@ Earlier versions of this project shipped cross-compiled bundles
 through the patch channel at all — the download button and the ZIP are gone.
 Build locally with the steps above; that is the supported route.
 
-The editor is a 900 × 640 panel that can be resized from 675 × 480 up to
+The editor is a 900 × 712 panel that can be resized from 675 × 534 up to
 1800 × 1280; the layout is drawn in design coordinates and scaled as a whole, so
-the proportions never break and labels cannot collide when the window changes. The
+the proportions never break and labels cannot collide when the window changes.
+Everything is on that one page — pedal, side column and the row of options under
+the hood — because a second page is a menu, and the pedal this follows has none. The
 plugin normally processes the host track's input. The editor also offers a
 generated demo and local file input. Plugin settings and wet on/off state are
 stored in the DAW project; recorded loops, effect tails and loaded file audio are
@@ -357,9 +359,9 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   hard-muted the direct loop whenever the wet channel was on with routing BOTH or
   LOOP, so a balance fully to LOOP went silent; that is fixed and covered by
   tests in both implementations.
-- **The hidden menu** holds the options the pedal keeps behind both footswitches
-  (plugin: the `HIDDEN` button in the title bar; browser: `HIDDEN MENU ↓` under the
-  window). **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
+- **Under the hood** is the row along the bottom of the editor (browser: the
+  block at the foot of the side panel): the options the pedal keeps behind both
+  footswitches, with CLASSIC beside them in the browser's switch row. **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
   bit-transparent, so it can stay open. **FADE** sets how much of the old loop
   survives each overdub pass: 0 is the pedal's slow erosion, 1 lets the new layer
   replace it entirely. **WIDTH** is mid/side on the effect bus only (the dry never

@@ -357,8 +357,10 @@ function TrimStrip({ params, onChange }) {
   </div>;
 }
 
-// The options the pedal hides behind holding both footswitches.
-function HiddenMenu({ params, onChange }) {
+// The options the pedal hides behind both footswitches. They used to live on a
+// separate page of the browser version; they sit on the panel now, so nothing
+// has to be opened to be reached.
+function HoodPanel({ params, onChange }) {
   const rows = [
     ['tone', 'TONE', 'a hi-cut on the wet side. right is open; left is soft and far away.'],
     ['fade', 'FADE', 'what survives an overdub. left keeps the pedal\u2019s slow erosion; right lets the new layer win.'],
@@ -366,27 +368,16 @@ function HiddenMenu({ params, onChange }) {
     ['wetDiv', 'WET DIV', 'the wet side runs on a divided clock, so the room and the echo stretch out.'],
     ['loopDiv', 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.'],
   ];
-  return <section className="hidden-menu layout-width" aria-label="Hidden options">
-    <div className="hidden-head"><span>✳</span><div><small>THE OPTIONS UNDER THE OPTIONS</small><h3>HIDDEN MENU</h3></div><span className="hidden-note">ON THE PEDAL: HOLD BOTH FOOTSWITCHES</span></div>
-    <div className="hidden-grid">
-      {rows.map(([id, label, hint]) => (
-        <div className="hidden-item" key={id}>
-          <label className="hidden-row">
-            <span>{label}</span>
-            <input type="range" min="0" max="1" step="0.005" value={params[id]} aria-label={`${label}: ${hint}`} onChange={(event) => onChange(id, Number(event.target.value))}/>
-            <b>{describe(id, params)}</b>
-          </label>
-          <small>{hint}</small>
-        </div>
-      ))}
-      <div className="hidden-item">
-        <button type="button" className={`hidden-switch ${params.classic ? 'on' : ''}`} role="switch" aria-checked={!!params.classic} aria-label="Classic mode: MK I quirks" onClick={() => onChange('classic', params.classic ? 0 : 1)}>
-          <span className="hidden-track"><span/></span><span>CLASSIC</span>
-        </button>
-        <small>the MK I in the room: a noisy clock, a loop that never sits still, a reverb that rings.</small>
-      </div>
-    </div>
-  </section>;
+  return <div className="hood-panel">
+    <div className="side-rule hood-heading"><span>UNDER THE HOOD</span><span>THE OPTIONS UNDER THE OPTIONS</span></div>
+    {rows.map(([id, label, hint]) => (
+      <label key={id} className="level-row hood-row" title={hint}>
+        <span>{label}</span>
+        <input type="range" min="0" max="1" step="0.005" value={params[id]} aria-label={`${label}: ${hint}`} onChange={(event) => onChange(id, Number(event.target.value))}/>
+        <b>{describe(id, params)}</b>
+      </label>
+    ))}
+  </div>;
 }
 
 // One ramp destination. Arrows step through the list so the cell stays big.
@@ -439,7 +430,6 @@ function App() {
   const [wave, setWave] = useState(null);
   const [notice, setNotice] = useState('');
   const [guideOpen, setGuideOpen] = useState(false);
-  const [hiddenOpen, setHiddenOpen] = useState(false);
   const [touched, setTouched] = useState('clock');
   const fileInput = useRef(null);
   const engineRef = useRef(null);
@@ -599,7 +589,7 @@ function App() {
             {notice && <div className="notice" role="status">✳ {notice}</div>}
             <div className="side-rule dip-heading"><span>THE LITTLE SWITCHES</span><span>ON ↑</span></div>
             <div className="dips">
-              {[['trails', 'TRAILS'], ['spread', 'SPREAD'], ['latch', 'LATCH'], ['dryKill', 'DRY KILL'], ['smooth', 'SMOOTH'], ['sync', 'SYNC']].map(([id, label]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)}/>)}
+              {[['trails', 'TRAILS'], ['spread', 'SPREAD'], ['latch', 'LATCH'], ['dryKill', 'DRY KILL'], ['smooth', 'SMOOTH'], ['sync', 'SYNC'], ['classic', 'CLASSIC']].map(([id, label]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)}/>)}
             </div>
             <label className={`level-row tempo-row ${params.sync ? 'live' : ''}`}>
               <span>TEMPO {params.sync ? '· SYNCED' : ''}</span>
@@ -609,6 +599,7 @@ function App() {
             </label>
             <label className="level-row balance-row"><span>WET / LOOP</span><input aria-label="Wet and loop balance" type="range" min="0" max="1" step="0.01" value={params.balance} onChange={(e) => update('balance', Number(e.target.value))}/><b>{Math.round(params.balance * 100)}</b></label>
             <RampPanel params={params} onChange={update}/>
+            <HoodPanel params={params} onChange={update}/>
             <div className="side-note"><Heart size={15}/><span>GOOD THINGS HAPPEN<br/>WHEN YOU GET LOST.</span><Spark size={14}/></div>
           </div>
         </aside>
@@ -616,8 +607,7 @@ function App() {
       <div className="window-footer"><span><span className="footer-led"/> {running ? 'AUDIO IS RUNNING' : 'READY WHEN YOU ARE'}</span><span className="footer-readout">{touched === 'modWet' ? 'MODIFY / WET' : touched === 'modLoop' ? 'MODIFY / LOOP' : touched.toUpperCase()} : {describe(touched, params)}</span><span>✳ &nbsp;MADE FOR GETTING LOST &nbsp; ✳</span></div>
     </main>
 
-    <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL MOOD MKII–INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><div className="below-actions"><button onClick={() => setHiddenOpen(!hiddenOpen)}>{hiddenOpen ? 'CLOSE THE HIDDEN MENU ↑' : 'HIDDEN MENU ↓'}</button><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div></div>
-    {hiddenOpen && <HiddenMenu params={params} onChange={update}/>}
+    <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL MOOD MKII–INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><div className="below-actions"><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div></div>
     {guideOpen && <section className="guide layout-width" aria-label="Field guide">
       <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
       <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div>
@@ -636,7 +626,7 @@ function App() {
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>START / END <span>/ loop trim</span></dt><dd>The two edges of what you kept. Move START in and you begin later in the moment; pull END back and you let go sooner. Everything outside the pair still shows in the waveform, dimmed, so you can hear where you were.</dd></div>
           <div><dt>THE RAMPS <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
-          <div><dt>HIDDEN MENU <span>/ the options under the options</span></dt><dd>Five more controls and one switch, kept off the front panel the way the pedal hides them behind both footswitches. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
+          <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>
       <div className="guide-disclaimer">This is an independent approximation, not the original firmware and not affiliated with Chase Bliss. Some hardware features are not implemented. <a href="https://www.chasebliss.com/mood-mkii" target="_blank" rel="noreferrer">About the original pedal ↗</a></div>
