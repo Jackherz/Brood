@@ -40,7 +40,8 @@ The **LOOP TRIM** row under the waveform sets how much past the looper may keep
 (**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour), where the window
 stops (**END**) and where it begins (**START**). END is an end marker and START a
 start marker: each moves itself, so the window can be trimmed from either side.
-The waveform dims whatever the trim has left outside.
+The waveform dims whatever the trim has left outside. (In the plug-in, START and
+END are markers you drag on the waveform itself; see below.)
 The A and L keys trigger the wet and loop switches when focus is not in another
 control. **HOW TO PLAY** opens the in-app field guide.
 
@@ -269,13 +270,27 @@ pedal this follows has none. It reads in three tiers:
    names (WET CHANNEL, SHARED, MICRO-LOOPER), the mode selectors and both
    footswitches.
 2. **The side column** — the readout, then four numbered panels in the order you
-   reach for them while playing: `01 LOOP` (waveform, MEMORY, START, END,
-   WET/LOOP), `02 MODULATION`, `03 SWITCHES` (TRAILS, SMOOTH, FREEZE, CLASSIC) and
-   `04 INPUT`, which is set once per session.
+   reach for them while playing: `01 LOOP` (the waveform with its START and END
+   markers, MEMORY, WET/LOOP), `02 MODULATION`, `03 SWITCHES` (TRAILS, SMOOTH,
+   FREEZE, CLASSIC) and `04 INPUT`, which is set once per session.
 3. **Under the hood** — the five sliders along the bottom.
 
-`native/build/plugin/editor_snapshot out.png [scale] [id=value ...]` (built with
-`-DBROOD_BUILD_PLUGIN_TESTS=ON`) renders the editor to a PNG without a DAW.
+**START and END are markers on the waveform.** Press anywhere on it and the nearer
+marker comes to the mouse; drag it. Moving START keeps the end where it is, END
+moves only itself, and a double-click opens the whole take again. Each marker is a
+full-height rule with a tab naming it — START's hangs from the top, END's from the
+bottom, so they stay readable even when the window is a sliver.
+
+**Values sit where you are looking.** Resting on or turning a knob replaces its
+whisper with the exact value, in ink; the modulation rate prints its period (or,
+synced, its span of the beat) at the end of its row; MEMORY, WET/LOOP and the hood
+sliders carry their figures already. The knobs have no ring: five marks are the
+scale, and they turn to ink on hover. Each tempo **SYNC** switch sits directly
+under the knob it governs, and only in the modes that can use it.
+
+`native/build/plugin/editor_snapshot out.png [scale] [loop] [id=value ...]` (built
+with `-DBROOD_BUILD_PLUGIN_TESTS=ON`) renders the editor to a PNG without a DAW;
+`loop` catches a few seconds of the demo first so the waveform has a take.
 
 The plugin normally processes the host track's input. The editor also offers a
 generated demo and local file input. Plugin settings, wet on/off state **and the
@@ -285,8 +300,10 @@ reload, so a bounce or a reopened session plays the loop you were hearing rather
 than an empty buffer. Effect tails and loaded file audio are not saved. The file
 source returns to live input after a project reload. The native patch menu has
 the same five factory patches as the browser, and a patch is a whole state: every
-control goes back to its default before the patch sets its own. Use your DAW for
-user presets.
+control goes back to its default before the patch sets its own. Under them are
+four **user slots**, saved from the same menu (*SAVE WHAT YOU HEAR TO → USER n*)
+into `~/Library/Application Support/Brood/patches.xml` on macOS, so every project
+and every instance shares them. A patch never engages a channel.
 
 Sets saved under the old product name still open: the plug-in IDs did not change,
 and the old state tag is read as the new one.
@@ -357,7 +374,7 @@ available to the host; the wet/loop footswitch parameters are momentary controls
 
 Every knob carries a sentence rather than a label. It should tell you which way to
 turn without telling you what is inside — the mechanism stays a little hidden, the
-consequence does not. The exact value is shown beside the knob as you move it, and
+consequence does not. The exact value replaces it while you rest on or turn the knob, and
 the field guide in the browser version lists the current mode's set.
 
 | Knob | Reverb | Delay | Slip | Weave |
@@ -375,6 +392,17 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
 
 ## Sound model
 
+- **Getting in and out of the core clock.** The engine runs at its own clock (the
+  CLOCK knob), so every host sample is resampled on the way in and on the way out.
+  On the way in each core tick reads the input at its own moment on a Hermite
+  curve — until round 18 it took the latest host sample, which at 48 kHz repeated
+  one sample in four and recorded a stair-step jitter into every loop. On the way
+  out a Hermite curve runs through the last four ticks, and both sides are filtered
+  by 6th-order Butterworth low-passes at 0.45 × the clock (they were 4th order).
+  Every delay line, grain and loop read is Hermite-interpolated too. **CLASSIC**
+  keeps the old path — held input, straight-line output, 4th-order filters — as
+  part of its grit. The output limiter now bends from 0.7 instead of 0.9, to the
+  same ceiling, so loud tails are rounded rather than flattened.
 - **Stereo.** Each engine is mono in and stereo out, and there is one per input
   channel. The left engine supplies the left output and the right engine the right
   one — on a mono track the two engines are identical, so what you hear is one
@@ -396,7 +424,7 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   — chance you can return to, and no undo. Weaver's fixed capture window,
   Texture/Rhythm switch, root-aligned pitch set and per-element levels are the
   reference; its microphone, trigger outputs and CV are not modelled.
-- **TEMPO SYNC** is three switches, each beside the knob it governs and each drawn
+- **TEMPO SYNC** is three switches, each under the knob it governs and each drawn
   only in the modes that can use it. `SYNC` beside TIME turns the delay's TIME knob
   into a musical division — 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/4D, 1/2,
   1/1 — and does the same for WEAVE's reach; it is absent in REVERB and SLIP,
@@ -449,7 +477,7 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   implementations.
 - **The switches** are TRAILS, SMOOTH, FREEZE and CLASSIC, one row in the
   `03 SWITCHES` panel; FREEZE and CLASSIC came up from under the hood, which is now
-  sliders only. SYNC left the panel in round 16 to sit beside the knob it governs,
+  sliders only. SYNC left the panel in round 16 to sit with the knob it governs,
   so it can disappear in the modes that have no use for the beat. LATCH went
   because the FREEZE switch does the same job without having to hold anything (the
   one thing it does that nothing else now can: latching the loop's overdub hold,

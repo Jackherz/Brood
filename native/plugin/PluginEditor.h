@@ -73,12 +73,27 @@ public:
         juce::String name, keyName;
         bool isDown = false;
     };
+    // The take, with START and END as markers you drag on it. The markers are the
+    // only trim controls: a press grabs whichever marker is nearer, START keeps
+    // the end where it is as it moves, and a double-click opens the window fully.
     struct LoopView : juce::Component {
-        explicit LoopView(BroodProcessor& p) : proc(p) {}
+        explicit LoopView(BroodProcessor& p) : proc(p) { setMouseCursor(juce::MouseCursor::LeftRightResizeCursor); }
         void paint(juce::Graphics&) override;
+        void mouseMove(const juce::MouseEvent&) override;
+        void mouseExit(const juce::MouseEvent&) override;
+        void mouseDown(const juce::MouseEvent&) override;
+        void mouseDrag(const juce::MouseEvent&) override;
+        void mouseUp(const juce::MouseEvent&) override;
+        void mouseDoubleClick(const juce::MouseEvent&) override;
+        // Marker positions in samples of the take; false while nothing is caught.
+        bool markers(int& startAt, int& endAt) const;
+        int nearestMarker(float x) const;   // 0 START, 1 END, -1 none (no take)
+        void moveMarker(float x);
         BroodProcessor& proc;
+        std::function<void(const juce::String&)> onTouch;
         std::array<float, BroodProcessor::kWaveBins> wave {};
         uint32_t version = 0;
+        int dragging = -1, hot = -1, anchorEnd = 0;
     };
 
 private:
@@ -89,6 +104,14 @@ private:
     void showReadout(const juce::String& label, const juce::String& value, bool follows = false);
     void touch(const juce::String& id);
     void applyPatch(int index);
+    // User patches: four slots kept in one file in the user's application data
+    // folder, so every project and every instance sees the same four.
+    static constexpr int kUserSlots = 4;
+    juce::File userPatchFile() const;
+    void saveUserPatch(int slot);
+    bool loadUserPatch(int slot);
+    void refreshPatchMenu(int selectId);
+    int lastPatchId = 1;
     // Shows only the tempo switches the current modes can use.
     void updateModeControls();
 
@@ -106,9 +129,9 @@ private:
     juce::TextButton loadButton { "Load file..." };
     juce::Slider inputGain;
     juce::Slider balance;
-    // Loop edit: capture ceiling, and the trim markers that decide what plays.
-    juce::Slider memory, loopEnd, loopStart;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, endAtt, startAtt;
+    // Loop edit: the capture ceiling. START and END are the markers on the waveform.
+    juce::Slider memory;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
@@ -137,7 +160,11 @@ private:
     juce::Rectangle<int> pedalArea, lcdArea, ledWet, ledLoop, meterArea, loopArea;
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
-    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopEndDesign, loopStartDesign;
+    juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopViewDesign;
+    // Under each knob, its whisper — or, while the knob is touched, its value.
+    juce::Rectangle<int> whisperRect(int knob) const;
+    int activeKnob = -1;
+    juce::String activeKnobText;
     juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[4];
 
     // Hover help. The readout at the top of the side column used to hold whatever

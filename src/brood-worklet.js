@@ -117,11 +117,30 @@ class LowPass {
   }
 }
 
-// 4th-order Butterworth low-pass (two cascaded biquads).
-class LowPass4 {
-  constructor() { this.a = new LowPass(); this.b = new LowPass(); }
-  set(fc, fs) { this.a.set(fc, fs, 0.5412); this.b.set(fc, fs, 1.3066); }
-  run(x) { return this.b.run(this.a.run(x)); }
+// Butterworth low-pass, 6th order (three biquads) or, for CLASSIC, the 4th order
+// the clock filters used to be. The steeper one keeps far less of the images a
+// low CLOCK leaves above its band; CLASSIC keeps that grit on purpose.
+class LowPassN {
+  constructor() { this.a = new LowPass(); this.b = new LowPass(); this.c = new LowPass(); this.sixth = true; }
+  set(fc, fs, sixth) {
+    this.sixth = sixth;
+    if (sixth) { this.a.set(fc, fs, 0.5176); this.b.set(fc, fs, 0.7071); this.c.set(fc, fs, 1.9319); }
+    else { this.a.set(fc, fs, 0.5412); this.b.set(fc, fs, 1.3066); }
+  }
+  run(x) {
+    const y = this.b.run(this.a.run(x));
+    return this.sixth ? this.c.run(y) : y;
+  }
+}
+
+// Four-point, third-order Hermite: x0..x1 is the span, xm1 and x2 its neighbours.
+// Linear interpolation dulls the top and leaves images of everything a read head
+// slides over; this is the cheapest curve that is smooth through the points.
+function hermite(xm1, x0, x1, x2, f) {
+  const c1 = 0.5 * (x1 - xm1);
+  const c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
+  const c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+  return ((c3 * f + c2) * f + c1) * f + x0;
 }
 
 class Allpass {
@@ -135,13 +154,15 @@ class Allpass {
   }
 }
 
-// Linear-interpolated read from a circular buffer.
+// Fractional read from a circular buffer, Hermite-interpolated.
 function readFrac(buf, pos) {
   const n = buf.length;
   let p = pos % n; if (p < 0) p += n;
   const i0 = Math.floor(p), f = p - i0;
-  const i1 = i0 + 1 === n ? 0 : i0 + 1;
-  return buf[i0] + (buf[i1] - buf[i0]) * f;
+  const im1 = i0 === 0 ? n - 1 : i0 - 1;
+  const i1 = i0 + 1 >= n ? i0 + 1 - n : i0 + 1;
+  const i2 = i0 + 2 >= n ? i0 + 2 - n : i0 + 2;
+  return hermite(buf[im1], buf[i0], buf[i1], buf[i2], f);
 }
 
 // ───────────────────────── Wet channel: REVERB ─────────────────────────
@@ -390,12 +411,16 @@ class BroodCore {
     this.hostCount = 0;
     this.phase = 0;
     this.clockRatio = 1;
-    this.aa = new LowPass4();
-    this.reconL = new LowPass4();
-    this.reconR = new LowPass4();
+    this.aa = new LowPassN();
+    this.reconL = new LowPassN();
+    this.reconR = new LowPassN();
     this.filterClock = -1;
-    this.prev = [0, 0];
-    this.cur = [0, 0];
+    this.filterClassic = -1;
+    // The last four core ticks per channel, oldest first. The host-rate output is
+    // a Hermite curve through the middle two (one tick of latency), or for
+    // CLASSIC the old straight line between the newest two.
+    this.ticks = [[0, 0, 0, 0], [0, 0, 0, 0]];
+    this.xin = [0, 0, 0, 0];   // the last four host input samples, oldest first
 
     // wet channel
     this.reverb = new Reverb(CORE_FS);
@@ -684,7 +709,11 @@ class BroodCore {
       if (i0 < 0) { i0 = 0; f = 0; }
       let i1 = i0 + 1;
       if (i1 >= len) { i1 = len - 1; if (i0 > i1) i0 = i1; f = 0; }
-      return buf[i0] + (buf[i1] - buf[i0]) * f;
+      // Hermite, with the neighbours held at the take's edges rather than
+      // wrapped: the take is not circular, the window is.
+      const im1 = i0 > 0 ? i0 - 1 : 0;
+      const i2 = Math.min(i1 + 1, len - 1);
+      return hermite(buf[im1], buf[i0], buf[i1], buf[i2], f);
     };
     const rd = (p) => {
       if (this.startFade >= 1) return at(this.startB, p);
@@ -870,9 +899,9 @@ class BroodCore {
     const bal = e.balance;
     const wetLvl = Math.min(1, 2 * (1 - bal)), loopLvl = Math.min(1, 2 * bal);
     const ld = loopOut * loopLvl;
-    this.prev[0] = this.cur[0]; this.prev[1] = this.cur[1];
-    this.cur[0] = wl * wetLvl + ld;
-    this.cur[1] = wr * wetLvl + ld;
+    for (const ch of this.ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
+    this.ticks[0][3] = wl * wetLvl + ld;
+    this.ticks[1][3] = wr * wetLvl + ld;
   }
 
   // in: Float32Array (mono), outL/outR: Float32Array
@@ -910,21 +939,42 @@ class BroodCore {
       if ((i & 31) === 0) {
         const c = clockHz(this.e.clock, !!p.smooth) / fs;
         this.clockRatio = c;
-        if (Math.abs(c - this.filterClock) > 0.002 * c) {
-          this.filterClock = c;
+        const classicNow = p.classic ? 1 : 0;
+        if (Math.abs(c - this.filterClock) > 0.002 * c || classicNow !== this.filterClassic) {
+          this.filterClock = c; this.filterClassic = classicNow;
           const fc = Math.min(0.45 * c * fs, 0.45 * fs, 20000);
-          this.aa.set(fc, fs); this.reconL.set(fc, fs); this.reconR.set(fc, fs);
+          this.aa.set(fc, fs, !p.classic); this.reconL.set(fc, fs, !p.classic); this.reconR.set(fc, fs, !p.classic);
         }
       }
 
       const dry = input ? input[i] : 0;
       const ad = Math.abs(dry); if (ad > pkIn) pkIn = ad;
       const xa = this.aa.run(dry);
+      const xin = this.xin;
+      xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
       this.phase += this.clockRatio;
-      while (this.phase >= 1) { this.phase -= 1; this.coreTick(xa); }
+      while (this.phase >= 1) {
+        this.phase -= 1;
+        // Each core tick falls somewhere between two host samples; read the input
+        // there (one host sample late, so the curve has a neighbour on both sides).
+        // Handing every tick the latest host sample instead repeated one sample in
+        // four at 48 kHz, a stair-step jitter that was recorded into every loop.
+        // CLASSIC keeps that hold as part of its grit.
+        const u = 1 - this.phase / this.clockRatio;
+        this.coreTick(p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u));
+      }
       const f = this.phase;
-      let el = this.reconL.run(this.prev[0] + (this.cur[0] - this.prev[0]) * f);
-      let er = this.reconR.run(this.prev[1] + (this.cur[1] - this.prev[1]) * f);
+      const t = this.ticks;
+      let il, ir;
+      if (p.classic) {
+        il = t[0][2] + (t[0][3] - t[0][2]) * f;
+        ir = t[1][2] + (t[1][3] - t[1][2]) * f;
+      } else {
+        il = hermite(t[0][0], t[0][1], t[0][2], t[0][3], f);
+        ir = hermite(t[1][0], t[1][1], t[1][2], t[1][3], f);
+      }
+      let el = this.reconL.run(il);
+      let er = this.reconR.run(ir);
       // STEREO WIDTH: mid/side on the effect bus only — the dry signal must not
       // move. 0.5 is the image as built, so the neutral setting is untouched.
       if (Math.abs(s.width - 0.5) > 0.002) {
@@ -942,7 +992,7 @@ class BroodCore {
       let r = dry * dg + er * wg;
       // A fully bypassed plugin must be transparent, including signals above 0 dBFS.
       const fullyBypassed = !p.trails && !this.wetOn && !latchFreeze && this.loopState === 'off' && this.engaged < 1e-4;
-      if (!fullyBypassed) { l = softClip(l); r = softClip(r); }
+      if (!fullyBypassed) { l = softLimit(l); r = softLimit(r); }
       outL[i] = l; outR[i] = r;
       const ao = Math.max(Math.abs(l), Math.abs(r)); if (ao > pkOut) pkOut = ao;
       this.hostCount++;
@@ -983,6 +1033,15 @@ function softClip(x) {
   const ax = Math.abs(x);
   if (ax < 0.9) return x;
   return Math.sign(x) * (0.9 + 0.1 * Math.tanh((ax - 0.9) / 0.1));
+}
+
+// The output stage's limiter: the same shape as softClip with a wider knee. It
+// starts bending at 0.7 and reaches the same 1.0 ceiling, so a loud reverb or an
+// overdub peak is rounded over rather than flattened in the last tenth.
+function softLimit(x) {
+  const ax = Math.abs(x);
+  if (ax < 0.7) return x;
+  return Math.sign(x) * (0.7 + 0.3 * Math.tanh((ax - 0.7) / 0.3));
 }
 
 if (typeof AudioWorkletProcessor !== 'undefined') {

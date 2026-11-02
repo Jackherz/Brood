@@ -133,6 +133,25 @@ inline double softClip(double x) {
     return sgn(x) * (0.9 + 0.1 * std::tanh((ax - 0.9) / 0.1));
 }
 
+// The output stage's limiter: the same shape as softClip with a wider knee. It
+// starts bending at 0.7 and reaches the same 1.0 ceiling, so a loud reverb or an
+// overdub peak is rounded over rather than flattened in the last tenth.
+inline double softLimit(double x) {
+    const double ax = std::fabs(x);
+    if (ax < 0.7) return x;
+    return sgn(x) * (0.7 + 0.3 * std::tanh((ax - 0.7) / 0.3));
+}
+
+// Four-point, third-order Hermite: x0..x1 is the span, xm1 and x2 its neighbours.
+// Linear interpolation dulls the top and leaves images of everything a read head
+// slides over; this is the cheapest curve that is smooth through the points.
+inline double hermite(double xm1, double x0, double x1, double x2, double f) {
+    const double c1 = 0.5 * (x1 - xm1);
+    const double c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
+    const double c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+    return ((c3 * f + c2) * f + c1) * f + x0;
+}
+
 struct LowPass {
     double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
     void set(double fc, double fs, double q) {
@@ -149,10 +168,21 @@ struct LowPass {
     }
 };
 
-struct LowPass4 {
-    LowPass a, b;
-    void set(double fc, double fs) { a.set(fc, fs, 0.5412); b.set(fc, fs, 1.3066); }
-    double run(double x) { return b.run(a.run(x)); }
+// Butterworth low-pass, 6th order (three biquads) or, for CLASSIC, the 4th order
+// the clock filters used to be. The steeper one keeps far less of the images a
+// low CLOCK leaves above its band; CLASSIC keeps that grit on purpose.
+struct LowPassN {
+    LowPass a, b, c;
+    bool sixth = true;
+    void set(double fc, double fs, bool sixthOrder) {
+        sixth = sixthOrder;
+        if (sixth) { a.set(fc, fs, 0.5176); b.set(fc, fs, 0.7071); c.set(fc, fs, 1.9319); }
+        else { a.set(fc, fs, 0.5412); b.set(fc, fs, 1.3066); }
+    }
+    double run(double x) {
+        const double y = b.run(a.run(x));
+        return sixth ? c.run(y) : y;
+    }
 };
 
 struct Allpass {
@@ -167,13 +197,17 @@ struct Allpass {
     }
 };
 
+// Fractional read from a circular buffer, Hermite-interpolated.
 inline double readFrac(const std::vector<float>& buf, double pos) {
-    const double n = static_cast<double>(buf.size());
+    const int N = static_cast<int>(buf.size());
+    const double n = static_cast<double>(N);
     double p = jsMod(pos, n); if (p < 0) p += n;
     const int i0 = static_cast<int>(std::floor(p)); const double f = p - i0;
-    const int i1 = i0 + 1 == static_cast<int>(buf.size()) ? 0 : i0 + 1;
-    const double a = buf[static_cast<size_t>(i0)], b = buf[static_cast<size_t>(i1)];
-    return a + (b - a) * f;
+    const int im1 = i0 == 0 ? N - 1 : i0 - 1;
+    const int i1 = i0 + 1 >= N ? i0 + 1 - N : i0 + 1;
+    const int i2 = i0 + 2 >= N ? i0 + 2 - N : i0 + 2;
+    return hermite(buf[static_cast<size_t>(im1)], buf[static_cast<size_t>(i0)],
+                   buf[static_cast<size_t>(i1)], buf[static_cast<size_t>(i2)], f);
 }
 
 // ───────────────────────── Wet channel: REVERB ─────────────────────────
@@ -413,9 +447,10 @@ public:
         fs = sampleRate;
         s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width, p.rampSpeed};
         e = Eff{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance};
-        hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1;
-        aa = reconL = reconR = LowPass4{};
-        prev[0] = prev[1] = cur[0] = cur[1] = 0;
+        hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1; filterClassic = -1;
+        aa = reconL = reconR = LowPassN{};
+        for (auto& ch : ticks) for (auto& t : ch) t = 0;
+        for (auto& x : xin) x = 0;
         reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs); weave.init(kCoreFs);
         wetOn = freeze = wetMomentary = false;
         wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
@@ -508,20 +543,39 @@ public:
             if ((i & 31) == 0) {
                 const double c = clockHz(e.clock, p.smooth) / fs;
                 clockRatio = c;
-                if (std::fabs(c - filterClock) > 0.002 * c) {
-                    filterClock = c;
+                const int classicNow = p.classic ? 1 : 0;
+                if (std::fabs(c - filterClock) > 0.002 * c || classicNow != filterClassic) {
+                    filterClock = c; filterClassic = classicNow;
                     const double fc = std::min({0.45 * c * fs, 0.45 * fs, 20000.0});
-                    aa.set(fc, fs); reconL.set(fc, fs); reconR.set(fc, fs);
+                    aa.set(fc, fs, !p.classic); reconL.set(fc, fs, !p.classic); reconR.set(fc, fs, !p.classic);
                 }
             }
             const double dry = in ? in[i] : 0.0;
             pkIn = std::max(pkIn, std::fabs(dry));
             const double xa = aa.run(dry);
+            xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
             phase += clockRatio;
-            while (phase >= 1) { phase -= 1; coreTick(xa); }
+            while (phase >= 1) {
+                phase -= 1;
+                // Each core tick falls somewhere between two host samples; read the
+                // input there (one host sample late, so the curve has a neighbour on
+                // both sides). Handing every tick the latest host sample instead
+                // repeated one sample in four at 48 kHz, a stair-step jitter that was
+                // recorded into every loop. CLASSIC keeps that hold as part of its grit.
+                const double u = 1 - phase / clockRatio;
+                coreTick(p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u));
+            }
             const double f = phase;
-            double el = reconL.run(prev[0] + (cur[0] - prev[0]) * f);
-            double er = reconR.run(prev[1] + (cur[1] - prev[1]) * f);
+            double il, ir;
+            if (p.classic) {
+                il = ticks[0][2] + (ticks[0][3] - ticks[0][2]) * f;
+                ir = ticks[1][2] + (ticks[1][3] - ticks[1][2]) * f;
+            } else {
+                il = hermite(ticks[0][0], ticks[0][1], ticks[0][2], ticks[0][3], f);
+                ir = hermite(ticks[1][0], ticks[1][1], ticks[1][2], ticks[1][3], f);
+            }
+            double el = reconL.run(il);
+            double er = reconR.run(ir);
             // STEREO WIDTH: mid/side on the effect bus only — the dry signal must
             // not move. 0.5 is the image as built, so that setting is untouched.
             if (std::fabs(s.width - 0.5) > 0.002) {
@@ -536,7 +590,7 @@ public:
             double l = dry * dg + el * wg;
             double r = dry * dg + er * wg;
             const bool fullyBypassed = !p.trails && !wetOn && !latchFreeze && loopState == LoopState::Off && engaged < 1e-4;
-            if (!fullyBypassed) { l = softClip(l); r = softClip(r); }
+            if (!fullyBypassed) { l = softLimit(l); r = softLimit(r); }
             outL[i] = static_cast<float>(l); outR[i] = static_cast<float>(r);
             pkOut = std::max(pkOut, std::max(std::fabs(l), std::fabs(r)));
             ++hostCount;
@@ -625,6 +679,15 @@ public:
     }
     bool envGateOpen() const { return envGate; }
     int capturedLength() const { return lsrc; }
+    // The widest the playback window can be: the whole take in ENV and STRETCH, and
+    // LENGTH's share of it in TAPE. END is a fraction of this, so the editor needs it
+    // to turn a marker dragged on the waveform back into START and END.
+    int loopSpan() const {
+        const int len = std::max(64, lsrc);
+        if (p.loopMode != 1) return len;
+        return std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * clampd(e.length, 0, 1)))));
+    }
+
 
 private:
     struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width, rampSpeed; };
@@ -641,8 +704,13 @@ private:
     Eff e{};
     int64_t hostCount = 0;
     double phase = 0, clockRatio = 1, filterClock = -1;
-    LowPass4 aa, reconL, reconR;
-    double prev[2] = {0, 0}, cur[2] = {0, 0};
+    int filterClassic = -1;
+    LowPassN aa, reconL, reconR;
+    // The last four core ticks per channel, oldest first. The host-rate output is
+    // a Hermite curve through the middle two (one tick of latency), or for
+    // CLASSIC the old straight line between the newest two.
+    double ticks[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    double xin[4] = {0, 0, 0, 0};   // the last four host input samples, oldest first
 
     Reverb reverb; Delay delay; Slip slip; Weave weave;
     bool wetOn = false, freeze = false, wetMomentary = false;
@@ -852,8 +920,12 @@ private:
             if (i0 < 0) { i0 = 0; f = 0; }
             int i1 = i0 + 1;
             if (i1 >= len) { i1 = len - 1; if (i0 > i1) i0 = i1; f = 0; }
-            const double a = loopBuf[static_cast<size_t>(i0)], b = loopBuf[static_cast<size_t>(i1)];
-            return a + (b - a) * f;
+            // Hermite, with the neighbours held at the take's edges rather than
+            // wrapped: the take is not circular, the window is.
+            const int im1 = i0 > 0 ? i0 - 1 : 0;
+            const int i2 = std::min(i1 + 1, len - 1);
+            return hermite(loopBuf[static_cast<size_t>(im1)], loopBuf[static_cast<size_t>(i0)],
+                           loopBuf[static_cast<size_t>(i1)], loopBuf[static_cast<size_t>(i2)], f);
         };
         auto rd = [&](double q0) {
             if (startFade >= 1) return at(startB, q0);
@@ -1021,9 +1093,9 @@ private:
         const double bal = e.balance;
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
         const double ld = loopOut * loopLvl;
-        prev[0] = cur[0]; prev[1] = cur[1];
-        cur[0] = wl * wetLvl + ld;
-        cur[1] = wr * wetLvl + ld;
+        for (auto& ch : ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
+        ticks[0][3] = wl * wetLvl + ld;
+        ticks[1][3] = wr * wetLvl + ld;
     }
 };
 

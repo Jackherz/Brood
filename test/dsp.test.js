@@ -714,6 +714,31 @@ test('WET CLOCK DIVISION stretches the wet side only', () => {
   assert.ok(Math.abs(four / one - 4) < 0.2, `4x division: ${one.toFixed(3)} -> ${four.toFixed(3)}`);
 });
 
+test('the input is read at each core tick, so a captured loop is smooth', () => {
+  // At 48 kHz in and a 64 kHz core, handing every tick the latest host sample
+  // repeated one sample in four: a stair-step recorded into the loop. Played four
+  // times slower the stairs are easy to measure, as roughness (mean |second
+  // difference| over mean |signal|) far above what a clean sine at that pitch has.
+  const core = new BroodCore(FS);
+  core.setParam('loopMode', 1); core.setParam('mix', 1); core.setParam('loopDiv', 1);
+  core.setParam('clock', 1); core.setParam('modLoop', 0.75);
+  core.s.mix = 1;
+  const { L } = render(core, 3, (t) => 0.35 * Math.sin(2 * Math.PI * 220 * t), {
+    [blk(0.1)]: (c) => { c.footswitch('loop', 'down'); },
+    [blk(0.6)]: (c) => { c.footswitch('loop', 'up'); },
+  });
+  // The median over 10 ms chunks, so the fade where the window wraps does not count.
+  const chunk = Math.floor(0.01 * FS), rough = [];
+  for (let s = Math.floor(1 * FS); s + chunk < Math.floor(2.8 * FS); s += chunk) {
+    let d2 = 0, d0 = 0;
+    for (let i = s; i < s + chunk; i++) { d2 += Math.abs(L[i + 1] - 2 * L[i] + L[i - 1]); d0 += Math.abs(L[i]); }
+    rough.push(d2 / d0);
+  }
+  rough.sort((a, b) => a - b);
+  const median = rough[rough.length >> 1], ideal = (2 * Math.PI * crossings(L, 1, 2.8) / FS) ** 2;
+  assert.ok(median < 2 * ideal, `loop roughness ${median.toExponential(2)} vs a clean sine's ${ideal.toExponential(2)}`);
+});
+
 test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
   const pitch = (loopDiv, loopMode) => {
     const core = new BroodCore(FS);

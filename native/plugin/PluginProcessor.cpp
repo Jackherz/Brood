@@ -405,7 +405,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 
     const auto st = core_.state(), rightState = coreRight_.state();
     ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop);
-    ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.pos = static_cast<float>(st.pos);
+    ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.winSpan = core_.loopSpan(); ui.pos = static_cast<float>(st.pos);
     ui.clockHz = static_cast<float>(st.clockHz); ui.histCycles = st.histCycles;
     ui.peakIn = std::max(st.peakIn, rightState.peakIn); ui.peakOut = std::max(st.peakOut, rightState.peakOut);
 

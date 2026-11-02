@@ -51,7 +51,7 @@ public:
     // ---- UI snapshot (written by the audio thread, read by the editor) ----
     struct Ui {
         std::atomic<bool> wetOn { false }, freeze { false };
-        std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 };
+        std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 }, winSpan { 0 };
         std::atomic<float> pos { 0 }, clockHz { 48000 }, peakIn { 0 }, peakOut { 0 }, load { 0 };
         std::atomic<float> bpm { 120.f };
         std::atomic<uint32_t> histCycles { 0 };

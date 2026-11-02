@@ -1,5 +1,6 @@
 // Property tests for the C++ core. Behavioural equivalence with the JS reference
 // is covered separately by tests/parity (bit-for-bit within float rounding).
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <cstdio>
@@ -279,6 +280,24 @@ int main() {
         const double one = gap(0), two = gap(0.5), four = gap(1);
         CHECK(std::fabs(two / one - 2) < 0.1, "wet div 2x: %.3f -> %.3f", one, two);
         CHECK(std::fabs(four / one - 4) < 0.2, "wet div 4x: %.3f -> %.3f", one, four);
+    }
+    {   // The input is read at each core tick's own time, so a captured loop is smooth.
+        // Handing every tick the latest host sample repeated one in four at 48 kHz.
+        brood::Core c; c.p.loopMode = 1; c.p.mix = 1; c.p.loopDiv = 1; c.p.clock = 1; c.p.modLoop = 0.75;
+        c.prepare(FS);
+        auto o = render(c, 3, [](double t) { return 0.35 * std::sin(2 * brood::kPi * 220 * t); },
+                        [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(0.6)) cc.footswitch(1, false); });
+        // The median over 10 ms chunks, so the fade where the window wraps does not count.
+        const size_t chunk = static_cast<size_t>(0.01 * FS);
+        std::vector<double> rough;
+        for (size_t s = static_cast<size_t>(1 * FS); s + chunk < static_cast<size_t>(2.8 * FS); s += chunk) {
+            double d2 = 0, d0 = 0;
+            for (size_t i = s; i < s + chunk; ++i) { d2 += std::fabs(o.L[i + 1] - 2 * o.L[i] + o.L[i - 1]); d0 += std::fabs(o.L[i]); }
+            rough.push_back(d2 / d0);
+        }
+        std::sort(rough.begin(), rough.end());
+        const double median = rough[rough.size() / 2], ideal = std::pow(2 * brood::kPi * crossings(o.L, 1, 2.8) / FS, 2);
+        CHECK(median < 2 * ideal, "loop roughness %.2e vs a clean sine's %.2e", median, ideal);
     }
     {   // LOOP CLOCK DIVISION drops the loop pitch
         auto pitch = [](double loopDiv) {

@@ -13,35 +13,26 @@ lives. What is left of the pedal's own list:
 - **CC 52** stops a running ramp; the MIDI map currently reaches every other
   ramp control.
 
-## Ideas: smoother to use, better to hear (noted 2026-11-03)
+## Ideas still open (noted 2026-11-03)
 
-Not scheduled; written down after round 17 so they are not lost.
+Round 18 worked through most of the list written after round 17. What is left:
 
-**Using it**
+- **The browser panel to the same tiers.** The browser version shares every DSP
+  change but still has its round-16 layout: START/END sliders, the sync switches
+  beside the knobs, one saved patch.
+- **A look-ahead limiter.** Round 18 widened the soft clip's knee; a true limiter
+  with a millisecond or two of look-ahead would hold peaks without shaping them.
+- **Windowed-sinc or polyphase resampling.** Hermite in and out removed the
+  stair-step and most of the images; a longer kernel would go further, at a cost
+  in CPU and latency.
+- **One engine for a mono track.** A mono input runs two identical engines.
+  Saving the second one is only possible when the host gives a mono bus (Live
+  hands effects a stereo bus even on mono tracks), and the second engine would
+  have to be brought back in sync — loop and all — the moment the input turned
+  stereo, so it is parked.
 
-- **Values on the controls.** The knobs and the modulation rate show their value
-  only in the readout. A small figure on the control while it is dragged would
-  save looking back and forth.
-- **A waveform you can grab.** Drag START and END on the loop display itself
-  instead of on two sliders under it.
-- **User patches in the plug-in.** The browser can save one; the plug-in leans on
-  the DAW's presets. A few save slots beside the factory five would cover it.
-- **The browser panel to the same tiers.** Round 17 renamed and fixed the browser
-  version but did not move its layout to the pedal / side column / hood order.
-
-**Sound**
-
-- **Cleaner low CLOCK.** Better resampling between the core clock and the host
-  rate (polyphase or windowed-sinc instead of linear, plus a steeper
-  anti-aliasing filter), with today's grit kept as a switchable character.
-- **Gentler limiting.** The output soft clip starts at 0.9 and can flatten loud
-  reverb and overdub peaks; a look-ahead limiter or a higher knee would keep them.
-- **Better loop and grain reads.** Cubic or Hermite interpolation instead of linear
-  for TAPE and STRETCH, cleaner when stretched or pitched down.
-- **Sample-rate-true reverb.** The delay lengths are scaled from 48 kHz, so the
-  room's character shifts slightly at 96 kHz.
-- **One engine for a mono track.** A mono source runs two identical engines;
-  running one would halve the CPU.
+Struck from the list: "sample-rate-true reverb". The reverb runs at the core's own
+64 kHz clock, never at the host rate, so its character does not change at 96 kHz.
 
 ## Parked: the pedal series (packaging decided 2026-11-01)
 
@@ -97,6 +88,16 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 18: **a waveform you drag, values where you look, and a cleaner clock.**
+  START and END are markers on the waveform (the two trim sliders are gone); a
+  touched knob shows its value in place of its whisper; the rate prints its period;
+  SYNC sits under its knob; the knobs lost their ring; four user patch slots live in
+  the patch menu and in one file every instance shares. Sound: the input is read
+  at each core tick's own moment (it repeated one sample in four at 48 kHz, a
+  jitter recorded into every loop — new roughness tests in both cores catch it),
+  Hermite interpolation in and out of the core clock and in every buffer read,
+  6th-order clock filters, and a softer output knee. CLASSIC keeps the old path.
+  Parity between the cores stays within its bounds on all fourteen scenarios.
 - Round 17: **Brood, on one page that reads in tiers, and in stereo.** The product
   is called Brood everywhere (bundles, window, wordmark, code); the plug-in IDs and
   the old state tag are kept, so existing Live sets still open, and the installer
