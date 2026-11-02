@@ -1,5 +1,5 @@
 // Render a parity scenario through the C++ core (see tests/parity/scenario.js).
-//   mood_render <scenario.txt> <out.f32>
+//   brood_render <scenario.txt> <out.f32>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -7,11 +7,11 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include "dsp/mood.h"
+#include "dsp/brood.h"
 
 struct Event { bool isParam; std::string a, b; double value; };
 
-static void setParam(mood::Params& p, const std::string& n, double v) {
+static void setParam(brood::Params& p, const std::string& n, double v) {
     if (n == "time") p.time = v; else if (n == "mix") p.mix = v; else if (n == "length") p.length = v;
     else if (n == "modWet") p.modWet = v; else if (n == "clock") p.clock = v; else if (n == "modLoop") p.modLoop = v;
     else if (n == "wetMode") p.wetMode = static_cast<int>(v); else if (n == "routing") p.routing = static_cast<int>(v);
@@ -40,11 +40,11 @@ static float input(long n, double rate) {   // same formula as scenario.js
     const long k = static_cast<long>(std::floor(t / 0.75));
     const double fr[4] = {196, 247, 294, 330};
     const double tt = t - k * 0.75;
-    return static_cast<float>(0.35 * std::sin(2 * mood::kPi * fr[k % 4] * t) * std::exp(-4 * tt));
+    return static_cast<float>(0.35 * std::sin(2 * brood::kPi * fr[k % 4] * t) * std::exp(-4 * tt));
 }
 
 int main(int argc, char** argv) {
-    if (argc < 3) { std::fprintf(stderr, "usage: mood_render <scenario.txt> <out.f32>\n"); return 2; }
+    if (argc < 3) { std::fprintf(stderr, "usage: brood_render <scenario.txt> <out.f32>\n"); return 2; }
     std::ifstream in(argv[1]);
     if (!in) { std::fprintf(stderr, "cannot read %s\n", argv[1]); return 2; }
     double rate = 48000, seconds = 4;
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         events[std::stol(t0)].push_back(Event{t1 == "param", t2, t3, t1 == "param" ? std::stod(t3) : 0.0});
     }
     constexpr int B = 128;
-    mood::Core core; core.prepare(rate);
+    brood::Core core; core.prepare(rate);
     const long nBlocks = static_cast<long>(std::ceil(seconds * rate / B));
     std::vector<float> out(static_cast<size_t>(nBlocks * B * 2));
     float x[B], L[B], R[B];

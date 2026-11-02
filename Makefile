@@ -1,4 +1,4 @@
-# Brood Mood — short, copy-paste friendly entry points.
+# Brood — short, copy-paste friendly entry points.
 #
 #   make update     pull the latest source, then build and install
 #   make install    build the VST3 (+ AU and standalone on macOS) and install it
@@ -40,7 +40,7 @@ universal:
 
 run:
 	@bash $(SCRIPTS)/build-plugin.sh
-	@open "$(BUILD)/plugin/MoodEmu_artefacts/Release/Standalone/Brood Mood.app"
+	@open "$(BUILD)/plugin/Brood_artefacts/Release/Standalone/Brood.app"
 
 doctor:
 	@bash $(SCRIPTS)/diagnose-plugin.sh

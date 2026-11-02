@@ -9,7 +9,7 @@ const clockKhz = (v, smooth) => smooth ? 2 * Math.pow(32, v) : clockSteps[Math.r
 const expMap = (t, a, b) => a * Math.pow(b / a, t);
 const percent = (v) => `${Math.round(v * 100)}%`;
 
-// Tempo-sync divisions. Duplicated from src/mood-worklet.js because an
+// Tempo-sync divisions. Duplicated from src/brood-worklet.js because an
 // AudioWorklet script cannot import an ES module; test/dsp.test.js asserts the
 // two copies agree, so they cannot drift apart silently.
 const SYNC_DIVISIONS = [
@@ -32,14 +32,14 @@ const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} 
 // The loop trim, mirroring the worklet: a memory ceiling of one second at the
 // far left (the pedal's own buffer) up to half a minute at the right.
 const memoryText = (v) => v <= 0.001 ? 'PEDAL' : `${expMap(v, 1, 30).toFixed(1)}s`;
-// The ramp engine, mirrored from src/mood-worklet.js.
+// The ramp engine, mirrored from src/brood-worklet.js.
 const RAMP_TARGETS = ['OFF', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE'];
 const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
 const rampIndex = (v, names) => Math.round(clamp(v) * (names.length - 1));
 const rampValue = (index, names) => names.length < 2 ? 0 : index / (names.length - 1);
 const rampHertz = (v) => expMap(clamp(v), 0.05, 8);
 const rampHint = (v) => `${(1 / rampHertz(v)).toFixed(1)}s A TURN`;
-// Hidden options mirror src/mood-worklet.js: the sides can run on divided clocks.
+// Hidden options mirror src/brood-worklet.js: the sides can run on divided clocks.
 const DIV_STEPS = [1, 2, 4];
 const divIndex = (v) => Math.round(clamp(v, 0, 1) * (DIV_STEPS.length - 1));
 
@@ -469,8 +469,8 @@ function Dip({ label, checked, onClick, help }) {
 }
 
 function App() {
-  const [params, setParams] = useState(() => sanitize(safeRead('brood-mood-params-v1')));
-  const [userPatch, setUserPatch] = useState(() => { const saved = safeRead('brood-mood-user-patch-v1'); return saved ? sanitize(saved) : null; });
+  const [params, setParams] = useState(() => sanitize(safeRead('brood-params-v1')));
+  const [userPatch, setUserPatch] = useState(() => { const saved = safeRead('brood-user-patch-v1'); return saved ? sanitize(saved) : null; });
   const [preset, setPreset] = useState(0);
   const [source, setSource] = useState('demo');
   const [fileName, setFileName] = useState('');
@@ -495,7 +495,7 @@ function App() {
       if (message.type === 'wave') setWave(message);
     }, (message) => setNotice(message));
   }
-  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-mood-params-v1', params); }, [params]);
+  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v1', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
   const update = React.useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
   const help = React.useCallback((label, text) => ({
@@ -529,7 +529,7 @@ function App() {
   };
   const savePatch = () => {
     const saved = sanitize(params);
-    setUserPatch(saved); safeWrite('brood-mood-user-patch-v1', saved); setPreset(PRESETS.length); setNotice('Your patch is saved on this device.');
+    setUserPatch(saved); safeWrite('brood-user-patch-v1', saved); setPreset(PRESETS.length); setNotice('Your patch is saved on this device.');
   };
   const startAudio = async () => {
     if (busy) return;
@@ -573,13 +573,13 @@ function App() {
 
     <main className="window layout-width">
       <div className="window-bar">
-        <div className="window-name"><span className="window-icon">✳</span> MOOD.EXE <span className="bar-divider">/</span> <span className="window-sub">A SOUND EXPERIMENT</span></div>
+        <div className="window-name"><span className="window-icon">✳</span> BROOD.EXE <span className="bar-divider">/</span> <span className="window-sub">A SOUND EXPERIMENT</span></div>
         <div className="window-actions"><button title="Reset controls" aria-label="Reset controls" onClick={() => { setParams({ ...BASE }); setPreset(0); setNotice('Controls reset.'); }}>↺</button><button title="Open guide" aria-label="Open guide" onClick={() => setGuideOpen(!guideOpen)}>?</button><span aria-hidden="true">×</span></div>
       </div>
       <header className="hero">
         <div className="hero-title">
           <div className="hero-kicker"><Spark size={12}/> MICRO-LOOPER <span>+</span> SPATIAL EFFECTS</div>
-          <div className="wordmark">MOOD<span className="wordmark-dot">.</span></div>
+          <div className="wordmark">BROOD<span className="wordmark-dot">.</span></div>
           <div className="hero-subtitle">a little world of sound <span>&amp;</span> space</div>
         </div>
         <div className="hero-art" aria-hidden="true"><Orbit/><div className="art-caption">SOUND GOES IN<br/>SOMETHING NEW COMES OUT</div></div>
@@ -671,7 +671,7 @@ function App() {
       <div className="window-footer"><span><span className="footer-led"/> {running ? 'AUDIO IS RUNNING' : 'READY WHEN YOU ARE'}</span><span className="footer-readout">{hover ? `${hover.label} : ${hover.text}` : `${touched === 'modWet' ? 'MODIFY / WET' : touched === 'modLoop' ? 'MODIFY / LOOP' : touched.toUpperCase()} : ${describe(touched, params)}`}</span><span>✳ &nbsp;MADE FOR GETTING LOST &nbsp; ✳</span></div>
     </main>
 
-    <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL MOOD MKII–INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><div className="below-actions"><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div></div>
+    <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL PEDAL-INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><div className="below-actions"><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div></div>
     {guideOpen && <section className="guide layout-width" aria-label="Field guide">
       <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
       <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div>
@@ -693,7 +693,7 @@ function App() {
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>
-      <div className="guide-disclaimer">This is an independent approximation, not the original firmware and not affiliated with Chase Bliss. Some hardware features are not implemented. <a href="https://www.chasebliss.com/mood-mkii" target="_blank" rel="noreferrer">About the original pedal ↗</a></div>
+      <div className="guide-disclaimer">This is an independent approximation, not the original firmware and not affiliated with Chase Bliss. Some hardware features are not implemented.</div>
     </section>}
   </div>;
 }

@@ -36,14 +36,17 @@ the repository already is. Consequences, none of them a problem:
 
 **Lane B — a closed build — is a fallback, not a plan.** It means replacing the
 MoodEmu-derived core with a clean-room rewrite, buying a JUCE commercial licence, and
-renaming everything (product name, `audio.brood.mood` bundle id, the `BrMd` plug-in
+renaming everything (product name, bundle id, the `BrMd` plug-in
 code, the "unofficial, inspired by" disclaimer in `native/plugin/CMakeLists.txt`).
 If it ever happens it must happen **before the first customer**, because a rename
 breaks every saved Ableton Live set. Nothing here is on that path today.
 
-One thing open sourcing does not fix: **"Brood Mood" / "MOOD" are Chase Bliss's
-trademarks and trade dress**, which is a naming question rather than a code-licence
-question, and is answered separately by the rename in Lane B.
+One thing open sourcing does not fix: the pedal's own name is Chase Bliss's
+trademark and trade dress, which is a naming question rather than a code-licence
+question. The product-name half of that was done in round 17 — the plug-in is
+called **Brood** everywhere a user sees it, and the bundle id is
+`audio.brood.brood` — while the `BrMd` plug-in code was kept on purpose so saved
+Live sets still open.
 
 ## Our own ancestor, and what to check before anything else
 

@@ -31,8 +31,8 @@ let browser;
  const stereo = await page.evaluate(async () => {
    async function run(wet) {
      const fs=44100, ctx = new OfflineAudioContext(2, fs * 2, fs);
-     await ctx.audioWorklet.addModule('/src/mood-worklet.js');
-     const node = new AudioWorkletNode(ctx, 'mood-processor', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2], channelCount:2, channelCountMode:'explicit' });
+     await ctx.audioWorklet.addModule('/src/brood-worklet.js');
+     const node = new AudioWorkletNode(ctx, 'brood-processor', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2], channelCount:2, channelCountMode:'explicit' });
      let wetSeen = false;
      node.port.onmessage = e => { if (e.data.type === 'state' && e.data.st.wetOn) wetSeen = true; };
      const b = ctx.createBuffer(2, fs*2, fs), left=b.getChannelData(0);

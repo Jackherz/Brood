@@ -1,15 +1,15 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <array>
-#include "dsp/mood.h"
+#include "dsp/brood.h"
 
 // The pedal as an AudioProcessor. Every control (knobs, toggles, dips, and both
 // footswitches as momentary switches) is a host parameter, so a DAW can automate
 // it or map it to a MIDI controller.
-class MoodProcessor final : public juce::AudioProcessor {
+class BroodProcessor final : public juce::AudioProcessor {
 public:
-    MoodProcessor();
-    ~MoodProcessor() override = default;
+    BroodProcessor();
+    ~BroodProcessor() override = default;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -23,7 +23,7 @@ public:
     }
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
-    const juce::String getName() const override { return "Brood Mood"; }
+    const juce::String getName() const override { return "Brood"; }
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 30.0; }
@@ -66,7 +66,7 @@ private:
     void makeDemo(double sr);
     float param(const char* id) const { return apvts.getRawParameterValue(id)->load(); }
 
-    mood::Core core_, coreRight_;
+    brood::Core core_, coreRight_;
     bool lastWetSw_ = false, lastLoopSw_ = false;
     std::atomic<float> hostBpm_ { 120.f };   // last tempo the host reported
     std::atomic<int> restoreWet_ { -1 };
@@ -92,5 +92,5 @@ private:
     std::array<float, kWaveBins> wave_ {}, waveRight_ {};
     mutable juce::SpinLock waveLock_;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MoodProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BroodProcessor)
 };

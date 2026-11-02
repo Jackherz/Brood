@@ -1,4 +1,4 @@
-import workletUrl from './mood-worklet.js?url';
+import workletUrl from './brood-worklet.js?url';
 
 // A small, local demo phrase. No sample download or external audio is needed.
 function makeDemo(context) {
@@ -58,7 +58,7 @@ export class AudioEngine {
     try {
       if (!context.audioWorklet) throw new Error('AudioWorklet needs a secure browser context (HTTPS or localhost).');
       await context.audioWorklet.addModule(workletUrl);
-      const node = new AudioWorkletNode(context, 'mood-processor', {
+      const node = new AudioWorkletNode(context, 'brood-processor', {
         numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
         channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
       });

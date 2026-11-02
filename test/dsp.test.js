@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { MoodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/mood-worklet.js');
+const { BroodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/brood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -35,7 +35,7 @@ function peakTime(a, from, to) {
 }
 
 test('bypass passes the dry signal untouched', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   const { L, R } = render(core, 0.5, tone(220, 1));
   const src = tone(220, 1);
   for (let i = 1000; i < 20000; i += 97) {
@@ -45,7 +45,7 @@ test('bypass passes the dry signal untouched', () => {
 });
 
 test('bypass remains transparent above nominal full scale', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   const src = (t) => 1.4 * Math.sin(2 * Math.PI * 220 * t);
   const { L } = render(core, 0.2, src);
   for (let i = 0; i < 9000; i += 73) assert.ok(Math.abs(L[i] - src(i / FS)) < 1e-6);
@@ -53,7 +53,7 @@ test('bypass remains transparent above nominal full scale', () => {
 
 test('delay repeats at the TIME setting, and half clock doubles it', () => {
   const measure = (clock) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 1); core.setParam('mix', 1);
     core.setParam('modWet', 0.3); core.setParam('clock', clock);
     core.s.clock = clock; core.s.mix = 1; core.modeGain = [0, 1, 0];
@@ -71,7 +71,7 @@ test('delay repeats at the TIME setting, and half clock doubles it', () => {
 });
 
 test('delay time changes crossfade between fixed read heads', () => {
-  const delay = new MoodCore(FS).delay;
+  const delay = new BroodCore(FS).delay;
   const oldDelay = CORE_FS * 0.2, newDelay = CORE_FS * 0.35;
   delay.tick(0, oldDelay, 0.5, false);
   for (let i = 0; i < CORE_FS * 0.015; i++) delay.tick(0, newDelay, 0.5, false);
@@ -83,7 +83,7 @@ test('delay time changes crossfade between fixed read heads', () => {
 
 test('delay timing is stable at 44.1 and 96 kHz host rates', () => {
   for (const rate of [44100, 96000]) {
-    const core = new MoodCore(rate);
+    const core = new BroodCore(rate);
     core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('clock', 1);
     core.s.clock = 1; core.s.mix = 1; core.modeGain = [0, 1, 0];
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
@@ -106,7 +106,7 @@ test('delay timing is stable at 44.1 and 96 kHz host rates', () => {
 
 test('reverb tail decays and stays finite in every Modify position', () => {
   for (const m of [0, 0.5, 1]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 0); core.setParam('modWet', m); core.setParam('time', 0.4);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const { L, R } = render(core, 4, click);
@@ -119,7 +119,7 @@ test('reverb tail decays and stays finite in every Modify position', () => {
 
 test('reverb time changes the delay-network size as well as decay', () => {
   const firstArrival = (size) => {
-    const reverb = new MoodCore(FS).reverb;
+    const reverb = new BroodCore(FS).reverb;
     reverb.setDecay(3, size);
     for (let i = 0; i < CORE_FS * 0.1; i++) {
       const out = reverb.tick(i === 0 ? 1 : 0, 0, false, false);
@@ -131,7 +131,7 @@ test('reverb time changes the delay-network size as well as decay', () => {
 });
 
 test('reverb freeze holds the tail', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('time', 0.2);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   const { L } = render(core, 3, tone(330, 0.5), {
@@ -143,7 +143,7 @@ test('reverb freeze holds the tail', () => {
 });
 
 test('maximum delay feedback stays bounded', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('wetMode', 1); core.setParam('modWet', 1); core.setParam('time', 0.2);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   const { L } = render(core, 6, tone(440, 0.3));
@@ -153,7 +153,7 @@ test('maximum delay feedback stays bounded', () => {
 
 test('slip produces pitch-shifted slices in all directions', () => {
   for (const m of [0, 0.15, 0.4, 1]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 2); core.setParam('modWet', m); core.setParam('mix', 1);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const { L } = render(core, 2, tone(220, 2));
@@ -163,7 +163,7 @@ test('slip produces pitch-shifted slices in all directions', () => {
 });
 
 test('tapping the loop switch captures what was just played', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('mix', 1);
   // play a tone for 1 s, then silence; tap at 1.0 s
   const { L } = render(core, 3, tone(330, 1), {
@@ -174,7 +174,7 @@ test('tapping the loop switch captures what was just played', () => {
 });
 
 test('holding the loop switch records a fresh loop of that length', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('length', 1);
   render(core, 1.5, tone(330, 3), {
     [blk(0.5)]: (c) => c.footswitch('loop', 'down'),
@@ -185,7 +185,7 @@ test('holding the loop switch records a fresh loop of that length', () => {
 });
 
 test('a hold longer than loop capacity captures the newest full buffer', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('clock', 1); core.s.clock = 1;
   render(core, 2.1, tone(330, 3), {
     [blk(0.2)]: (c) => c.footswitch('loop', 'down'),
@@ -197,7 +197,7 @@ test('a hold longer than loop capacity captures the newest full buffer', () => {
 });
 
 test('tap while playing stops the loop; hold while playing overdubs', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   render(core, 2, tone(330, 1), {
     [blk(1.0)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); },
     [blk(1.2)]: (c) => c.footswitch('loop', 'down'),
@@ -212,7 +212,7 @@ test('tap while playing stops the loop; hold while playing overdubs', () => {
 
 test('every loop mode and routing stays finite', () => {
   for (const loopMode of [0, 1, 2]) for (const routing of [0, 1, 2]) for (const wetMode of [0, 1, 2]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.entries({ loopMode, routing, wetMode, modLoop: 0.1, clock: 0.3 }).forEach(([k, v]) => core.setParam(k, v));
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const { L, R } = render(core, 2, (t) => 0.3 * Math.sin(2 * Math.PI * 196 * t) * Math.exp(-3 * (t % 0.5)), {
@@ -224,7 +224,7 @@ test('every loop mode and routing stays finite', () => {
 
 test('loop buffer length is set by the clock (fixed sample count)', () => {
   for (const [knob, secs] of [[1, 1], [0, 32]]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('clock', knob); core.s.clock = knob;
     render(core, secs + 0.5, tone(330, 100), {
       [blk(secs + 0.4)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); },
@@ -234,7 +234,7 @@ test('loop buffer length is set by the clock (fixed sample count)', () => {
 });
 
 test('ENV mode: playing interrupts the loop with a repeating slice', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('loopMode', 0); core.setParam('modLoop', 0.8); core.setParam('length', 0.2);
   core.setParam('mix', 1);
   // record a 220 Hz loop, then play a loud 880 Hz note: the output should keep
@@ -269,7 +269,7 @@ test('clock is stepped by default and continuously variable with Smooth', () => 
 });
 
 test('wet input ignores routing when the loop is listening', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('wetMode', 1); core.setParam('routing', 2); core.setParam('mix', 1);
   core.setParam('time', 0.15);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
@@ -279,7 +279,7 @@ test('wet input ignores routing when the loop is listening', () => {
 
 test('listening history includes wet ambience and overdubs use clean input', () => {
   const run = (wet) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 1); core.setParam('time', 0.2); core.setParam('modWet', 0.9);
     if (wet) { core.footswitch('wet', 'down'); core.footswitch('wet', 'up'); }
     render(core, 1.0, tone(330, 0.15));
@@ -293,7 +293,7 @@ test('listening history includes wet ambience and overdubs use clean input', () 
 
 test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => {
   const run = (time, modify) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 3); core.setParam('mix', 1);
     core.setParam('time', time); core.setParam('modWet', modify);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
@@ -309,7 +309,7 @@ test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => 
 });
 
 test('WEAVE stays bounded at the extremes', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('wetMode', 3); core.setParam('mix', 1); core.setParam('modWet', 1);
   core.setParam('time', 1); core.setParam('clock', 0); core.setParam('width', 1);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
@@ -322,7 +322,7 @@ test('WEAVE stays bounded at the extremes', () => {
 
 test('tempo sync puts the delay on the musical division, at any clock', () => {
   const echoAt = (time, bpm, clock) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.5);
     core.setParam('sync', 1); core.setParam('bpm', bpm); core.setParam('time', time); core.setParam('clock', clock);
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
@@ -344,7 +344,7 @@ test('tempo sync puts the delay on the musical division, at any clock', () => {
 });
 
 test('sync off leaves TIME as a free time', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.5);
   core.setParam('sync', 0);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
@@ -358,7 +358,7 @@ test('sync off leaves TIME as a free time', () => {
 
 test('balance at LOOP always returns the loop, whatever the routing', () => {
   for (const routing of [0, 1, 2]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('routing', routing); core.setParam('balance', 1); core.setParam('mix', 1); core.setParam('loopMode', 1);
     render(core, 1.2, tone(220, 5));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
@@ -422,7 +422,7 @@ test('a synced modulation span is measured against the tempo, not the clock', ()
 test('rampSync hands the rate to the tempo and free mode takes it back', () => {
   // Count how often the generator wraps: the phase only ever jumps backwards.
   const turns = (rampSync, rampSpeed, bpm, seconds) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('rampWet', 1 / 6);          // TIME, the first target list entry after OFF
     core.setParam('rampWave', 0);
     core.setParam('rampSpeed', rampSpeed);
@@ -453,7 +453,7 @@ test('rampSync hands the rate to the tempo and free mode takes it back', () => {
 
 test('the wet SYNC and the ENV switch are separate', () => {
   const play = (loopMode, wetMode, extra) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     for (const [k, v] of Object.entries({ loopMode, wetMode, bpm: 120, clock: 1, time: 0.5, length: 0.5, mix: 0.6, modWet: 0.6, routing: 1, ...extra })) core.setParam(k, v);
     render(core, 1.2, tone(330, 5));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
@@ -475,7 +475,7 @@ test('END moves the end marker, not the start marker', () => {
   // Drive loopWindow directly: it is the mapping that decides where the window sits,
   // and it is the thing that used to drag START along with END.
   for (const loopMode of [0, 1, 2]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.lsrc = 10 * FS;                     // a ten-second take, whole samples
     core.setParam('loopMode', loopMode);
     core.setParam('start', 0.15);
@@ -500,7 +500,7 @@ test('END moves the end marker, not the start marker', () => {
 
 test('LOOP MEMORY raises the capture ceiling, 0 keeps the pedal rule', () => {
   const capturedSeconds = (memory, clock) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('memory', memory); core.setParam('clock', clock);
     render(core, 36, () => 0.1);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
@@ -519,7 +519,7 @@ test('END trims the end of the loop and never moves where it starts', () => {
   // capture), so END must only shorten the loop from its beginning. It used to
   // shorten the capture instead, which dragged the start around with it.
   for (const [mode, name] of [[0, 'ENV'], [1, 'TAPE'], [2, 'STRETCH']]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('loopMode', mode);
     core.setParam('length', 0.72);
     render(core, 3, () => 0.2);
@@ -540,7 +540,7 @@ test('END trims the end of the loop and never moves where it starts', () => {
 });
 
 test('TAPE takes its loop window from the tail of the capture', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('loopMode', 1);
   core.setParam('length', 1);
   render(core, 3, () => 0.2);
@@ -559,7 +559,7 @@ test('START moves the loop window inside the take', () => {
   // plays, START says where that window sits in it. Zero is where each mode has
   // always begun, so nothing changes at the default.
   const renderLoop = (mode, length) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('loopMode', mode);
     core.setParam('length', length);
     render(core, 4, () => 0.2);
@@ -606,7 +606,7 @@ test('moving START crossfades instead of jumping', () => {
   // A step in the read head is a click, so a change of START is a 25 ms crossfade.
   // Compare the worst sample-to-sample step while sweeping against the same figure
   // for the loop playing still: a jump would show up as a step many times bigger.
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('loopMode', 2);
   core.setParam('length', 0.5);
   core.setParam('loopEnd', 0.4);
@@ -645,7 +645,7 @@ const sideEnergy = (L, R) => { let acc = 0; for (let i = 0; i < L.length; i++) {
 const crossings = (a, from, to) => { let n = 0; for (let i = Math.floor(from * FS) + 1; i < Math.floor(to * FS); i++) if ((a[i - 1] <= 0) !== (a[i] <= 0)) n++; return n / 2 / (to - from); };
 
 const wetCore = (patch) => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   for (const [k, v] of Object.entries(patch)) { core.setParam(k, v); }
   core.wetOn = true;
   core.s.mix = patch.mix ?? core.p.mix;
@@ -667,10 +667,10 @@ test('TONE is a hi-cut on the wet bus; fully open is bit-transparent', () => {
   const open = hf(1), shut = hf(0);
   assert.ok(shut < open * 0.8, `closed ${shut.toFixed(4)} should be darker than open ${open.toFixed(4)}`);
 
-  const plain = new MoodCore(FS);
+  const plain = new BroodCore(FS);
   plain.setParam('wetMode', 0); plain.setParam('mix', 1); plain.wetOn = true; plain.s.mix = 1;
   const a = render(plain, 1, tone(220, 1));
-  const openCore = new MoodCore(FS);
+  const openCore = new BroodCore(FS);
   openCore.setParam('wetMode', 0); openCore.setParam('mix', 1); openCore.setParam('tone', 1);
   openCore.wetOn = true; openCore.s.mix = 1; openCore.s.tone = 1;
   const b = render(openCore, 1, tone(220, 1));
@@ -690,10 +690,10 @@ test('STEREO WIDTH keeps 0.5 as built, folds to mono at 0 and doubles at 1', () 
   assert.ok(wide > mid * 1.6, `width 1 should widen (${wide.toFixed(4)} vs ${mid.toFixed(4)})`);
 
   // The neutral setting must be exactly the old behaviour, not just close.
-  const plain = new MoodCore(FS);
+  const plain = new BroodCore(FS);
   plain.setParam('wetMode', 0); plain.setParam('mix', 1); plain.wetOn = true; plain.s.mix = 1;
   const a = render(plain, 1, tone(220, 1));
-  const withWidth = new MoodCore(FS);
+  const withWidth = new BroodCore(FS);
   withWidth.setParam('wetMode', 0); withWidth.setParam('mix', 1); withWidth.setParam('width', 0.5);
   withWidth.wetOn = true; withWidth.s.mix = 1;
   const b = render(withWidth, 1, tone(220, 1));
@@ -702,7 +702,7 @@ test('STEREO WIDTH keeps 0.5 as built, folds to mono at 0 and doubles at 1', () 
 
 test('WET CLOCK DIVISION stretches the wet side only', () => {
   const echoGap = (wetDiv) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.3);
     core.setParam('time', 0.3); core.setParam('wetDiv', wetDiv);
     core.wetOn = true; core.s.mix = 1; core.s.time = 0.3; core.s.modWet = 0.3; core.modeGain = [0, 1, 0, 0];
@@ -716,7 +716,7 @@ test('WET CLOCK DIVISION stretches the wet side only', () => {
 
 test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
   const pitch = (loopDiv, loopMode) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('loopMode', loopMode); core.setParam('mix', 1); core.setParam('loopDiv', loopDiv);
     core.setParam('clock', 1); core.setParam('time', 0.5);
     core.s.mix = 1;
@@ -731,7 +731,7 @@ test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
   assert.ok(Math.abs(env2 - 110) < 8, `half clock, half pitch (${env2.toFixed(1)})`);
   assert.ok(Math.abs(env4 - 55) < 6, `quarter clock, quarter pitch (${env4.toFixed(1)})`);
   // The capture itself is not shortened by a division — only its playback.
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   render(core, 1.2, () => 0.2);
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
   const lsrc = core.lsrc;
@@ -740,7 +740,7 @@ test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
 
 test('FADE decides how much of the old loop survives an overdub', () => {
   const levelAfterOverdub = (fade) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('loopMode', 1); core.setParam('mix', 0.6); core.setParam('clock', 1); core.setParam('fade', fade);
     core.s.mix = 0.6; core.s.fade = fade;
     let src = (t) => 0.3 * Math.sin(2 * Math.PI * 200 * t);
@@ -769,7 +769,7 @@ test('CLASSIC makes the slow clock noisy and the reverb ring', () => {
 
 // Sample the control the DSP actually reads, once per block.
 function rampTrace(patch, seconds, field = 'time') {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   Object.assign(core.p, patch);
   for (const [k, v] of Object.entries(patch)) core.setParam(k, v);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
@@ -782,7 +782,7 @@ function rampTrace(patch, seconds, field = 'time') {
 }
 const rminmax = (a) => [Math.min(...a), Math.max(...a)];
 const wrapsIn = (seconds, speed) => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('rampWet', 0.2); core.setParam('rampSpeed', speed);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   let wraps = 0, last = core.ramp[0].ph;
@@ -856,7 +856,7 @@ test('RAMP SPEED is a rate in hertz, and the CLOCK does not change it', () => {
   assert.ok(fast >= 15, `fast speed runs (${fast})`);
   assert.ok(rampHz(0.5) > 0.5 && rampHz(0.5) < 0.8, 'mid speed is about 0.6 Hz');
   for (const clock of [0, 0.5, 1]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     core.setParam('rampWet', 0.2); core.setParam('rampSpeed', 0.5); core.setParam('clock', clock);
     const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
     let wraps = 0, last = core.ramp[0].ph;
@@ -871,7 +871,7 @@ test('RAMP SPEED is a rate in hertz, and the CLOCK does not change it', () => {
 
 // The raw generator, before the 30 ms smoothing: the snap-back is visible here.
 function rawTrace(patch, seconds) {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   for (const [k, v] of Object.entries(patch)) core.setParam(k, v);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   const out = [];
@@ -907,7 +907,7 @@ test('the two generators are independent, and MODIFY means this channel', () => 
   assert.ok(spread(wetOnly) > 0.5, 'the wet generator moves TIME');
   // The wet ramp must leave the loop's MODIFY alone.
   const loopStill = [];
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('rampWet', 0.2); core.setParam('modLoop', 0.5);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) { core.process(inp, L, R); loopStill.push(core.e.modLoop); }
@@ -917,7 +917,7 @@ test('the two generators are independent, and MODIFY means this channel', () => 
   assert.ok(spread(loopRamp) > 0.5, 'the loop generator moves loop MODIFY');
   // Both at once: two different controls, two different phases.
   const both = [];
-  const c2 = new MoodCore(FS);
+  const c2 = new BroodCore(FS);
   c2.setParam('rampWet', 0.2); c2.setParam('rampLoop', 0.67);
   for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) { c2.process(inp, L, R); both.push([c2.e.time, c2.e.modLoop]); }
   const timeSpread = spread(both.map((v) => v[0])), modSpread = spread(both.map((v) => v[1]));
@@ -926,10 +926,10 @@ test('the two generators are independent, and MODIFY means this channel', () => 
 });
 
 test('with every ramp off the audio is bit-identical to before the engine existed', () => {
-  const a = new MoodCore(FS);
+  const a = new BroodCore(FS);
   a.setParam('wetMode', 0); a.setParam('mix', 0.8); a.wetOn = true; a.s.mix = 0.8;
   const one = render(a, 1, tone(220, 1));
-  const b = new MoodCore(FS);
+  const b = new BroodCore(FS);
   b.setParam('wetMode', 0); b.setParam('mix', 0.8); b.wetOn = true; b.s.mix = 0.8;
   b.setParam('rampWet', 0); b.setParam('rampLoop', 0); b.setParam('rampSpeed', 1);
   const two = render(b, 1, tone(220, 1));
@@ -937,7 +937,7 @@ test('with every ramp off the audio is bit-identical to before the engine existe
 });
 
 test('a TIME ramp makes the echo breathe', () => {
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.55);
   core.setParam('time', 0.4); core.setParam('rampWet', 0.2); core.setParam('rampSpeed', 0.35);
   core.wetOn = true; core.s.mix = 1; core.modeGain = [0, 1, 0, 0];
@@ -950,7 +950,7 @@ test('a TIME ramp makes the echo breathe', () => {
 test('LENGTH travels all the way back to the start of a 30 s capture', () => {
   // A TAPE-mode capture with the memory window wide open must be able to put
   // its window at the very beginning of the take, not just near it.
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   Object.assign(core.p, { loopMode: 1, memory: 1, loopEnd: 1 });   // TAPE
   render(core, 30.5, tone(220, 1));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
@@ -975,7 +975,7 @@ test('re-taking a loop many times never splices a click in', () => {
   // because the history only advanced while the loop was off.
   const slope = 0.4 * 2 * Math.PI * 100 / FS; // the natural step of a 100 Hz tone
   const take = (taps) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { clock: 1, memory: 0.5, loopMode: 1, mix: 1, wetMode: 0, modLoop: 0.5, length: 0.8 });
     let t = 0;
     const step = (sec) => {
@@ -1011,7 +1011,7 @@ test('MEMORY window on a long listen is a whole number of samples', () => {
   // A fractional capture length used to poison the loop with NaN after the
   // memory window elapsed.
   for (const memory of [0.15, 0.4, 0.5, 0.85]) {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { loopMode: 2, memory, mix: 0.7, modWet: 0.6 });
     render(core, 9, tone(120, 99), { [blk(0)]: (c) => c.footswitch('loop', 'down'), [blk(0.05)]: (c) => c.footswitch('loop', 'up') });
     assert.ok(Number.isInteger(core.maxCaptureSamples()), `MEMORY ${memory}: whole samples`);
@@ -1022,7 +1022,7 @@ test('MEMORY window on a long listen is a whole number of samples', () => {
 
 test('FREEZE holds the wet tail without a held footswitch', () => {
   const run = (freeze) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { wetMode: 0, time: 0.7, mix: 1, modWet: 0.8, clock: 0.9 });
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     render(core, 3, tone(300, 99));
@@ -1036,7 +1036,7 @@ test('FREEZE holds the wet tail without a held footswitch', () => {
   assert.ok(on.state.freeze && on.state.wetOn, 'the state says the wet side is held');
   assert.ok(!off.state.freeze, 'and it is not held when the switch is down');
   // Releasing the switch lets the tail go again.
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   Object.assign(core.p, { wetMode: 0, time: 0.7, mix: 1, modWet: 0.8, clock: 0.9 });
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   render(core, 3, tone(300, 99));
@@ -1055,7 +1055,7 @@ test('the wet/loop balance never swallows the loop in the middle', () => {
   const broad = (t) => 0.15 * (Math.sin(2 * Math.PI * 220 * t) + Math.sin(2 * Math.PI * 331 * t)
     + Math.sin(2 * Math.PI * 517 * t) + Math.sin(2 * Math.PI * 733 * t));
   const level = (wetMode, balance) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, mix: 0.6, wetMode, routing: 1, modWet: 0.5, time: 0.5, balance });
     render(core, 2, broad);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
@@ -1078,7 +1078,7 @@ test('holding LOOP overdubs, and FADE decides what the old take keeps', () => {
   // FADE is not a dead control: it shapes each overdub pass. This also pins the
   // gesture FADE depends on — hold the LOOP footswitch while a loop plays.
   const take = (fade) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, mix: 0.5, fade });
     render(core, 2, tone(220, 9));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
@@ -1109,7 +1109,7 @@ test('WIDTH does what SPREAD used to: 0 is mono, the middle is as built, above i
   // SPREAD was a switch that duplicated the mono path; WIDTH now does it, so
   // turning WIDTH to zero is the same as that switch being off.
   const run = (width, pan) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { wetMode: 1, mix: 1, modWet: 0.6, time: 0.35, clock: 1, width });
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     const src = pan === 0 ? tone(440, 9) : (t) => ((t % 1) < 0.05 ? 0.9 : 0);   // clicks pan nothing, but excite the room
@@ -1131,7 +1131,7 @@ test('MIX alone takes the dry away, so DRY KILL is not needed', () => {
   // At the top of its travel MIX fades the dry signal out completely once the
   // pedal is engaged; the DRY KILL switch used to duplicate that.
   const dryLeft = (mix) => {
-    const core = new MoodCore(FS);
+    const core = new BroodCore(FS);
     Object.assign(core.p, { wetMode: 0, mix, modWet: 0.5, time: 0.5 });
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     render(core, 0.5, () => 0);                       // let "engaged" settle
@@ -1145,7 +1145,7 @@ test('MIX alone takes the dry away, so DRY KILL is not needed', () => {
 test('a hold on the wet footswitch freezes only while it is held', () => {
   // There is no LATCH switch any more: the FREEZE switch is how a freeze is left
   // standing, and a held foot is momentary.
-  const core = new MoodCore(FS);
+  const core = new BroodCore(FS);
   Object.assign(core.p, { wetMode: 0, time: 0.8, modWet: 0.9, mix: 1 });
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   render(core, 1, tone(300, 9));

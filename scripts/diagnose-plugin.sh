@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Brood Mood — health check. Finds out why the plug-in is not appearing in a DAW.
+# Brood — health check. Finds out why the plug-in is not appearing in a DAW.
 #
 #   bash scripts/diagnose-plugin.sh          report only, changes nothing
 #   bash scripts/diagnose-plugin.sh --fix    also re-sign and de-quarantine bundles
@@ -22,7 +22,7 @@ done
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUILD="$ROOT/native/build"
-PLUGIN_NAME="Brood Mood"
+PLUGIN_NAME="Brood"
 VST3_BUNDLE="$PLUGIN_NAME.vst3"
 AU_BUNDLE="$PLUGIN_NAME.component"
 
@@ -109,7 +109,7 @@ else
   printf '  build dir  %s\n' "$BUILD"
   if [ -f "$BUILD/CMakeCache.txt" ]; then
     ok "CMake configured"
-    grep -E '^(CMAKE_BUILD_TYPE|CMAKE_OSX_ARCHITECTURES|MOOD_BUILD_PLUGIN):' "$BUILD/CMakeCache.txt" | sed 's/^/        /'
+    grep -E '^(CMAKE_BUILD_TYPE|CMAKE_OSX_ARCHITECTURES|BROOD_BUILD_PLUGIN):' "$BUILD/CMakeCache.txt" | sed 's/^/        /'
   else
     bad "CMake never finished configuring (no CMakeCache.txt)"
     info "re-run the build and send the first error, not the last lines"
@@ -231,7 +231,7 @@ for dir in "$HOME/Library/Audio/Plug-Ins/Components" "/Library/Audio/Plug-Ins/Co
   fi
 done
 if [ "$FOUND" = 0 ]; then
-  bad "no Brood Mood bundle installed in any standard folder"
+  bad "no Brood bundle installed in any standard folder"
   info "expected ~/Library/Audio/Plug-Ins/VST3/$VST3_BUNDLE"
   info "install with: bash scripts/build-plugin.sh --install"
   issue
@@ -304,7 +304,7 @@ if [ -d "$HOME/Library/Preferences/Ableton" ]; then
 
   printf "\n  Does Live's plug-in database know about it?\n"
   if [ -d "$HOME/Library/Application Support/Ableton" ]; then
-    dbhits=$(grep -rl --binary-files=text -m1 'Brood Mood' \
+    dbhits=$(grep -rl --binary-files=text -m1 'Brood' \
       "$HOME/Library/Application Support/Ableton" 2>/dev/null | head -5)
     if [ -n "$dbhits" ]; then
       ok "found in Live data:"

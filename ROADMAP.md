@@ -18,7 +18,7 @@ lives. What is left of the pedal's own list:
 Direction is settled, work is not: this becomes a **series of separate plug-ins in
 one repository**, one `juce_add_plugin` per pedal, sharing the DSP core, the parity
 harness and the design sheet — not one binary that wears several models. A pedal's
-panel is its own shape (Habit's reel is not MOOD's clock), memory is spent only in
+panel is its own shape (Habit's reel is not this pedal's clock), memory is spent only in
 the instances that need it, and two CC maps never have to share a device. The
 tempting alternative — one instrument mixing blocks from several pedals — is
 recorded in [docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md) with why it is only
@@ -67,13 +67,29 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 17: **Brood, on one page that reads in tiers, and in stereo.** The product
+  is called Brood everywhere (bundles, window, wordmark, code); the plug-in IDs and
+  the old state tag are kept, so existing Live sets still open, and the installer
+  removes bundles left under the old name. The editor's children are scaled by the
+  same transform as the paint, so text inside fields and cells grows with the
+  window; the patch moved into the masthead; the knob columns are named on the
+  rule (WET CHANNEL / SHARED / MICRO-LOOPER); the side column runs LOOP,
+  MODULATION, SWITCHES, INPUT; FREEZE and CLASSIC joined TRAILS and SMOOTH, leaving
+  the hood five sliders. Fixes found on the way: the engines' right outputs were
+  being discarded (mono sources came out dual mono — reverb, WEAVE and WIDTH lost
+  their stereo); two native factory patches loaded the wrong wet mode (normalised
+  values written for three modes, read against four) and patches now reset every
+  control like the browser's; the LEVEL label and its hover help never appeared;
+  the readout could show one control's name over another's value; the title bar
+  was drawn grey; `build-plugin.sh` carried a second, stale copy of its own body;
+  the processor test still expected a 900 × 640 editor.
 - Round 16: **END is an end marker, and the tempo switches live with their knobs.**
   END used to set a window *length* and leave START to divide whatever room was
   left, so dragging END hauled the start marker along with it. START is now
   measured against the take and clamped by the end marker, so END moves the end
   marker and nothing else — and the window's length no longer changes under a
   moving START, which is what kept the move click-free. Sync split three ways:
-  SYNC beside TIME (TAPE and WEAVE only), ENV SYNC beside LENGTH (ENV only), and
+  SYNC beside TIME (DELAY and WEAVE only), ENV SYNC beside LENGTH (ENV only), and
   the modulation panel's own SYNC. A switch that would do nothing in the current
   mode is not drawn at all — REVERB and SLIP have no beat to follow.
 - Round 15: **the tempo reaches ENV, WEAVE and the modulation rate, and RAMPS

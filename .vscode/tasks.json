@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Brood Mood: build + install",
+      "label": "Brood: build + install",
       "detail": "Builds the VST3 (and AU + standalone on macOS), then copies the bundles into your plug-in folders.",
       "type": "shell",
       "command": "bash scripts/build-plugin.sh --install",
@@ -23,7 +23,7 @@
       }
     },
     {
-      "label": "Brood Mood: build only",
+      "label": "Brood: build only",
       "detail": "Builds without installing anything.",
       "type": "shell",
       "command": "bash scripts/build-plugin.sh",
@@ -40,7 +40,7 @@
       }
     },
     {
-      "label": "Brood Mood: build universal + install",
+      "label": "Brood: build universal + install",
       "detail": "macOS only: one bundle containing arm64 and x86_64 slices.",
       "type": "shell",
       "command": "bash scripts/build-plugin.sh --install --universal",
@@ -57,7 +57,7 @@
       }
     },
     {
-      "label": "Brood Mood: clean build + install",
+      "label": "Brood: clean build + install",
       "detail": "Deletes native/build first. Use after an interrupted build or a CMake settings change.",
       "type": "shell",
       "command": "bash scripts/build-plugin.sh --clean --install",
@@ -74,7 +74,7 @@
       }
     },
     {
-      "label": "Brood Mood: doctor (DAW cannot see it?)",
+      "label": "Brood: doctor (DAW cannot see it?)",
       "detail": "Checks the build, the plug-in folders, the signature and Ableton's own log. Changes nothing.",
       "type": "shell",
       "command": "bash scripts/diagnose-plugin.sh",
@@ -89,7 +89,7 @@
       }
     },
     {
-      "label": "Brood Mood: clean",
+      "label": "Brood: clean",
       "detail": "Deletes native/build (the JUCE download is kept, Caches are not).",
       "type": "shell",
       "command": "rm -rf native/build",
@@ -99,7 +99,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Brood Mood: run tests",
+      "label": "Brood: run tests",
       "detail": "Native DSP tests, then the JavaScript DSP suite.",
       "type": "shell",
       "command": "bash scripts/build-plugin.sh --test",
@@ -114,10 +114,10 @@
       }
     },
     {
-      "label": "Brood Mood: open the standalone app",
+      "label": "Brood: open the standalone app",
       "detail": "Builds, then launches the standalone version so you can play without a DAW.",
       "type": "shell",
-      "command": "bash scripts/build-plugin.sh && open \"native/build/plugin/MoodEmu_artefacts/Release/Standalone/Brood Mood.app\"",
+      "command": "bash scripts/build-plugin.sh && open \"native/build/plugin/Brood_artefacts/Release/Standalone/Brood.app\"",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -128,7 +128,7 @@
       }
     },
     {
-      "label": "Brood Mood: start the browser version",
+      "label": "Brood: start the browser version",
       "detail": "Runs the React/WebAudio version at the URL printed by Vite.",
       "type": "shell",
       "command": "npm run dev",

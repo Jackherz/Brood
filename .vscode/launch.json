@@ -5,10 +5,10 @@
       "name": "Debug standalone plug-in (macOS)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/native/build/plugin/MoodEmu_artefacts/Release/Standalone/Brood Mood.app/Contents/MacOS/Brood Mood",
+      "program": "${workspaceFolder}/native/build/plugin/Brood_artefacts/Release/Standalone/Brood.app/Contents/MacOS/Brood",
       "cwd": "${workspaceFolder}",
       "MIMode": "lldb",
-      "preLaunchTask": "Brood Mood: build only",
+      "preLaunchTask": "Brood: build only",
       "externalConsole": false
     }
   ]

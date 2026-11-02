@@ -1,4 +1,4 @@
-# Brood Mood — install it on macOS
+# Brood — install it on macOS
 
 Three commands, then one keystroke in VS Code. Nothing needs to be downloaded
 from a chat: everything comes from the repository.
@@ -7,13 +7,12 @@ from a chat: everything comes from the repository.
 
 ```sh
 cd ~/Documents/AI
-git clone -b arena/7dccc818-brood https://github.com/Jackherz/Brood.git Brood-Source
+git clone https://github.com/Jackherz/Brood.git Brood-Source
 cd Brood-Source
 open -a "Visual Studio Code" .
 ```
 
-The `-b` matters: it selects the branch that contains the plugin. A plain
-`git clone` gives the empty skeleton.
+Everything is on `main`, so a plain clone is all you need.
 
 Do **not** apply a `.patch` file. Patches cannot carry binary files, so a tree
 restored from one arrives without the interface fonts and fails to build. The
@@ -28,7 +27,7 @@ brew install cmake         # CMake 3.22 or newer
 
 ## 3. Build and install
 
-In VS Code: **⌘⇧B** (the default build task, `Brood Mood: build + install`).
+In VS Code: **⌘⇧B** (the default build task, `Brood: build + install`).
 
 Or from the terminal, when you already have the source: `make install`.
 

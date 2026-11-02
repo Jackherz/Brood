@@ -1,6 +1,6 @@
-# Brood Mood
+# Brood
 
-An unofficial, playable MOOD MKII-inspired stereo micro-looper and spatial-effects
+An unofficial, playable, pedal-inspired stereo micro-looper and spatial-effects
 plugin, with a black-and-white pixel-art interface. It includes a JUCE VST3
 plugin and a browser version that runs the same DSP. There is also source for
 JUCE standalone and macOS AU targets.
@@ -10,7 +10,7 @@ install; this README has the detail.
 
 **This is an independent approximation, not the original pedal firmware or a
 bit-exact emulation.** Chase Bliss's public firmware repository distributes
-binary firmware rather than the MOOD DSP source. The algorithms and parameter
+binary firmware rather than the pedal's DSP source. The algorithms and parameter
 ranges here are interpretations of the published behaviour and have **not**
 been calibrated against a physical pedal. It is not affiliated with Chase Bliss.
 
@@ -31,7 +31,7 @@ browser. For a production build, run `npm run build`.
 
 Drag a knob vertically, use the mouse wheel or arrow keys, or double-click to
 reset it. Tap **WET CHANNEL** to turn the effect on/off; hold it to freeze, or
-throw the **FREEZE** switch under the hood to have the freeze arrive without a
+throw the **FREEZE** switch to have the freeze arrive without a
 held foot — the wet side comes up held and rings on its own until you let it go.
 The looper is always listening: tap **MICRO-LOOPER** to capture the recent past,
 tap again to stop, or hold while playing to overdub. Holding while listening
@@ -57,16 +57,14 @@ result matches your machine and your macOS version exactly.
 
 ```sh
 cd ~/Documents/AI
-git clone -b arena/7dccc818-brood https://github.com/Jackherz/Brood.git Brood-Source
+git clone https://github.com/Jackherz/Brood.git Brood-Source
 cd Brood-Source
 open -a "Visual Studio Code" .
 ```
 
 `open -a` is used because VS Code's `code` command is only on the `PATH` after
 `⌘⇧P > Shell Command: Install 'code' command in PATH`; both open the same thing.
-
-The `-b` selects the branch containing the working tree; a plain `git clone` gives
-the upstream skeleton only.
+Everything lives on `main`.
 
 **Do not use a `.patch` file for this.** A patch cannot carry binary files: the
 transport drops the bytes and `git apply` stops with
@@ -77,7 +75,7 @@ error: cannot apply binary patch to 'assets/fonts/VT323-Regular.ttf' without ful
 
 That is why the fonts are downloaded by `scripts/fetch-fonts.sh` at build time
 rather than committed — `assets/fonts/*.ttf` is in `.gitignore`. Delete any old
-patch so it cannot be applied by mistake: `rm -f ~/Documents/AI/Brood-Mood/*.patch`
+patch so it cannot be applied by mistake: `rm -f ~/Documents/AI/Brood/*.patch`
 
 ### Install it from VS Code
 
@@ -91,7 +89,7 @@ patch so it cannot be applied by mistake: `rm -f ~/Documents/AI/Brood-Mood/*.pat
 3. **Install the suggested extensions** — *C/C++* and *CMake Tools*. Optional:
    they add error squiggles and C++ debugging. Nothing else is needed, and no
    C#/.NET anything.
-4. **Press ⌘⇧B.** The default build task is `Brood Mood: build + install`. It
+4. **Press ⌘⇧B.** The default build task is `Brood: build + install`. It
    configures CMake, compiles, ad-hoc signs, copies the bundles into
    `~/Library/Audio/Plug-Ins/`, and runs `auval`. The first run downloads JUCE
    8.0.9 (about 100 MB) into `native/build/_deps`, then compiles for several
@@ -102,9 +100,9 @@ patch so it cannot be applied by mistake: `rm -f ~/Documents/AI/Brood-Mood/*.pat
 
 | Format | Installed to |
 | --- | --- |
-| VST3 | `~/Library/Audio/Plug-Ins/VST3/Brood Mood.vst3` |
-| Audio Unit | `~/Library/Audio/Plug-Ins/Components/Brood Mood.component` |
-| Standalone | left in `native/build/plugin/MoodEmu_artefacts/Release/Standalone/` |
+| VST3 | `~/Library/Audio/Plug-Ins/VST3/Brood.vst3` |
+| Audio Unit | `~/Library/Audio/Plug-Ins/Components/Brood.component` |
+| Standalone | left in `native/build/plugin/Brood_artefacts/Release/Standalone/` |
 
 Because you build locally, the bundle links against your own SDK and is never
 quarantined, so no Gatekeeper prompt appears. Ad-hoc signing is automatic; set
@@ -140,8 +138,8 @@ signing (`codesign --sign -`) is local, free and anonymous.
 
 ```text
 ==> Ad-hoc signing the bundles (no Apple Developer account needed)
-    signed Brood Mood.vst3
-    verified Brood Mood.vst3
+    signed Brood.vst3
+    verified Brood.vst3
 ```
 
 Two situations that are often mistaken for "I need an Apple account":
@@ -149,7 +147,7 @@ Two situations that are often mistaken for "I need an Apple account":
 - **Gatekeeper** — a bundle that arrived inside a ZIP or download carries the
   `com.apple.quarantine` flag and is blocked. Files this script copies itself are
   de-quarantined; for anything else, run
-  `xattr -dr com.apple.quarantine "~/Library/Audio/Plug-Ins/VST3/Brood Mood.vst3"`.
+  `xattr -dr com.apple.quarantine "~/Library/Audio/Plug-Ins/VST3/Brood.vst3"`.
 - **A stale signature** — if you replaced files inside an installed bundle by
   hand, re-sign it: `codesign --force --sign - "<bundle>"`. `make doctor` detects
   this and `bash scripts/diagnose-plugin.sh --fix` repairs it.
@@ -167,7 +165,7 @@ Work through its FAIL lines, then these:
 
 1. **Confirm the install actually happened.** Live reads
    `~/Library/Audio/Plug-Ins/VST3/` and `/Library/Audio/Plug-Ins/VST3/`. If
-   neither contains `Brood Mood.vst3`, run `make install` and read the first
+   neither contains `Brood.vst3`, run `make install` and read the first
    error, not the last line.
 2. **Force a full rescan.** Quit Live completely, reopen it, then
    `Settings > Plug-Ins > Rescan` while holding **Option** — a normal rescan
@@ -183,14 +181,14 @@ Work through its FAIL lines, then these:
    `bash scripts/build-plugin.sh --install --universal` to cover both.
 5. **Look in the right place.** It is an effect: *Browser > Plug-Ins > VST3 >
    Fx*, or just type "Brood" into the browser search. Live's Audio Unit scan
-   may also list `Brood Mood` under *Audio Units*.
+   may also list `Brood` under *Audio Units*.
 
 ### If VS Code shows a C# Dev Kit / .NET error
 
 This project contains no C# and needs no .NET SDK. If a notification says
 *"Install the missing components in the .NET folder…"* or *"C# Dev Kit will not
 change your .NET installation"*, that is the **C# Dev Kit** extension starting in
-this window and failing to find a .NET runtime. It is unrelated to Brood Mood and
+this window and failing to find a .NET runtime. It is unrelated to Brood and
 does not block the build tasks.
 
 - **You do not use C# in VS Code:** open the Extensions view, find *C# Dev Kit*
@@ -238,19 +236,19 @@ needs [JUCE's Linux dependencies](https://github.com/juce-framework/JUCE/blob/8.
 To drive CMake by hand:
 
 ```sh
-cmake -S native -B native/build -DMOOD_BUILD_PLUGIN=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build native/build --config Release --target MoodEmu_VST3
+cmake -S native -B native/build -DBROOD_BUILD_PLUGIN=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build native/build --config Release --target Brood_VST3
 ```
 
-The bundle appears under `native/build/plugin/MoodEmu_artefacts/Release/VST3/`.
-Targets: `MoodEmu_VST3`, `MoodEmu_Standalone`, and on macOS `MoodEmu_AU`. Set
+The bundle appears under `native/build/plugin/Brood_artefacts/Release/VST3/`.
+Targets: `Brood_VST3`, `Brood_Standalone`, and on macOS `Brood_AU`. Set
 `-DBROOD_BUILD_PLUGIN_TESTS=ON` for the headless processor tests and
 `-DBROOD_BUILD_VST3_HOST_TESTS=ON` for the VST3 hosting smoke test.
 
 ### Prebuilt experiments (removed)
 
 Earlier versions of this project shipped cross-compiled bundles
-(`Brood-Mood-macOS-arm64-Experimental.zip`). They were arm64-only, had no
+(`Brood-macOS-arm64-Experimental.zip`). They were arm64-only, had no
 `moduleinfo.json`, were never opened in a DAW, and could not be transported
 through the patch channel at all — the download button and the ZIP are gone.
 Build locally with the steps above; that is the supported route.
@@ -261,18 +259,37 @@ explanation of its own makes the readout at the top of the side column explain i
 version says the same thing in its footer line.
 
 The editor is a 900 × 712 panel that can be resized from 675 × 534 up to
-1800 × 1280; the layout is drawn in design coordinates and scaled as a whole, so
-the proportions never break and labels cannot collide when the window changes.
-Everything is on that one page — pedal, side column and the row of options under
-the hood — because a second page is a menu, and the pedal this follows has none. The
-plugin normally processes the host track's input. The editor also offers a
+1800 × 1280; the layout is drawn in design coordinates and scaled as a whole —
+the controls included, so the text inside a field or a cell grows with the window
+instead of staying at its pixel size — and labels cannot collide when the window
+changes. Everything is on that one page, because a second page is a menu, and the
+pedal this follows has none. It reads in three tiers:
+
+1. **The pedal** — the patch in the masthead, the six knobs under three column
+   names (WET CHANNEL, SHARED, MICRO-LOOPER), the mode selectors and both
+   footswitches.
+2. **The side column** — the readout, then four numbered panels in the order you
+   reach for them while playing: `01 LOOP` (waveform, MEMORY, START, END,
+   WET/LOOP), `02 MODULATION`, `03 SWITCHES` (TRAILS, SMOOTH, FREEZE, CLASSIC) and
+   `04 INPUT`, which is set once per session.
+3. **Under the hood** — the five sliders along the bottom.
+
+`native/build/plugin/editor_snapshot out.png [scale] [id=value ...]` (built with
+`-DBROOD_BUILD_PLUGIN_TESTS=ON`) renders the editor to a PNG without a DAW.
+
+The plugin normally processes the host track's input. The editor also offers a
 generated demo and local file input. Plugin settings, wet on/off state **and the
 recorded loops** are stored in the DAW project — the two takes travel with the
 state as gzipped 16-bit PCM and are swapped back in on the audio thread after a
 reload, so a bounce or a reopened session plays the loop you were hearing rather
 than an empty buffer. Effect tails and loaded file audio are not saved. The file
-source returns to live input after a project reload. The native
-patch menu has the same five factory patches; use your DAW for user presets.
+source returns to live input after a project reload. The native patch menu has
+the same five factory patches as the browser, and a patch is a whole state: every
+control goes back to its default before the patch sets its own. Use your DAW for
+user presets.
+
+Sets saved under the old product name still open: the plug-in IDs did not change,
+and the old state tag is read as the new one.
 
 ### MIDI
 
@@ -291,18 +308,18 @@ the effect. Changes are applied at audio-block boundaries:
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
 | 105 | Wet freeze — same as the FREEZE switch (`0` off, `1–127` on) |
 
-CC 21 keeps the pedal's three-mode mapping exactly, so a hardware MOOD controller
+CC 21 keeps the pedal's three-mode mapping exactly, so a hardware controller set up for the pedal
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
 by automating the `wetMode` parameter (value 3) instead. CC 20 is ramp speed and
 66/67 are the two ramp dips, as on the pedal. CC 73, 74 and 76 used to carry
 SPREAD, DRY KILL and LATCH; those controls are gone (WIDTH does the first, MIX the
 second, the FREEZE switch the third), so the pedal's controllers for them do
 nothing now. The ramp destinations (RAMPS wet and
-loop), the shape and polarity have no CC in the MOOD map — they live in the hidden
+loop), the shape and polarity have no CC in the pedal's map — they live in the hidden
 menu there — so automate the `rampWet`, `rampLoop`, `rampWave` and `rampUni`
 parameters instead. Loop memory and END are host-only parameters too.
 
-Tempo sync has no CC in the MOOD map; automate the `sync` parameter, or switch
+Tempo sync has no CC in the pedal's map; automate the `sync` parameter, or switch
 it on in the editor.
 
 ### The sheet
@@ -358,11 +375,17 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
 
 ## Sound model
 
+- **Stereo.** Each engine is mono in and stereo out, and there is one per input
+  channel. The left engine supplies the left output and the right engine the right
+  one — on a mono track the two engines are identical, so what you hear is one
+  engine's full stereo: the reverb's two sides, WEAVE's panned threads and WIDTH.
+  (Until round 17 both outputs came from the engines' *left* sides, which made all
+  of that dual mono on any mono source.)
 - Wet modes: **Reverb**, **Delay**, **Slip** and **Weave**; loop modes: **Env**,
   **Tape** and **Stretch**. Three-way routing selects input, input + loop, or loop for the
   wet side. When the loop is listening, its recent history includes active wet
   audio; overdubs use the clean input.
-- **WEAVE** is an addition, not a MOOD mode: a re-sampler in the spirit of the
+- **WEAVE** is an addition, not one of the pedal's modes: a re-sampler in the spirit of the
   [Fieldtone Weaver](https://fieldtone.co). Three threads read a three-second
   memory at once, each with its own pitch (drawn from a root-sympathetic set of
   intervals), direction, grain size and dropout. TIME sets how far back the
@@ -424,17 +447,18 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   knob was nearly at LOOP. The duck is gone; both cores agree bit for bit
   (`tests/parity/scenarios/balance.txt`) and the level is pinned by tests in both
   implementations.
-- **The little switches** lost four of their six. What is left is TRAILS and
-  SMOOTH, with CLASSIC beside them in the browser; SYNC left the panel in round 16
-  to sit beside the knob it governs, so it can disappear in the modes that have no
-  use for the beat. LATCH went because the FREEZE
-  switch does the same job without having to hold anything (the one thing it does
-  that nothing else now can: latching the loop's overdub hold, so a tap leaves you
-  recording on top — that is a held gesture again). DRY KILL went because MIX at
-  the top of its travel already removes the dry, and SPREAD went into WIDTH.
+- **The switches** are TRAILS, SMOOTH, FREEZE and CLASSIC, one row in the
+  `03 SWITCHES` panel; FREEZE and CLASSIC came up from under the hood, which is now
+  sliders only. SYNC left the panel in round 16 to sit beside the knob it governs,
+  so it can disappear in the modes that have no use for the beat. LATCH went
+  because the FREEZE switch does the same job without having to hold anything (the
+  one thing it does that nothing else now can: latching the loop's overdub hold,
+  so a tap leaves you recording on top — that is a held gesture again). DRY KILL
+  went because MIX at the top of its travel already removes the dry, and SPREAD
+  went into WIDTH.
 - **Under the hood** is the row along the bottom of the editor (browser: the
   block at the foot of the side panel): the options the pedal keeps behind both
-  footswitches, with CLASSIC beside them in the browser's switch row. **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
+  footswitches. **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
   bit-transparent, so it can stay open. **FADE** sets how much of the old loop
   survives each overdub pass: 0 is the pedal's slow erosion (about 3 % a pass), 1
   lets the new layer replace it entirely. It only does anything *while you are
@@ -476,12 +500,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
 
 ```sh
 npm test                            # JS DSP tests
-cmake -S native -B native/build -DMOOD_BUILD_PLUGIN=ON \
+cmake -S native -B native/build -DBROOD_BUILD_PLUGIN=ON \
   -DBROOD_BUILD_PLUGIN_TESTS=ON -DBROOD_BUILD_VST3_HOST_TESTS=ON \
   -DCMAKE_BUILD_TYPE=Release
-cmake --build native/build --config Release --target dsp_tests mood_render plugin_tests vst3_host_tests
+cmake --build native/build --config Release --target dsp_tests brood_render plugin_tests vst3_host_tests
 ctest --test-dir native/build -C Release --output-on-failure
-node tests/parity/compare.js native/build/mood_render   # adjust path for multi-config builds
+node tests/parity/compare.js native/build/brood_render   # adjust path for multi-config builds
 ```
 
 For optional browser end-to-end tests, run the Vite dev server in one terminal,
@@ -498,7 +522,7 @@ substitute for listening and testing in your own DAW.
 
 ## Licences and credits
 
-Project code is GPLv3, including portions adapted from MoodEmu. JUCE 8 has
+Project code is GPLv3, including portions adapted from MoodEmu (see THIRD_PARTY_NOTICES.md). JUCE 8 has
 separate AGPLv3/commercial licensing, and the bundled fonts use the SIL Open
 Font License. See [LICENSE](LICENSE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution and details.
@@ -521,7 +545,7 @@ Onward, Brothers AM, Big Time and Lost + Found (Chase Bliss), plus Hologram's
 Microcosm, each with its front panel, the blocks it would force, what this codebase
 already owns, an effort in rounds, and where it collides with the one-page rule — in
 [docs/PEDAL-SERIES.md](docs/PEDAL-SERIES.md). The packaging decision and the three
-pedals studied earlier — blooper, Habit, Bad Mood — are in
+pedals studied earlier — blooper, Habit and a third, grumpier one — are in
 [docs/FUTURE-PEDALS.md](docs/FUTURE-PEDALS.md).
 
 None of it is scheduled. The cheapest three are Reverse Mode C, Clean and Generation

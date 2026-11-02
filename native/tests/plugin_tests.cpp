@@ -7,7 +7,7 @@
 static int failures = 0;
 #define CHECK(condition, message) do { if (!(condition)) { std::printf("FAIL: %s\n", message); ++failures; } } while (0)
 
-static void process(MoodProcessor& p, juce::AudioBuffer<float>& b, juce::MidiBuffer& m) {
+static void process(BroodProcessor& p, juce::AudioBuffer<float>& b, juce::MidiBuffer& m) {
     p.processBlock(b, m);
     m.clear();
 }
@@ -16,7 +16,7 @@ int main() {
     juce::ScopedJuceInitialiser_GUI initialise;
     constexpr int size = 128;
     constexpr double rate = 48000;
-    MoodProcessor p;
+    BroodProcessor p;
     p.setPlayConfigDetails(2, 2, rate, size);
     p.prepareToPlay(rate, size);
     juce::AudioBuffer<float> b(2, size);
@@ -41,10 +41,10 @@ int main() {
 
     // The wet-engaged state and parameter settings survive a DAW project reload.
     juce::MemoryBlock saved; p.getStateInformation(saved);
-    MoodProcessor restored;
+    BroodProcessor restored;
     restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
     juce::MemoryBlock resaved; restored.getStateInformation(resaved);
-    MoodProcessor immediateReload;
+    BroodProcessor immediateReload;
     immediateReload.setStateInformation(resaved.getData(), static_cast<int>(resaved.getSize()));
     immediateReload.setPlayConfigDetails(2, 2, rate, size);
     immediateReload.prepareToPlay(rate, size);
@@ -66,20 +66,65 @@ int main() {
     }
     m.addEvent(juce::MidiMessage::controllerEvent(1, 102, 1), 0);
     b.clear(); process(restored, b, m);
-    CHECK(restored.ui.loopLed.load() == static_cast<int>(mood::LoopLed::Play), "MIDI captures the listening looper");
+    CHECK(restored.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "MIDI captures the listening looper");
     CHECK(restored.ui.lsrc.load() > 64, "loop contains captured samples");
 
     // A mono host layout must not be silently cleared.
-    MoodProcessor mono;
+    BroodProcessor mono;
     mono.setPlayConfigDetails(1, 1, rate, size);
     mono.prepareToPlay(rate, size);
     juce::AudioBuffer<float> mb(1, size); mb.clear(); mb.setSample(0, 0, 0.25f);
     process(mono, mb, m);
     CHECK(std::fabs(mb.getSample(0, 0) - 0.25f) < 1e-6f, "mono bypass");
+
+    // A mono source on a stereo track must come out in stereo once the wet side is
+    // on: each engine's right output used to be thrown away, which left reverb and
+    // WIDTH as dual mono on every mono track.
+    {
+        BroodProcessor wide;
+        wide.setPlayConfigDetails(2, 2, rate, size);
+        wide.prepareToPlay(rate, size);
+        if (auto* w = wide.apvts.getParameter("width")) w->setValueNotifyingHost(1.f);
+        if (auto* mx = wide.apvts.getParameter("mix")) mx->setValueNotifyingHost(1.f);
+        juce::MidiBuffer on; on.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
+        double diff = 0, energy = 0;
+        for (int block = 0; block < 400; ++block) {
+            for (int i = 0; i < size; ++i) {
+                const auto x = static_cast<float>(0.3 * std::sin(2 * juce::MathConstants<double>::pi * 330 * (block * size + i) / rate));
+                b.setSample(0, i, x); b.setSample(1, i, x);
+            }
+            process(wide, b, block == 0 ? on : m);
+            if (block > 100)
+                for (int i = 0; i < size; ++i) {
+                    diff += std::fabs(b.getSample(0, i) - b.getSample(1, i));
+                    energy += std::fabs(b.getSample(0, i)) + std::fabs(b.getSample(1, i));
+                }
+        }
+        CHECK(energy > 1.0, "wet output is audible");
+        CHECK(diff > 0.05 * energy, "a mono source comes out in stereo");
+    }
+
+    // Sets saved before the rename carry the old state tag and must still load.
+    {
+        juce::MemoryBlock saved;
+        restored.getStateInformation(saved);
+        auto xml = juce::AudioProcessor::getXmlFromBinary(saved.getData(), static_cast<int>(saved.getSize()));
+        CHECK(xml != nullptr, "state is XML");
+        if (xml) {
+            const char legacy[] = { 0x4d, 0x4f, 0x4f, 0x44, 0 };
+            xml->setTagName(legacy);
+            if (auto* mx = xml->getChildByAttribute("id", "mix")) mx->setAttribute("value", 0.25);
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary(*xml, old);
+            BroodProcessor reopened;
+            reopened.setStateInformation(old.getData(), static_cast<int>(old.getSize()));
+            CHECK(std::fabs(reopened.apvts.getRawParameterValue("mix")->load() - 0.25f) < 1e-4f, "legacy state loads");
+        }
+    }
     // Construct and paint the editor offscreen to catch UI/resource regressions.
     {
         std::unique_ptr<juce::AudioProcessorEditor> editor(restored.createEditor());
-        CHECK(editor && editor->getWidth() == 900 && editor->getHeight() == 640, "editor size");
+        CHECK(editor && editor->getWidth() == 900 && editor->getHeight() == 712, "editor size");
         if (editor) {
             juce::Image image(juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
             juce::Graphics graphics(image);

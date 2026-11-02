@@ -4,10 +4,10 @@
 // Pedal-style front panel. Repaints are limited to the small regions that change
 // (LEDs, readout, meters, loop display): a full-window repaint at 30 Hz can starve
 // the UI thread on high-DPI screens.
-class MoodEditor final : public juce::AudioProcessorEditor, private juce::Timer {
+class BroodEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
-    explicit MoodEditor(MoodProcessor&);
-    ~MoodEditor() override;
+    explicit BroodEditor(BroodProcessor&);
+    ~BroodEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
     bool keyPressed(const juce::KeyPress&) override;
@@ -64,29 +64,35 @@ public:
         std::function<void()> changed;
     };
     struct Footswitch : juce::Component {
-        Footswitch(juce::RangedAudioParameter& p, juce::String key) : param(p), keyName(std::move(key)) {}
+        Footswitch(juce::RangedAudioParameter& p, juce::String n, juce::String key) : param(p), name(std::move(n)), keyName(std::move(key)) {}
         void paint(juce::Graphics&) override;
         void mouseDown(const juce::MouseEvent&) override { press(true); }
         void mouseUp(const juce::MouseEvent&) override { press(false); }
         void press(bool down);
         juce::RangedAudioParameter& param;
-        juce::String keyName;
+        juce::String name, keyName;
         bool isDown = false;
     };
     struct LoopView : juce::Component {
-        explicit LoopView(MoodProcessor& p) : proc(p) {}
+        explicit LoopView(BroodProcessor& p) : proc(p) {}
         void paint(juce::Graphics&) override;
-        MoodProcessor& proc;
-        std::array<float, MoodProcessor::kWaveBins> wave {};
+        BroodProcessor& proc;
+        std::array<float, BroodProcessor::kWaveBins> wave {};
         uint32_t version = 0;
     };
 
 private:
     void timerCallback() override;
-    void showReadout(const juce::String& label, const juce::String& value);
+    // `follows` marks a readout that belongs to the last touched parameter, so the
+    // timer may keep its value current (automation, mode changes). Anything else —
+    // a switch, the loop state, a patch name — is left alone until replaced.
+    void showReadout(const juce::String& label, const juce::String& value, bool follows = false);
     void touch(const juce::String& id);
+    void applyPatch(int index);
+    // Shows only the tempo switches the current modes can use.
+    void updateModeControls();
 
-    MoodProcessor& proc;
+    BroodProcessor& proc;
     KnobLook look;
 
     struct Knob { juce::String id, label; std::unique_ptr<juce::Slider> slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
@@ -104,8 +110,9 @@ private:
     juce::Slider memory, loopEnd, loopStart;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt, endAtt, startAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
+    // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::vector<Dip> dips;
+    std::array<Dip, 4> dips;
     std::unique_ptr<juce::FileChooser> chooser;
     // The ramp engine: two destinations, a shape, a rate and a polarity, plus the
     // BOUNCE and SWEEP dips that bend the shape.
@@ -115,26 +122,23 @@ private:
     struct RampSwitch { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::array<RampSwitch, 4> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC
     // Tempo switches that belong to one knob each, and only appear in the modes that
-    // can use the beat: TAPE and WEAVE for the wet side, ENV for the loop.
+    // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
     juce::ToggleButton wetSync, envSync;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt;
     juce::Rectangle<int> wetSyncDesign, envSyncDesign;
     int lastModeWet = -1, lastModeLoop = -1;
-    // Under the hood: the five options and the CLASSIC switch the pedal hides
-    // behind both footswitches. They live along the bottom of the window, so
-    // there is no second page to dive into.
+    // Under the hood: the five sliders the pedal hides behind both footswitches.
+    // They live along the bottom of the window, so there is no second page.
     struct HoodControl { juce::Slider slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
     std::array<HoodControl, 5> hood;   // tone, fade, width, wet division, loop division
-    juce::ToggleButton hoodClassic, hoodFreeze;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> hoodClassicAtt, hoodFreezeAtt;
 
-    // All of these are in DESIGN coordinates (the 900x640 panel); view maps them
+    // All of these are in DESIGN coordinates (the 900x712 panel); view maps them
     // into the real window. Paint and layout both work in that space.
     juce::Rectangle<int> pedalArea, lcdArea, ledWet, ledLoop, meterArea, loopArea;
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopEndDesign, loopStartDesign;
-    juce::Rectangle<int> hoodArea, hoodCellDesign[7], dipCellDesign[6];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[4];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains
@@ -145,7 +149,7 @@ private:
     std::vector<HoverItem> hoverHelp;
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
-    // The four stacked panels of the side column, in design coordinates.
+    // The four numbered panels of the side column, in design coordinates.
     juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[4], presetBoxDesign;
     juce::Rectangle<int> rampWetDesign, rampLoopDesign, rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
@@ -154,6 +158,7 @@ private:
     juce::AffineTransform view;
     void repaintDesign(const juce::Rectangle<int>& designArea) { repaint(designArea.transformedBy(view)); }
     juce::String lcdLabel { "READY" }, lcdValue { "Tap L to loop, A for wet" }, lastTouched;
+    bool readoutFollows = false;
     // The status segment at the right of the title bar: what the host is actually
     // running us at, repainted only when that changes.
     juce::String barMeta;
@@ -163,5 +168,5 @@ private:
     float meterIn = 0, meterOut = 0;
     bool keyA = false, keyL = false;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MoodEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BroodEditor)
 };

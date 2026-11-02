@@ -1,4 +1,4 @@
-// Mood emulator DSP core, C++ port of src/mood-worklet.js (the reference).
+// Brood DSP core, C++ port of src/brood-worklet.js (the reference).
 //
 // Header-only, C++17, no exceptions/RTTI. All buffers are allocated in prepare();
 // process() never allocates, locks, or throws, so it is safe on an audio thread.
@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace mood {
+namespace brood {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTau = 2.0 * kPi;
@@ -45,7 +45,7 @@ inline double jsRound(double x) { return std::floor(x + 0.5); }
 
 // Hidden options (on the pedal you hold both footswitches to reach these). The two
 // sides can run on different clock divisions, so the wet side and the loop can
-// drift apart in time and pitch. Mirrors divMap in src/mood-worklet.js.
+// drift apart in time and pitch. Mirrors divMap in src/brood-worklet.js.
 inline int divMap(double knob) {
     static const int steps[3] = {1, 2, 4};
     return steps[static_cast<size_t>(jsRound(clampd(knob, 0, 1) * (3 - 1)))];
@@ -54,7 +54,7 @@ inline int divMap(double knob) {
 // ───── RAMPS ─────
 // Each channel has a function generator that can drive one control. The first
 // position is off; MODIFY means this channel's own MODIFY knob. Mirrors the
-// RAMP_* helpers in src/mood-worklet.js.
+// RAMP_* helpers in src/brood-worklet.js.
 constexpr int kRampTargetCount = 7;
 constexpr int kRampWaveCount = 5;
 inline const char* const kRampTargets[kRampTargetCount] = {"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"};
@@ -319,7 +319,7 @@ struct Slip {
 // pattern from long overlapping cloth (texture) into short clipped stitches
 // (rhythm). The pattern is re-rolled only when the integer position of the knobs
 // changes, so the same knob position always draws the same fabric — chance, but
-// repeatable, and no undo. Mirrors the JS Weave class in src/mood-worklet.js.
+// repeatable, and no undo. Mirrors the JS Weave class in src/brood-worklet.js.
 struct Weave {
     struct Thread { double pos = 0, ph = 0, rate = 1, pan = 0, amp = 1; int dir = 1; };
     std::vector<float> buf; int w = 0;
@@ -441,7 +441,7 @@ public:
         loopWaveDirty = false;
     }
 
-    // which: 0 = wet, 1 = loop. Mirrors MoodCore.footswitch.
+    // which: 0 = wet, 1 = loop. Mirrors BroodCore.footswitch.
     void footswitch(int which, bool down) {
         const int64_t now = hostCount;
         if (which == 0) {
@@ -479,7 +479,7 @@ public:
     // Explicit freeze for MIDI CC; footswitch gestures remain momentary/latching.
     void setFreeze(bool active) { freeze = active && wetOn; }
 
-    // in may be null (silence). Mirrors MoodCore.process.
+    // in may be null (silence). Mirrors BroodCore.process.
     void process(const float* in, float* outL, float* outR, int n) {
         const double a = 1 - std::exp(-1 / (0.03 * fs));
         const double aClock = 1 - std::exp(-1 / ((p.smooth ? 1.5 : 0.08) * fs));
@@ -774,7 +774,7 @@ private:
     // (TAPE takes its from the tail of the capture, ENV and STRETCH from the whole
     // take), END decides how much of that window sounds before it wraps, and START
     // decides where the window sits inside the capture — 0 is where each mode has
-    // always begun. Mirrors loopWindow() in src/mood-worklet.js.
+    // always begun. Mirrors loopWindow() in src/brood-worklet.js.
     Window loopWindow() const {
         const int len = std::max(64, lsrc);
         const double trim = clampd(p.loopEnd, 0.02, 1);
@@ -1017,7 +1017,7 @@ private:
         // against the wet level so the loop was not heard twice, but the wet side
         // always returns it late — and in SLIP and WEAVE it returns very little —
         // so the duck swallowed the loop in the middle of the travel. Mirrors
-        // coreTick() in src/mood-worklet.js.
+        // coreTick() in src/brood-worklet.js.
         const double bal = e.balance;
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
         const double ld = loopOut * loopLvl;
@@ -1027,4 +1027,4 @@ private:
     }
 };
 
-}  // namespace mood
+}  // namespace brood

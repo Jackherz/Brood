@@ -3,11 +3,11 @@
 // Output: interleaved stereo float32 little-endian.
 'use strict';
 const fs = require('fs');
-const { MoodCore } = require('../../src/mood-worklet.js');
+const { BroodCore } = require('../../src/brood-worklet.js');
 const { parse, input, BLOCK } = require('./scenario.js');
 
 const sc = parse(fs.readFileSync(process.argv[2], 'utf8'));
-const core = new MoodCore(sc.rate);
+const core = new BroodCore(sc.rate);
 const nBlocks = Math.ceil((sc.seconds * sc.rate) / BLOCK);
 const out = new Float32Array(nBlocks * BLOCK * 2);
 const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);

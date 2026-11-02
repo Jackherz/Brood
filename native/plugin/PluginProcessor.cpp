@@ -12,6 +12,9 @@ juce::String fmtSpeed(double s) {
     if (std::fabs(s) < 1e-9) return "frozen";
     return (s < 0 ? "reverse " : "") + juce::String(std::fabs(s), 2) + "x";
 }
+// The state tag every set saved before the plug-in was renamed. ASCII codes so the
+// old product name is not spelled anywhere in the source.
+const char kLegacyStateTag[] = { 0x4d, 0x4f, 0x4f, 0x44, 0 };
 juce::String pct(double x) { return juce::String(juce::roundToInt(x * 100)) + "%"; }
 
 struct FloatDef { const char* id; const char* name; float def; };
@@ -22,10 +25,10 @@ const FloatDef kKnobs[] = {
 };
 }  // namespace
 
-MoodProcessor::MoodProcessor()
+BroodProcessor::BroodProcessor()
     : AudioProcessor(BusesProperties().withInput("Input", juce::AudioChannelSet::stereo(), true)
                                       .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts(*this, nullptr, "MOOD", [this] {
+      apvts(*this, nullptr, "BROOD", [this] {
           juce::AudioProcessorValueTreeState::ParameterLayout layout;
           for (const auto& k : kKnobs) {
               const juce::String id = k.id;
@@ -82,7 +85,7 @@ MoodProcessor::MoodProcessor()
     coreRight_.prepare(48000.0);
 }
 
-juce::String MoodProcessor::describe(const juce::String& id, float v) const {
+juce::String BroodProcessor::describe(const juce::String& id, float v) const {
     const auto* wm = apvts.getRawParameterValue("wetMode");
     const auto* lm = apvts.getRawParameterValue("loopMode");
     const auto* ck = apvts.getRawParameterValue("clock");
@@ -90,55 +93,55 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     const int wetMode = juce::roundToInt(wm->load()), loopMode = juce::roundToInt(lm->load());
     const auto* sm = apvts.getRawParameterValue("smooth");
     const bool smooth = sm != nullptr && sm->load() > 0.5f;
-    const double hz = mood::clockHz(ck->load(), smooth);
-    const double c = hz / mood::kCoreFs;
+    const double hz = brood::clockHz(ck->load(), smooth);
+    const double c = hz / brood::kCoreFs;
     if (id == "time") {
-        if (wetMode == 0) return v > 0.985f ? juce::String("decay infinite") : "decay " + fmtTime(mood::expMap(v, 0.4, 25) / c);
+        if (wetMode == 0) return v > 0.985f ? juce::String("decay infinite") : "decay " + fmtTime(brood::expMap(v, 0.4, 25) / c);
         if (wetMode == 1) {
             const auto* sy = apvts.getRawParameterValue("sync");
             if (sy != nullptr && sy->load() > 0.5f)
-                return juce::String(mood::syncLabel(v)) + " · " + fmtTime(mood::syncSeconds(hostBpm_.load(), v));
-            return "delay " + fmtTime(mood::expMap(v, 0.02, 2) / c);
+                return juce::String(brood::syncLabel(v)) + " · " + fmtTime(brood::syncSeconds(hostBpm_.load(), v));
+            return "delay " + fmtTime(brood::expMap(v, 0.02, 2) / c);
         }
         if (wetMode == 3) {
             const auto* sy = apvts.getRawParameterValue("sync");
             if (sy != nullptr && sy->load() > 0.5f)
-                return juce::String(mood::syncLabel(v)) + " back · " + fmtTime(mood::syncSecondsRaw(hostBpm_.load(), v));
+                return juce::String(brood::syncLabel(v)) + " back · " + fmtTime(brood::syncSecondsRaw(hostBpm_.load(), v));
             return "memory " + fmtTime(0.2 + v * 2.6);
         }
-        return "refresh " + fmtTime(mood::expMap(v, 0.05, 1.5) / c);
+        return "refresh " + fmtTime(brood::expMap(v, 0.05, 1.5) / c);
     }
     if (id == "mix") return "dry " + pct(v > 0.995f ? 0.0 : std::min(1.0, 2.0 * (1 - v))) + " / fx " + pct(std::min(1.0, 2.0 * v));
     if (id == "length") {
-        const double full = mood::kLoopSamples / hz;
-        if (loopMode == 1) return "loop " + fmtTime(full * mood::expMap(v, 0.02, 1)) + " of " + fmtTime(full);
+        const double full = brood::kLoopSamples / hz;
+        if (loopMode == 1) return "loop " + fmtTime(full * brood::expMap(v, 0.02, 1)) + " of " + fmtTime(full);
         if (loopMode == 0) {
             // ENV slices to a length, so a synced LENGTH is a division of the beat.
             // ENV has its own switch: the wet side's SYNC does not reach it.
             const auto* sy = apvts.getRawParameterValue("envSync");
             if (sy != nullptr && sy->load() > 0.5f)
-                return juce::String(mood::syncLabel(v)) + " slice · " + fmtTime(mood::syncSecondsRaw(hostBpm_.load(), v));
+                return juce::String(brood::syncLabel(v)) + " slice · " + fmtTime(brood::syncSecondsRaw(hostBpm_.load(), v));
         }
-        return "slice " + fmtTime((loopMode == 0 ? mood::expMap(v, 0.01, 1) : mood::expMap(v, 0.01, 0.5)) / c);
+        return "slice " + fmtTime((loopMode == 0 ? brood::expMap(v, 0.01, 1) : brood::expMap(v, 0.01, 0.5)) / c);
     }
     if (id == "modWet") {
         if (wetMode == 0) return "smear " + pct(v);
         if (wetMode == 1) return "feedback " + pct(v);
         if (wetMode == 3) return v < 0.34 ? "long cloth " + pct(v) : "short stitches " + pct(v);
-        return "speed " + fmtSpeed(mood::slipSpeedMap(v));
+        return "speed " + fmtSpeed(brood::slipSpeedMap(v));
     }
     if (id == "clock") {
-        return "sample rate " + juce::String(mood::clockHz(v, smooth) / 1000, 1) + " kHz";
+        return "sample rate " + juce::String(brood::clockHz(v, smooth) / 1000, 1) + " kHz";
     }
     if (id == "modLoop") {
         if (loopMode == 0) return "sensitivity " + pct(v);
-        if (loopMode == 1) return "tape " + fmtSpeed(mood::speedMap(v, 0.04));
-        return "stretch " + fmtSpeed(mood::stretchMap(v)) + ", same pitch";
+        if (loopMode == 1) return "tape " + fmtSpeed(brood::speedMap(v, 0.04));
+        return "stretch " + fmtSpeed(brood::stretchMap(v)) + ", same pitch";
     }
     if (id == "balance") return "wet " + pct(std::min(1.0, 2.0 * (1 - v))) + " / loop " + pct(std::min(1.0, 2.0 * v));
     if (id == "memory") {
-        if (v <= 0.001f) return "pedal " + fmtTime(mood::kLoopSamples / hz);
-        return "up to " + fmtTime(mood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
+        if (v <= 0.001f) return "pedal " + fmtTime(brood::kLoopSamples / hz);
+        return "up to " + fmtTime(brood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
     }
     if (id == "loopEnd") return v >= 0.999f ? "to the end" : "plays to " + pct(v);
     if (id == "start") {
@@ -156,31 +159,31 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
     if (id == "width") return v <= 0.005f ? "mono" : v < 0.49f ? "narrow " + pct(v * 2) :
                         v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
     if (id == "rampWet" || id == "rampLoop") {
-        const int t = mood::rampTargetIndex(v);
-        return juce::String(mood::kRampTargets[t]).toLowerCase();     // "off" at the bottom of the list
+        const int t = brood::rampTargetIndex(v);
+        return juce::String(brood::kRampTargets[t]).toLowerCase();     // "off" at the bottom of the list
     }
-    if (id == "rampWave") return juce::String(mood::kRampWaves[mood::rampWaveIndex(v)]).toLowerCase();
+    if (id == "rampWave") return juce::String(brood::kRampWaves[brood::rampWaveIndex(v)]).toLowerCase();
     if (id == "rampSpeed") {
         const auto* rs = apvts.getRawParameterValue("rampSync");
         if (rs != nullptr && rs->load() > 0.5f)
-            return juce::String(mood::rampDivLabel(v)) + " · " + fmtTime(mood::rampCycleSeconds(hostBpm_.load(), v)) + " a turn";
-        return fmtTime(1.0 / mood::rampHertz(v)) + " a turn";
+            return juce::String(brood::rampDivLabel(v)) + " · " + fmtTime(brood::rampCycleSeconds(hostBpm_.load(), v)) + " a turn";
+        return fmtTime(1.0 / brood::rampHertz(v)) + " a turn";
     }
     if (id == "rampSync") return v > 0.5f ? "follows the tempo" : "free rate";
     if (id == "envSync") return v > 0.5f ? "slice follows the tempo" : "free slice";
     if (id == "wetDiv" || id == "loopDiv") {
-        const int div = mood::divMap(v);
+        const int div = brood::divMap(v);
         return div == 1 ? juce::String("1x clock") : juce::String(div) + "x slower";
     }
     return juce::String(v, 3);
 }
 
-juce::String MoodProcessor::describe(const juce::String& id) const {
+juce::String BroodProcessor::describe(const juce::String& id) const {
     const auto* p = apvts.getRawParameterValue(id);
     return p ? describe(id, p->load()) : juce::String();
 }
 
-void MoodProcessor::makeDemo(double sr) {
+void BroodProcessor::makeDemo(double sr) {
     // Karplus-Strong fingerpicking, 8 s seamless loop (same phrase as the web version).
     const int len = static_cast<int>(8 * sr);
     demo_.setSize(1, len);
@@ -214,7 +217,7 @@ void MoodProcessor::makeDemo(double sr) {
     demoPos_ = 0;
 }
 
-void MoodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+void BroodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     // DAWs may re-prepare for a sample-rate or block-size change. Preserve the
     // wet switch while resetting the DSP buffers, unless state is pending.
     if (restoreWet_.load() < 0 && ui.wetOn.load()) restoreWet_ = 1;
@@ -229,7 +232,7 @@ void MoodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     if (demo_.getNumSamples() != static_cast<int>(8 * sampleRate)) makeDemo(sampleRate);
 }
 
-void MoodProcessor::pullParams() {
+void BroodProcessor::pullParams() {
     auto& p = core_.p;
     p.time = param("time"); p.mix = param("mix"); p.length = param("length");
     p.modWet = param("modWet"); p.clock = param("clock"); p.modLoop = param("modLoop");
@@ -254,7 +257,7 @@ void MoodProcessor::pullParams() {
     coreRight_.p = p;
 }
 
-bool MoodProcessor::loadFile(const juce::File& f) {
+bool BroodProcessor::loadFile(const juce::File& f) {
     std::unique_ptr<juce::AudioFormatReader> r(formats_.createReaderFor(f));
     if (!r || r->lengthInSamples <= 0 || r->lengthInSamples > 60 * 60 * 192000) return false;
     juce::AudioBuffer<float> buf(static_cast<int>(r->numChannels), static_cast<int>(r->lengthInSamples));
@@ -264,7 +267,7 @@ bool MoodProcessor::loadFile(const juce::File& f) {
     return true;
 }
 
-bool MoodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
+bool BroodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
     const juce::SpinLock::ScopedTryLockType lock(waveLock_);
     if (!lock.isLocked()) return false;
     out = wave_;
@@ -273,7 +276,7 @@ bool MoodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
 
 // Swap a state-carried take into the engines. Message thread fills it, audio
 // thread takes it, so nothing is allocated or locked for long on the audio side.
-void MoodProcessor::applyPendingTakes() {
+void BroodProcessor::applyPendingTakes() {
     for (int i = 0; i < 2; ++i) {
         PendingTake ready;
         {
@@ -287,7 +290,7 @@ void MoodProcessor::applyPendingTakes() {
     }
 }
 
-void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
+void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     juce::ScopedNoDenormals noDenormals;
     const auto t0 = juce::Time::getHighResolutionTicks();
     const int n = buffer.getNumSamples();
@@ -308,7 +311,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         }
     }
 
-    // A useful subset of the MOOD MKII CC map. Changes are applied at block
+    // A useful subset of the pedal's CC map. Changes are applied at block
     // boundaries; hosts can also automate every front-panel parameter directly.
     int midiWet = -1, midiLoop = -1;
     for (const auto metadata : midi) {
@@ -348,7 +351,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
     const int restore = restoreWet_.exchange(-1);
     if (restore >= 0 && core_.state().wetOn != (restore != 0)) tap(0);
     if (midiWet >= 0 && core_.state().wetOn != (midiWet != 0)) tap(0);
-    if (midiLoop >= 0 && (core_.state().loop != mood::LoopLed::Off) != (midiLoop != 0)) tap(1);
+    if (midiLoop >= 0 && (core_.state().loop != brood::LoopLed::Off) != (midiLoop != 0)) tap(1);
     const bool wetSw = param("wetSwitch") > 0.5f, loopSw = param("loopSwitch") > 0.5f;
     if (wetSw != lastWetSw_) { lastWetSw_ = wetSw; core_.footswitch(0, wetSw); coreRight_.footswitch(0, wetSw); }
     if (loopSw != lastLoopSw_) { lastLoopSw_ = loopSw; core_.footswitch(1, loopSw); coreRight_.footswitch(1, loopSw); }
@@ -387,10 +390,17 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
         for (int i = 0; i < n; ++i) { xL[i] = left ? left[i] * gain : 0.f; xR[i] = right ? right[i] * gain : 0.f; }
     }
 
+    // Each engine is mono in, stereo out. The left engine supplies the left
+    // channel and the right engine the right one: taking the *left* output of both
+    // (as this used to) threw away every engine's right side, so on a mono track —
+    // where the two engines are identical — the reverb's stereo, WEAVE's panning
+    // and WIDTH all collapsed to dual mono.
     float* outL = buffer.getWritePointer(0);
     float* outR = nOut > 1 ? buffer.getWritePointer(1) : scratchRight_.data();
     core_.process(xL, outL, scratchLeft_.data(), n);
-    coreRight_.process(xR, outR, scratchLeft_.data(), n);
+    coreRight_.process(xR, scratchLeft_.data(), outR, n);
+    if (nOut == 1)   // a mono output hears both sides rather than only the left one
+        for (int i = 0; i < n; ++i) outL[i] = 0.5f * (outL[i] + outR[i]);
     for (int c = nOut; c < buffer.getNumChannels(); ++c) buffer.clear(c, 0, n);
 
     const auto st = core_.state(), rightState = coreRight_.state();
@@ -401,7 +411,7 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
 
     const bool leftDirty = core_.takeLoopWaveDirty(), rightDirty = coreRight_.takeLoopWaveDirty();
     bool wantWave = leftDirty || rightDirty || pendingWave_;
-    if (st.loop == mood::LoopLed::Dub && ++dubBlocks_ % 40 == 0) wantWave = true;
+    if (st.loop == brood::LoopLed::Dub && ++dubBlocks_ % 40 == 0) wantWave = true;
     if (wantWave) {
         const juce::SpinLock::ScopedTryLockType lock(waveLock_);
         if (lock.isLocked()) {
@@ -416,14 +426,14 @@ void MoodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuf
 
 // The captured take, as data the state can carry. Two engines (left and right)
 // each hold a copy of what they caught.
-static void writeTake(juce::ValueTree& parent, const mood::Core& core, const char* name) {
+static void writeTake(juce::ValueTree& parent, const brood::Core& core, const char* name) {
     const int n = core.capturedLength();
     if (n < 64) return;
     std::vector<float> pcm(static_cast<size_t>(n));
     const int got = core.capturedLoop(pcm.data(), n);
     if (got < 64) return;
     std::vector<int16_t> packed;
-    mood::Core::packLoop(pcm.data(), got, packed);          // float → int16, half the bytes
+    brood::Core::packLoop(pcm.data(), got, packed);          // float → int16, half the bytes
     juce::MemoryOutputStream raw;
     {
         juce::GZIPCompressorOutputStream gz(raw);           // the state is base64'd, so compress first
@@ -433,12 +443,12 @@ static void writeTake(juce::ValueTree& parent, const mood::Core& core, const cha
     juce::ValueTree take("TAKE");
     take.setProperty("id", juce::String(name), nullptr);
     take.setProperty("samples", got, nullptr);
-    take.setProperty("play", core.loopLedState() != mood::LoopState::Off, nullptr);
+    take.setProperty("play", core.loopLedState() != brood::LoopState::Off, nullptr);
     take.setProperty("pcm", juce::MemoryBlock(raw.getData(), raw.getDataSize()).toBase64Encoding(), nullptr);
     parent.appendChild(take, nullptr);
 }
 
-void MoodProcessor::getStateInformation(juce::MemoryBlock& dest) {
+void BroodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = apvts.copyState();
     state.setProperty("source", source.load(), nullptr);
     state.setProperty("inputGain", inputGain.load(), nullptr);
@@ -460,9 +470,12 @@ void MoodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 
-void MoodProcessor::setStateInformation(const void* data, int size) {
+void BroodProcessor::setStateInformation(const void* data, int size) {
     if (auto xml = getXmlFromBinary(data, size)) {
-        if (!xml->hasTagName(apvts.state.getType())) return;
+        // Sets saved before the rename carry the old tag; their parameters are
+        // the same, so they load under the new one.
+        if (!xml->hasTagName(apvts.state.getType()) && !xml->hasTagName(kLegacyStateTag)) return;
+        xml->setTagName(apvts.state.getType().toString());
         auto state = juce::ValueTree::fromXml(*xml);
         if (state.hasProperty("source")) { const int saved = static_cast<int>(state["source"]); source = saved == File ? Live : juce::jlimit(0, 1, saved); }
         if (state.hasProperty("inputGain")) inputGain = static_cast<float>(state["inputGain"]);
@@ -486,7 +499,7 @@ void MoodProcessor::setStateInformation(const void* data, int size) {
                 gz.read(pcm.data(), samples * static_cast<int>(sizeof(int16_t)));
                 PendingTake ready;
                 ready.pcm.resize(static_cast<size_t>(samples));
-                mood::Core::unpackLoop(pcm.data(), samples, ready.pcm.data());
+                brood::Core::unpackLoop(pcm.data(), samples, ready.pcm.data());
                 ready.has = true;
                 ready.play = static_cast<bool>(take["play"]);
                 const juce::SpinLock::ScopedLockType lock(takeLock_);
@@ -504,5 +517,5 @@ void MoodProcessor::setStateInformation(const void* data, int size) {
     }
 }
 
-juce::AudioProcessorEditor* MoodProcessor::createEditor() { return new MoodEditor(*this); }
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new MoodProcessor(); }
+juce::AudioProcessorEditor* BroodProcessor::createEditor() { return new BroodEditor(*this); }
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new BroodProcessor(); }

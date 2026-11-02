@@ -25,7 +25,7 @@ printf '\n== Required files ==\n'
 for f in README.md Makefile LICENSE .gitignore \
          scripts/build-plugin.sh scripts/diagnose-plugin.sh scripts/fetch-fonts.sh \
          .vscode/tasks.json native/CMakeLists.txt native/plugin/CMakeLists.txt \
-         src/main.jsx src/mood-worklet.js native/dsp/mood.h; do
+         src/main.jsx src/brood-worklet.js native/dsp/brood.h; do
   if [ -e "$f" ]; then ok "$f"; else bad "missing $f"; fi
 done
 

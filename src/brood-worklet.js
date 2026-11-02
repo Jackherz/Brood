@@ -1,7 +1,7 @@
-// Mood emulator DSP core.
+// Brood DSP core.
 //
-// Loads in an AudioWorkletGlobalScope (registers 'mood-processor') and in Node
-// (exports MoodCore for offline tests and rendering).
+// Loads in an AudioWorkletGlobalScope (registers 'brood-processor') and in Node
+// (exports BroodCore for offline tests and rendering).
 //
 // Signal flow
 //   input ─┬───────────────────────────────────────────── dry ──┐
@@ -368,7 +368,7 @@ class Weave {
 }
 
 // ─────────────────────────────── Core ─────────────────────────────────
-class MoodCore {
+class BroodCore {
   constructor(fs) {
     this.fs = fs;
     this.p = {
@@ -987,12 +987,14 @@ function softClip(x) {
 
 if (typeof AudioWorkletProcessor !== 'undefined') {
   // Independent left/right engines preserve stereo input. Both receive the same
-  // gestures and parameters; each contributes its own left channel.
-  class MoodProcessor extends AudioWorkletProcessor {
+  // gestures and parameters; the left engine supplies the left channel and the
+  // right engine the right one, so a mono source keeps each engine's own stereo
+  // (reverb, WEAVE's panning, WIDTH) instead of collapsing to dual mono.
+  class BroodProcessor extends AudioWorkletProcessor {
     constructor() {
       super();
-      this.left = new MoodCore(sampleRate);
-      this.right = new MoodCore(sampleRate);
+      this.left = new BroodCore(sampleRate);
+      this.right = new BroodCore(sampleRate);
       this.scratchL = new Float32Array(128);
       this.scratchR = new Float32Array(128);
       this.sinceState = 0;
@@ -1018,7 +1020,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       const inL = inp[0] || null;
       const inR = inp[1] || inL;
       this.left.process(inL, outL, this.scratchL);
-      this.right.process(inR, outR, this.scratchL);
+      this.right.process(inR, this.scratchL, outR);
       this.sinceState += outL.length;
       if (this.sinceState >= sampleRate / 30) {
         this.sinceState = 0;
@@ -1046,9 +1048,9 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       return true;
     }
   }
-  registerProcessor('mood-processor', MoodProcessor);
+  registerProcessor('brood-processor', BroodProcessor);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { MoodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { BroodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }
