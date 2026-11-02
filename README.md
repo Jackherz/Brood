@@ -37,9 +37,10 @@ The looper is always listening: tap **MICRO-LOOPER** to capture the recent past,
 tap again to stop, or hold while playing to overdub. Holding while listening
 records a new loop for the duration of the hold, up to the buffer capacity.
 The **LOOP TRIM** row under the waveform sets how much past the looper may keep
-(**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour) and how much of the
-captured loop plays (**END**). Where the loop starts is **LENGTH**'s job. The
-waveform dims whatever the trim has left outside.
+(**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour), where the window
+stops (**END**) and where it begins (**START**). END is an end marker and START a
+start marker: each moves itself, so the window can be trimmed from either side.
+The waveform dims whatever the trim has left outside.
 The A and L keys trigger the wet and loop switches when focus is not in another
 control. **HOW TO PLAY** opens the in-app field guide.
 
@@ -372,13 +373,20 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   — chance you can return to, and no undo. Weaver's fixed capture window,
   Texture/Rhythm switch, root-aligned pitch set and per-element levels are the
   reference; its microphone, trigger outputs and CV are not modelled.
-- **TEMPO SYNC** (the `SYNC` switch) turns the delay's TIME knob into a musical
-  division: 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/4D, 1/2, 1/1. In the
-  plugin the tempo comes from the DAW's playhead, every block, so tempo changes
-  are followed; in the browser you set it on the TEMPO field. The division is
-  real time, converted into core ticks at the current clock, so the echo stays on
-  the beat when CLOCK moves. The readout shows the division and its milliseconds
-  (a whole note at 120 BPM is 2 s, which the 2.1 s delay buffer clamps to 1.995 s).
+- **TEMPO SYNC** is three switches, each beside the knob it governs and each drawn
+  only in the modes that can use it. `SYNC` beside TIME turns the delay's TIME knob
+  into a musical division — 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/4D, 1/2,
+  1/1 — and does the same for WEAVE's reach; it is absent in REVERB and SLIP,
+  which have nothing to put on the beat. `ENV SYNC` beside LENGTH makes the
+  envelope's slice a division of the beat instead of a free length, and appears
+  only in ENV. The modulation panel has its own SYNC for the rate (eight bars to a
+  sixteenth). All three are independent: a synced delay can run against a free
+  envelope. In the plugin the tempo comes from the DAW's playhead, every block, so
+  tempo changes are followed; in the browser you set it on the TEMPO field. The
+  division is real time, converted into core ticks at the current clock, so the
+  echo stays on the beat when CLOCK moves. The readout shows the division and its
+  milliseconds (a whole note at 120 BPM is 2 s, which the 2.1 s delay buffer clamps
+  to 1.995 s).
 - CLOCK selects 2–64 kHz steps, changing pitch, timing, bandwidth and loop
   capacity together. **SMOOTH** makes the clock continuous. The fixed 64,000
   sample history holds approximately 1–32 seconds depending on clock rate.
@@ -391,13 +399,17 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   at `1` the window is the whole take, reaching the very beginning of a 30 s
   capture; the travel is linear in the knob (each quarter turn moves the start a
   quarter of the way in), which is what makes a long take usable rather than a
-  long wait on the last few seconds. END then sets how much of that window sounds
-  before it wraps: it only ever moves the loop's *end*. **START** says where that
-  window sits inside the capture, which is what ENV and STRETCH were missing —
-  with END alone you could only ever hear the front of a take. It reads `THE
-  OLDEST` / `THE NEWEST` at zero and a percentage of the room LENGTH and END
-  leave after that; in TAPE, which plays the newest audio, turning it *reaches
-  back*. Moving it is **not** a jump: the read head crossfades from where the loop
+  long wait on the last few seconds. **END** is an end marker: it says where the
+  window stops playing, and dragging it moves the end marker and nothing else —
+  the window grows or shrinks from the right while START stays where you put it.
+  **START** says where that window begins inside the capture, which is what ENV and
+  STRETCH were missing — with END alone you could only ever hear the front of a
+  take. It is measured against the take rather than against the room END leaves,
+  so the two markers do not drag each other around; START only gives ground when
+  the window would otherwise run past the end of the take (and a window that fills
+  the take cannot move at all, because there is nowhere to slide to). It reads `THE
+  OLDEST` / `THE NEWEST` at zero and a percentage after that; in TAPE, which plays
+  the newest audio, turning it *reaches back*. Moving it is **not** a jump: the read head crossfades from where the loop
   was playing to where it now begins over 25 ms, weighted by a raised cosine, and
   a knob still being dragged simply starts the next fade when the last one lands.
   A test sweeps the whole travel while the loop plays and checks the worst
@@ -412,8 +424,10 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   knob was nearly at LOOP. The duck is gone; both cores agree bit for bit
   (`tests/parity/scenarios/balance.txt`) and the level is pinned by tests in both
   implementations.
-- **The little switches** lost three of their six. What is left is TRAILS, SMOOTH
-  and SYNC, with CLASSIC beside them in the browser. LATCH went because the FREEZE
+- **The little switches** lost four of their six. What is left is TRAILS and
+  SMOOTH, with CLASSIC beside them in the browser; SYNC left the panel in round 16
+  to sit beside the knob it governs, so it can disappear in the modes that have no
+  use for the beat. LATCH went because the FREEZE
   switch does the same job without having to hold anything (the one thing it does
   that nothing else now can: latching the loop's overdub hold, so a tap leaves you
   recording on top — that is a held gesture again). DRY KILL went because MIX at
@@ -434,7 +448,7 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   while the loop drops an octave or two, or the other way round. **CLASSIC**
   restores MK I manners: a noisy clock that hisses most at low settings, a loop
   that never sits still (wow and flutter), and a reverb that rings far longer.
-- **THE RAMPS** are the pedal's function generators, one per channel, and the
+- **MODULATION** (the pedal's ramps) is the pedal's function generators, one per channel, and the
   reason it is more than four effects. Each side has a destination — OFF, then
   TIME, MIX, LENGTH, MODIFY (that channel's own modify knob), CLOCK or BALANCE —
   and a generator writes into it, added on top of where the knob sits and rebuilt
@@ -450,7 +464,8 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   exactly the stops that exist. The rate is the RATE slider and the three switches sit in the same panel — on the pedal these
   are the dips, so the editor is the comfortable place to reach them. Hovering a
   cell in the editor writes what pressing it will do into the readout.
-- **TRAILS**, **SMOOTH**, **SYNC** and wet/loop balance are modelled. WIDTH, the
+- **TRAILS**, **SMOOTH**, the three tempo switches and wet/loop balance are
+  modelled. WIDTH, the
   hidden stereo control, is where the pedal's SPREAD lives: fully left is mono,
   the middle is the image as built, and only past the middle does the sides open.
   The exact stereo movement, filters, transient response, control curves, reverb

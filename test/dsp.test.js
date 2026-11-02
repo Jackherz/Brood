@@ -451,23 +451,50 @@ test('rampSync hands the rate to the tempo and free mode takes it back', () => {
   assert.ok(fast >= slow * 2, `tempo doubles the turns (${slow} -> ${fast})`);
 });
 
-test('the tempo dip stretches the ENV slice and the WEAVE reach', () => {
-  const shimmer = (loopMode, wetMode, sync) => {
+test('the wet SYNC and the ENV switch are separate', () => {
+  const play = (loopMode, wetMode, extra) => {
     const core = new MoodCore(FS);
-    for (const [k, v] of Object.entries({ loopMode, wetMode, sync, bpm: 120, clock: 1, time: 0.5, length: 0.5, mix: 0.6, modWet: 0.6, routing: 1 })) core.setParam(k, v);
-    // Feed real material: a silent loop cannot show a different window.
-    render(core, 0.2, (t) => 0.3 * Math.sin(2 * Math.PI * 330 * t));
+    for (const [k, v] of Object.entries({ loopMode, wetMode, bpm: 120, clock: 1, time: 0.5, length: 0.5, mix: 0.6, modWet: 0.6, routing: 1, ...extra })) core.setParam(k, v);
+    render(core, 1.2, tone(330, 5));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
     core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
-    const { L } = render(core, 2, (t) => 0.3 * Math.sin(2 * Math.PI * 330 * t));
-    return L;
+    return render(core, 2, tone(330, 5)).L;
   };
-  for (const [loopMode, wetMode] of [[0, 0], [1, 3]]) {
-    const free = shimmer(loopMode, wetMode, 0);
-    const synced = shimmer(loopMode, wetMode, 1);
-    let diff = 0;
-    for (let i = 0; i < free.length; i++) diff += Math.abs(free[i] - synced[i]);
-    assert.ok(diff > 1, `sync changes ${loopMode === 0 ? 'the ENV slice' : 'the WEAVE reach'}`);
+  const diff = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) diff; return a.reduce((acc, v, i) => acc + Math.abs(v - b[i]), 0); };
+  // ENV: its own switch changes the slice; the wet switch does not touch it.
+  const envFree = play(0, 0, {});
+  assert.ok(diff(envFree, play(0, 0, { envSync: 1 })) > 1, 'ENV SYNC does nothing');
+  assert.ok(diff(envFree, play(0, 0, { sync: 1 })) < 0.001, 'the wet SYNC leaked into ENV');
+  // WEAVE: the wet switch changes the reach; the ENV switch is irrelevant there.
+  const weaveFree = play(1, 3, {});
+  assert.ok(diff(weaveFree, play(1, 3, { sync: 1 })) > 1, 'the wet SYNC does nothing in WEAVE');
+  assert.ok(diff(weaveFree, play(1, 3, { envSync: 1 })) < 0.001, 'ENV SYNC leaked into WEAVE');
+});
+
+test('END moves the end marker, not the start marker', () => {
+  // Drive loopWindow directly: it is the mapping that decides where the window sits,
+  // and it is the thing that used to drag START along with END.
+  for (const loopMode of [0, 1, 2]) {
+    const core = new MoodCore(FS);
+    core.lsrc = 10 * FS;                     // a ten-second take, whole samples
+    core.setParam('loopMode', loopMode);
+    core.setParam('start', 0.15);
+    core.setParam('length', 0.5);
+    core.setParam('loopEnd', 0.7);
+    const wide = core.loopWindow();
+    core.setParam('loopEnd', 0.5);
+    const narrow = core.loopWindow();
+    assert.strictEqual(narrow.start, wide.start, `mode ${loopMode}: END moved START`);
+    assert.ok(narrow.W < wide.W, `mode ${loopMode}: END did not shorten the window`);
+    // START still reaches the far end at the top of its travel — the take's end for
+    // ENV and STRETCH, the take's beginning for TAPE, which plays from the tail.
+    core.setParam('start', 1);
+    const atTop = core.loopWindow();
+    const edge = loopMode === 1 ? atTop.start : atTop.start + atTop.W;
+    assert.ok(loopMode === 1 ? edge === 0 : Math.abs(edge - core.lsrc) <= 1, `mode ${loopMode}: START 1 stops short`);
+    // ...and cannot move a full-length window, because there is nowhere to slide to.
+    core.setParam('loopEnd', 1);
+    assert.strictEqual(core.loopWindow().start, 0, `mode ${loopMode}: a full window moved`);
   }
 });
 
@@ -551,9 +578,12 @@ test('START moves the loop window inside the take', () => {
     const end = core.state();
     assert.strictEqual(end.winLen, base.winLen, `${name}: START leaves the length alone`);
     assert.ok(Math.abs(end.winStart - room) <= 1, `${name}: START 1 slides the window to the end of the take`);
-    core.setParam('start', 0.5);
+    // START is measured against the take now, so a quarter of the way along is a
+    // quarter of the take — until it reaches the end marker, which is the ceiling.
+    core.setParam('start', 0.25);
     render(core, 0.1, () => 0);
-    assert.ok(Math.abs(core.state().winStart - Math.round(room / 2)) <= 1, `${name}: and stops anywhere between`);
+    const expected = Math.min(Math.round(0.25 * (core.lsrc - 64)), room);
+    assert.ok(Math.abs(core.state().winStart - expected) <= 1, `${name}: and stops anywhere between`);
   }
   // TAPE takes its window from the newest audio, so START reaches back from the tail.
   const tape = renderLoop(1, 0.72);

@@ -106,6 +106,13 @@ button:disabled { cursor: wait; opacity: .65; }
 .knob:active { cursor: grabbing; }
 .knob-caption { display: flex; justify-content: center; align-items: baseline; gap: 4px; font: 12px/1.1 'Terminal', monospace; letter-spacing: .02em; color: #77776f; min-height: 15px; }
 .knob-caption b { font: 14px/1 'Terminal', monospace; color: #181815; white-space: nowrap; }
+/* A knob's own switch: the one control that belongs to the block rather than to the
+   panel, drawn as a small plate under the readout. Only rendered for modes that
+   can use it, so it never sits there as a dead control. */
+.knob-sync { margin: 6px auto 0; padding: 3px 9px 2px; border: 1px solid #181815; background: #faf9f3; color: #66665e; font: 10px/1 'Terminal', monospace; letter-spacing: .08em; cursor: pointer; white-space: nowrap; }
+.knob-sync:hover { background: #f1eee4; color: #181815; }
+.knob-sync:focus-visible { outline: 2px solid #181815; outline-offset: 1px; }
+.knob-sync.on { background: #181815; color: #faf9f3; }
 .mode-selector { padding: 4px 0 9px; }
 .mode-selector + .knob-row { border-top: 1px solid #d8d6ca; }
 .micro-label { display: flex; justify-content: space-between; color: #77776f; font: 12px 'Terminal', monospace; letter-spacing: .06em; margin-bottom: 5px; }
@@ -180,7 +187,7 @@ input[type="range"]::-moz-range-track { height: 2px; background: #181815; }
 input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: var(--paper); border: 1.5px solid #181815; border-radius: 0; box-shadow: inset 0 0 0 3px #181815; }
 .notice { margin-top: 8px; border: 1px solid #b9b8ad; background: #faf9f3; padding: 5px 6px; font: 13px/1.05 'Terminal', monospace; }
 .dip-heading { margin-top: 12px; }
-.dips { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+.dips { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; }
 /* Each switch is a cell of a small table, as in the editor: hairline box, the
    switch inside it, the name under. Three floating things read as an accident. */
 .dip { display: flex; flex-direction: column; align-items: center; gap: 4px; background: #fbfaf5; border: 1px solid #b9b8ad; padding: 7px 2px 5px; font: 10px/1 'Terminal', monospace; color: #66665e; min-width: 0; text-align: center; white-space: normal; }

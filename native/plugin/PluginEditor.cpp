@@ -516,14 +516,16 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         addAndMakeVisible(sl);
     };
     loopSlider(memory, "memory", "Loop memory");
-    loopSlider(loopEnd, "loopEnd", "How much of the loop plays");
+    loopSlider(loopEnd, "loopEnd", "Where the loop stops playing");
     loopSlider(loopStart, "start", "Where the loop begins in the take");
     memoryAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "memory", memory);
     endAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopEnd", loopEnd);
     startAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "start", loopStart);
     // Three switches, not six: DRY KILL was MIX at the top of its travel, LATCH
     // is what the FREEZE switch does, and SPREAD is now WIDTH above the middle.
-    const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"smooth", "Smooth"}, {"sync", "Sync"}};
+    // Two, not three: SYNC moved out of this panel and now sits beside the knob it
+    // governs, where it can disappear when the mode has no use for the beat.
+    const std::pair<const char*, const char*> dipDefs[] = {{"trails", "Trails"}, {"smooth", "Smooth"}};
     for (const auto& [id, label] : dipDefs) {
         Dip d { std::make_unique<juce::ToggleButton>(label), nullptr };
         const juce::String lab = label;
@@ -532,6 +534,17 @@ MoodEditor::MoodEditor(MoodProcessor& p) : AudioProcessorEditor(p), proc(p), loo
         d.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, id, *d.button);
         dips.push_back(std::move(d));
     }
+    auto makeSyncSwitch = [this](juce::ToggleButton& b, const char* id, const char* label,
+                                 std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>& att) {
+        b.setButtonText(label);
+        b.onClick = [this, b = &b, label = juce::String(label)] {
+            showReadout("SYNC", label.toLowerCase() + (b->getToggleState() ? " on" : " off"));
+        };
+        addChildComponent(b);                  // shown only in the modes that use it
+        att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, id, b);
+    };
+    makeSyncSwitch(wetSync, "sync", "SYNC", wetSyncAtt);
+    makeSyncSwitch(envSync, "envSync", "SYNC", envSyncAtt);
     auto rampChanged = [this](const char* label, const char* id) {
         return [this, label, id] {
             auto* prm = proc.apvts.getParameter(id);
@@ -663,6 +676,12 @@ void MoodEditor::resized() {
         knobDesign[i] = juce::Rectangle<int>(104, 104).withCentre({cx[i % 3], pedalArea.getY() + (row == 0 ? 172 : 394)});
         place(*knobs[static_cast<size_t>(i)].slider, knobDesign[i]);
     }
+    // The tempo switches sit in the gaps either side of MIX, level with the knobs
+    // they belong to: SYNC beside TIME, SYNC beside LENGTH. Neither has an extra row.
+    wetSyncDesign = { knobDesign[0].getRight() + 5, knobDesign[0].getCentreY() - 10, 52, 20 };
+    envSyncDesign = { knobDesign[2].getX() - 57, knobDesign[2].getCentreY() - 10, 52, 20 };
+    place(wetSync, wetSyncDesign);
+    place(envSync, envSyncDesign);
     const int ty = pedalArea.getY() + 282;
     wetModeDesign = {cx[0] - 48, ty - 44, 130, 88};   // four wet modes
     routingDesign = {cx[1] - 48, ty - 36, 130, 72};
@@ -784,10 +803,15 @@ void MoodEditor::rebuildHoverHelp() {
     static const char* dipText[] = {
         "the tails keep falling after you switch the wet side off.",
         "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
-        "the delay stops being a length of time and becomes a division of the beat; in ENV the slice and in WEAVE the reach become divisions too. the modulation rate has its own SYNC in the panel below.",
     };
-    static const char* dipNames[] = {"TRAILS", "SMOOTH", "SYNC"};
-    for (size_t i = 0; i < dips.size() && i < 3; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
+    static const char* dipNames[] = {"TRAILS", "SMOOTH"};
+    for (size_t i = 0; i < dips.size() && i < 2; ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
+    // These two are only in the table while their mode is on, so help never explains
+    // a control that is not on the panel.
+    if (wetSync.isVisible())
+        add(wetSyncDesign.expanded(4), "SYNC / WET", "TIME stops being a length of time and becomes a division of the beat: in TAPE the echo lands on the grid, in WEAVE how far back the threads reach does. the same switch does nothing in REVERB or SLIP, so it is not drawn there.");
+    if (envSync.isVisible())
+        add(envSyncDesign.expanded(4), "SYNC / ENV", "the envelope slices by a division of the beat instead of a free length, so the loop stutters in time rather than drifting. ENV only: the wet side's switch does not reach it.");
 
     add(rampWetDesign, "MODULATION / WET", "click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. off leaves the knob alone, and a filled display means the tide is running.");
     add(rampLoopDesign, "MODULATION / LOOP", "click anywhere to step the second tide through the same list; its modify means this channel's own. off leaves the knob alone, and a filled display means the tide is running.");
@@ -804,7 +828,7 @@ void MoodEditor::rebuildHoverHelp() {
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left waits about a second, like the pedal.");
     add(loopStartDesign.expanded(0, 2), "START", "where the loop begins inside what was recorded. in ENV and STRETCH it slides towards the present; in TAPE it reaches back. it crossfades as it moves, so it will not click.");
-    add(loopEndDesign.expanded(0, 2), "END", "how much of the loop plays before it wraps.");
+    add(loopEndDesign.expanded(0, 2), "END", "where the loop stops playing. it moves the end marker and nothing else, so the window grows or shrinks from the right while START stays where you put it.");
     add(balanceDesign.expanded(0, 2), "WET / LOOP", "a crossfade between the two worlds. hard right is the loop on its own.");
 
     add(sourceBoxDesign, "SOURCE", "what the pedal listens to: the track, a phrase made here, or a file.");
@@ -1124,6 +1148,20 @@ void MoodEditor::timerCallback() {
     if (newLabel != hoverLabel || newText != hoverText) {
         hoverLabel = newLabel; hoverText = newText;
         repaintDesign(lcdArea);
+    }
+    // The tempo switches follow the mode selectors: TAPE and WEAVE for the wet side,
+    // ENV for the loop. Changing mode rebuilds the help table, because a switch that
+    // has left the panel must not still have an explanation.
+    {
+        const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
+        const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
+        if (wm != lastModeWet || lm != lastModeLoop) {
+            lastModeWet = wm; lastModeLoop = lm;
+            wetSync.setVisible(wm == 1 || wm == 3);
+            envSync.setVisible(lm == 0);
+            rebuildHoverHelp();
+            repaintDesign(pedalArea);
+        }
     }
     const double now = juce::Time::getMillisecondCounterHiRes();
     const bool wasBlink = blink;

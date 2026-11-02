@@ -67,6 +67,7 @@ MoodProcessor::MoodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("bounce", 1), "Dip: Bounce", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("sweep", 1), "Dip: Sweep", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("rampSync", 1), "Modulation follows the tempo", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV slice follows the tempo", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
           return layout;
@@ -112,8 +113,9 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         const double full = mood::kLoopSamples / hz;
         if (loopMode == 1) return "loop " + fmtTime(full * mood::expMap(v, 0.02, 1)) + " of " + fmtTime(full);
         if (loopMode == 0) {
-            // ENV slices to a length, so synced LENGTH is a division of the beat.
-            const auto* sy = apvts.getRawParameterValue("sync");
+            // ENV slices to a length, so a synced LENGTH is a division of the beat.
+            // ENV has its own switch: the wet side's SYNC does not reach it.
+            const auto* sy = apvts.getRawParameterValue("envSync");
             if (sy != nullptr && sy->load() > 0.5f)
                 return juce::String(mood::syncLabel(v)) + " slice · " + fmtTime(mood::syncSecondsRaw(hostBpm_.load(), v));
         }
@@ -138,7 +140,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         if (v <= 0.001f) return "pedal " + fmtTime(mood::kLoopSamples / hz);
         return "up to " + fmtTime(mood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
     }
-    if (id == "loopEnd") return v >= 0.999f ? "the whole loop" : "plays " + pct(v);
+    if (id == "loopEnd") return v >= 0.999f ? "to the end" : "plays to " + pct(v);
     if (id == "start") {
         // ENV and STRETCH play from the oldest audio, so START slides towards the
         // present; TAPE plays the newest, so START reaches back. Same knob, two
@@ -165,6 +167,7 @@ juce::String MoodProcessor::describe(const juce::String& id, float v) const {
         return fmtTime(1.0 / mood::rampHertz(v)) + " a turn";
     }
     if (id == "rampSync") return v > 0.5f ? "follows the tempo" : "free rate";
+    if (id == "envSync") return v > 0.5f ? "slice follows the tempo" : "free slice";
     if (id == "wetDiv" || id == "loopDiv") {
         const int div = mood::divMap(v);
         return div == 1 ? juce::String("1x clock") : juce::String(div) + "x slower";
@@ -246,6 +249,7 @@ void MoodProcessor::pullParams() {
     p.rampWave = param("rampWave");
     p.rampUni = param("rampUni") > 0.5f; p.bounce = param("bounce") > 0.5f; p.sweep = param("sweep") > 0.5f;
     p.rampSync = param("rampSync") > 0.5f;
+    p.envSync = param("envSync") > 0.5f;
     p.bpm = hostBpm_.load();
     coreRight_.p = p;
 }

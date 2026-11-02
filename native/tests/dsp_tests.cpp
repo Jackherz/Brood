@@ -192,6 +192,40 @@ int main() {
             CHECK(mood::rampDivIndex(v) == i, "span %d reads back", i);
         }
     }
+    {   // END moves the end marker and nothing else: START stays where it was put
+        for (int mode = 0; mode < 3; ++mode) {
+            mood::Core c; c.p.loopMode = mode; c.p.start = 0.15; c.p.memory = 0; c.p.clock = 1;
+            c.prepare(FS); tap(c, 0);
+            render(c, 1.2, tone(220, 5), [&](mood::Core& cc, long b) { if (b == blk(1.0)) tap(cc, 1); });
+            c.p.loopEnd = 0.7;
+            const int startFull = c.state().winStart, lenFull = c.state().winLen;
+            c.p.loopEnd = 0.5;
+            const int startTrim = c.state().winStart, lenTrim = c.state().winLen;
+            CHECK(startTrim == startFull, "mode %d: END moved START (%d -> %d)", mode, startFull, startTrim);
+            CHECK(lenTrim <= lenFull, "mode %d: END did not shorten the window", mode);
+            // ... and END still does something: a shorter window is a shorter window.
+            CHECK(lenTrim < lenFull, "mode %d: END left the window alone", mode);
+        }
+    }
+    {   // ENV has its own switch: the wet side's SYNC does not reach the slice
+        auto hold = [&](bool envSync, bool sync) {
+            mood::Core c; c.p.loopMode = 0; c.p.wetMode = 0; c.p.mix = 1; c.p.modWet = 0.65;
+            c.p.length = 0.5; c.p.envSync = envSync; c.p.sync = sync; c.p.bpm = 120;
+            c.p.memory = 0; c.p.clock = 1; c.p.routing = 1;
+            c.prepare(FS); tap(c, 0);
+            render(c, 1.2, tone(220, 5), [&](mood::Core& cc, long b) { if (b == blk(1.0)) tap(cc, 1); });
+            return render(c, 1.5, [](double) { return 0.0; });
+        };
+        const auto free = hold(false, false), synced = hold(true, false), wetOnly = hold(false, true);
+        double d1 = 0, d2 = 0;
+        for (size_t i = 0; i < free.L.size(); ++i) {
+            d1 += std::fabs(free.L[i] - synced.L[i]);
+            d2 += std::fabs(free.L[i] - wetOnly.L[i]);
+        }
+        CHECK(d1 > 1.0, "ENV SYNC did nothing (%.3f)", d1);
+        CHECK(d2 < 1e-6, "the wet SYNC leaked into ENV (%.6f)", d2);
+    }
+
     {   // balance fully to LOOP always returns the loop, whatever the routing
         for (int r = 0; r < 3; ++r) {
             mood::Core c; c.p.routing = r; c.p.balance = 1; c.p.mix = 1; c.p.loopMode = 1;

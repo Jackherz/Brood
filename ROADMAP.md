@@ -2,16 +2,16 @@
 
 What the emulation still owes the pedal, in the order it is meant to land.
 
-## Next: the ramps that keep time
+## Next: what the list still owes
 
-The ramp engine is in (see Done, below). What it still owes the pedal is the part
-that makes it musical rather than merely moving:
+Tempo sync is done (rounds 15 and 16): the wet side, ENV and the modulation rate
+each follow the host clock, with a switch of their own in the place the block
+lives. What is left of the pedal's own list:
 
-- **SYNC assignment** — the generator's phase follows the host tempo instead of a
-  free rate, so a slow ramp lands on the bar rather than wherever it happens to be.
-  The hardware does this from the hidden menu; CC 52 stops a running ramp.
 - **DIRECT MICRO-LOOP blend** — how much of the *unprocessed* loop reaches the
   output, mixed in beside the wet side.
+- **CC 52** stops a running ramp; the MIDI map currently reaches every other
+  ramp control.
 
 ## Parked: the pedal series (packaging decided 2026-11-01)
 
@@ -67,6 +67,24 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 16: **END is an end marker, and the tempo switches live with their knobs.**
+  END used to set a window *length* and leave START to divide whatever room was
+  left, so dragging END hauled the start marker along with it. START is now
+  measured against the take and clamped by the end marker, so END moves the end
+  marker and nothing else — and the window's length no longer changes under a
+  moving START, which is what kept the move click-free. Sync split three ways:
+  SYNC beside TIME (TAPE and WEAVE only), ENV SYNC beside LENGTH (ENV only), and
+  the modulation panel's own SYNC. A switch that would do nothing in the current
+  mode is not drawn at all — REVERB and SLIP have no beat to follow.
+- Round 15: **the tempo reaches ENV, WEAVE and the modulation rate, and RAMPS
+  becomes MODULATION.** A synced ENV slices by division of the beat, a synced
+  WEAVE reaches back by one, and a synced modulation rate is a span from eight
+  bars to a sixteenth rather than a free frequency — eight independent stops, both
+  cores, two new parity scenarios. Two new switches: one for ENV/WEAVE (later
+  split in round 16) and one in the modulation panel. The panel, its guide entry
+  and its readouts stopped calling itself THE RAMPS, since a function generator is
+  what it is. Also: the selling decision written down (sell it open source), and
+  the build now prints the commit it came from.
 - Round 14: **the ramp cells step properly, and STILL is OFF.** The destination
   cells handed their option index straight to a 0..1 parameter, which clamped
   every stop above the first onto 1 — so WET and LOOP only ever offered OFF and

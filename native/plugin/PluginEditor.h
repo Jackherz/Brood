@@ -114,6 +114,12 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rampRateAtt;
     struct RampSwitch { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::array<RampSwitch, 4> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC
+    // Tempo switches that belong to one knob each, and only appear in the modes that
+    // can use the beat: TAPE and WEAVE for the wet side, ENV for the loop.
+    juce::ToggleButton wetSync, envSync;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt;
+    juce::Rectangle<int> wetSyncDesign, envSyncDesign;
+    int lastModeWet = -1, lastModeLoop = -1;
     // Under the hood: the five options and the CLASSIC switch the pedal hides
     // behind both footswitches. They live along the bottom of the window, so
     // there is no second page to dive into.

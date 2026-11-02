@@ -379,6 +379,7 @@ class MoodCore {
       loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
       rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0,
+      envSync: 0,
     };
     // host-rate smoothed knobs
     this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5,
@@ -536,12 +537,19 @@ class MoodCore {
     const trim = clamp(this.p.loopEnd, 0.02, 1);
     const where = clamp(this.p.start, 0, 1);
     if (this.p.loopMode !== 1) {
-      const W = Math.max(64, Math.floor(len * trim));
+      const W0 = Math.max(64, Math.floor(len * trim));
       // ENV and STRETCH: END says how much of the take plays, START says where
       // that window sits in it. Zero is the oldest audio, which is where these
       // two modes have always played from, so nothing changes at the default.
-      const room = Math.max(0, len - W);
-      return { W, start: Math.round(where * room) };
+      //
+      // START is measured against the take, not against the room END happens to
+      // leave, so dragging END moves the end marker and nothing else. It gives ground
+      // only when the window would otherwise run past the end of the take — and it
+      // cannot move at all while the window fills the take, since there is nowhere to
+      // slide to.
+      const travel = Math.max(0, Math.round(where * Math.max(0, len - 64)));
+      const start = Math.min(travel, Math.max(0, len - W0));
+      return { W: W0, start };
     }
     // Linear in the fraction of the capture: at 1 the window is everything, so
     // the start of a long recording is actually reachable. The old exponential
@@ -733,7 +741,7 @@ class MoodCore {
       if (this.envMix > 1e-4) {
         // ENV slices to a length, so synced LENGTH is a division of the beat,
         // converted into core ticks the same way the delay's is.
-        const S = this.p.sync
+        const S = this.p.envSync
           ? Math.min(W, Math.max(64, syncSecondsRaw(this.p.bpm, this.e.length) * this.clockRatio * fs))
           : Math.min(expMap(this.e.length, 0.01 * fs, 1.0 * fs), W);
         const sl0 = this.slice;

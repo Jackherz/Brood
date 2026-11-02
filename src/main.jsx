@@ -47,7 +47,7 @@ const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, smooth: 0, balance: 0.5,
-  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0,
+  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0, envSync: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
   rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0,
 };
@@ -108,7 +108,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'envSync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -126,7 +126,7 @@ function describe(id, p) {
     return timeText(expMap(v, p.wetMode === 1 ? 0.02 : 0.05, p.wetMode === 1 ? 2 : 1.5) / ratio);
   }
   if (id === 'length' && p.loopMode === 1) return timeText((64 / rate) * expMap(v, 0.02, 1));
-  if (id === 'length' && p.loopMode === 0 && p.sync) return `${syncLabel(v)} SLICE · ${timeText(syncSecondsRaw(p.bpm, v))}`;
+  if (id === 'length' && p.loopMode === 0 && p.envSync) return `${syncLabel(v)} SLICE · ${timeText(syncSecondsRaw(p.bpm, v))}`;
   if (id === 'length') return timeText(expMap(v, 0.01, p.loopMode === 0 ? 1 : 0.5) / ratio);
   if (id === 'modWet' && p.wetMode === 3) return v < 0.34 ? 'LONG CLOTH' : v < 0.7 ? 'MIXED' : 'STITCHES';
   if (id === 'modWet' && p.wetMode === 2) {
@@ -139,7 +139,7 @@ function describe(id, p) {
   }
   if (id === 'modLoop' && p.loopMode === 2 && Math.abs(v - 0.5) < 0.03) return 'FROZEN';
   if (id === 'memory') return v <= 0.001 ? `PEDAL · ${timeText(64 / rate)}` : `UP TO ${timeText(expMap(v, 1, 30))}`;
-  if (id === 'loopEnd') return v >= 0.999 ? 'THE WHOLE LOOP' : `PLAYS ${percent(v)}`;
+  if (id === 'loopEnd') return v >= 0.999 ? 'TO THE END' : `PLAYS TO ${percent(v)}`;
   // ENV and STRETCH play from the oldest audio, so START moves towards the present;
   // TAPE plays the newest, so START reaches back. Same knob, two honest readouts.
   if (id === 'start') {
@@ -158,6 +158,7 @@ function describe(id, p) {
   if (id === 'rampWave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES)];
   if (id === 'rampSpeed') return p.rampSync ? `${rampDivLabel(v)} · ${timeText(rampCycleSeconds(p.bpm, v))} A TURN` : rampHint(v);
   if (id === 'rampUni' || id === 'bounce' || id === 'sweep' || id === 'rampSync') return v ? 'ON' : 'OFF';
+  if (id === 'envSync') return v ? 'TEMPO' : 'FREE';
   if (id === 'freeze') return v ? 'HELD, RINGING' : 'MOVING';
   return percent(v);
 }
@@ -178,7 +179,10 @@ function TinyArrow({ direction = 'right' }) {
   return <span aria-hidden="true" className="tiny-arrow">{direction === 'left' ? '◀' : '▶'}</span>;
 }
 
-function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false }) {
+// `toggle` is the one switch that belongs to a knob rather than to the panel: the
+// tempo switch for a block that can follow the beat. It is rendered only when the
+// mode in question actually uses it, so it never appears as a dead control.
+function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, toggle }) {
   const element = useRef(null);
   const drag = useRef(null);
   const valueRef = useRef(value);
@@ -247,6 +251,9 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false }
     </div>
     <p className="knob-whisper">{sub}</p>
     <div className="knob-caption"><b>{describe(id, params)}</b></div>
+    {toggle && <button type="button" className={`knob-sync ${params[toggle.id] ? 'on' : ''}`} role="switch"
+      aria-checked={!!params[toggle.id]} aria-label={toggle.label}
+      onClick={() => onChange(toggle.id, params[toggle.id] ? 0 : 1)}>{toggle.label}</button>}
   </div>;
 }
 
@@ -364,7 +371,7 @@ function TrimStrip({ params, onChange, help }) {
   const controls = [
     ['memory', 'MEMORY', memoryText(params.memory), 'how much of the recent past the looper may keep'],
     ['start', 'START', describe('start', params), 'where the loop begins inside what was recorded. in ENV and STRETCH it slides towards the present; in TAPE it reaches back. it crossfades as it moves, so it will not click.'],
-    ['loopEnd', 'END', describe('loopEnd', params), 'how much of the loop plays before it wraps'],
+    ['loopEnd', 'END', describe('loopEnd', params), 'where the loop stops playing. it moves the end marker and nothing else, so the window grows or shrinks from the right while START stays where you put it.'],
   ];
   return <div className="trim-strip" role="group" aria-label="Loop trim">
     <span className="trim-title">TRIM<br/>THE<br/>MOMENT</span>
@@ -591,7 +598,8 @@ function App() {
               <div className="column-title"><span className="pixel-icon">✳</span><div><strong>WET CHANNEL</strong><small>SPACE &amp; TIME</small></div><span className="column-no">A</span></div>
               <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)} help={help} hint="four ways of treating time: reverb, delay, slip, weave."/>
               <div className="knob-row">
-                <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}
+                  toggle={(params.wetMode === 1 || params.wetMode === 3) ? { id: 'sync', label: 'SYNC' } : null}/>
                 <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} dark/>
               </div>
               <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
@@ -609,7 +617,8 @@ function App() {
               <div className="column-title"><span className="pixel-icon">◉</span><div><strong>MICRO-LOOPER</strong><small>MEMORY &amp; MOTION</small></div><span className="column-no">B</span></div>
               <ModeSelector label="LOOP MODE" options={LOOP} value={params.loopMode} onChange={(v) => update('loopMode', v)} help={help} hint="three ways of holding a moment: envelope, tape, stretch."/>
               <div className="knob-row">
-                <Knob id="length" title="LENGTH" sub={WHISPERS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch}/>
+                <Knob id="length" title="LENGTH" sub={WHISPERS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch}
+                  toggle={params.loopMode === 0 ? { id: 'envSync', label: 'ENV SYNC' } : null}/>
                 <Knob id="modLoop" title="MODIFY" sub={WHISPERS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch}/>
               </div>
               <Footswitch kind="loop" active={loopActive} state={loopStatus} running={running} onGesture={gesture}/>
@@ -644,11 +653,10 @@ function App() {
             <div className="dips">
               {[['trails', 'TRAILS', 'the tails keep falling after you switch the wet side off.'],
               ['smooth', 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.'],
-              ['sync', 'SYNC', 'the delay stops being a length of time and becomes a division of the beat; in ENV the slice and in WEAVE the reach become divisions too. the modulation rate has its own SYNC in the panel below.'],
               ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
             </div>
-            <label className={`level-row tempo-row ${params.sync ? 'live' : ''}`}>
-              <span>TEMPO {params.sync ? '· SYNCED' : ''}</span>
+            <label className={`level-row tempo-row ${params.sync || params.envSync || params.rampSync ? 'live' : ''}`}>
+              <span>TEMPO {params.sync || params.envSync || params.rampSync ? '· SYNCED' : ''}</span>
               <input aria-label="Tempo in BPM" type="number" min="40" max="300" step="1" value={params.bpm}
                 onChange={(e) => update('bpm', clamp(Math.round(Number(e.target.value) || 120), 40, 300))}/>
               <b>BPM</b>
@@ -667,7 +675,7 @@ function App() {
     {guideOpen && <section className="guide layout-width" aria-label="Field guide">
       <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
       <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div>
-        <div><b>05 / KEEP THE BEAT</b><p>Switch SYNC on and the delay stops being a length of time and becomes a musical division — 1/32 to a whole note, triplets and dotted notes included. The plugin follows your DAW's tempo automatically; here you set it yourself. The knob's readout shows the division and the milliseconds it lands on.</p></div></div>
+        <div><b>05 / KEEP THE BEAT</b><p>The SYNC switch beside TIME makes the delay a musical division — 1/32 to a whole note, triplets and dotted notes included — instead of a length of time, and does the same for WEAVE's reach. It only appears in the modes that can use it: REVERB and SLIP ignore the beat, so the switch is not there at all. ENV has its own ENV SYNC beside LENGTH, and the modulation panel has a third. The plugin follows your DAW's tempo automatically; here you set it yourself, and the readout shows the division and what it lands on.</p></div></div>
       <div className="guide-whispers">
         <b>WHAT AM I TURNING?</b>
         <p className="guide-whispers-note">Every knob whispers rather than explains. These are the whispers for the modes you have selected; the readout beside each knob gives the exact value.</p>

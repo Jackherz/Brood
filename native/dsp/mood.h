@@ -395,6 +395,7 @@ struct Params {
     double rampWet = 0, rampLoop = 0;                // RAMPS destination per channel
     double rampSpeed = 0.45, rampWave = 0;           // rate and shape
     bool rampUni = false, bounce = false, sweep = false;
+    bool envSync = false;                           // ENV slice follows the tempo
     bool rampSync = false;                          // modulation rate follows the tempo
 };
 
@@ -779,12 +780,19 @@ private:
         const double trim = clampd(p.loopEnd, 0.02, 1);
         const double where = clampd(p.start, 0, 1);
         if (p.loopMode != 1) {
-            const int W = std::max(64, static_cast<int>(std::floor(len * trim)));
+            const int W0 = std::max(64, static_cast<int>(std::floor(len * trim)));
             // ENV and STRETCH: END says how much of the take plays, START says where
             // that window sits in it. Zero is the oldest audio, which is where these
             // two modes have always played from, so nothing changes at the default.
-            const int room = std::max(0, len - W);
-            return {W, static_cast<int>(std::lround(where * room))};
+            //
+            // START is measured against the take, not against the room END happens to
+            // leave, so dragging END moves the end marker and nothing else. It gives
+            // ground only when the window would otherwise run past the end of the
+            // take — and it cannot move at all while the window fills the take, since
+            // there is nowhere to slide to.
+            const int travel = std::max(0, static_cast<int>(std::lround(where * std::max(0, len - 64))));
+            const int start = std::min(travel, std::max(0, len - W0));
+            return {W0, start};
         }
         // Linear in the fraction of the capture, so at 1 the window is everything
         // and the start of a long recording is actually reachable; the exponential
@@ -890,7 +898,7 @@ private:
             if (envMix > 1e-4) {
                 // ENV slices to a length, so synced LENGTH is a division of the beat,
                 // converted into core ticks the same way the delay's is.
-                const double S = p.sync
+                const double S = p.envSync
                     ? std::min(Wd, std::max(64.0, syncSecondsRaw(p.bpm, e.length) * clockRatio * fs))
                     : std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
                 if (slicePh >= S) slicePh -= S;
