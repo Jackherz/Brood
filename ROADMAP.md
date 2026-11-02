@@ -13,6 +13,36 @@ lives. What is left of the pedal's own list:
 - **CC 52** stops a running ramp; the MIDI map currently reaches every other
   ramp control.
 
+## Ideas: smoother to use, better to hear (noted 2026-11-03)
+
+Not scheduled; written down after round 17 so they are not lost.
+
+**Using it**
+
+- **Values on the controls.** The knobs and the modulation rate show their value
+  only in the readout. A small figure on the control while it is dragged would
+  save looking back and forth.
+- **A waveform you can grab.** Drag START and END on the loop display itself
+  instead of on two sliders under it.
+- **User patches in the plug-in.** The browser can save one; the plug-in leans on
+  the DAW's presets. A few save slots beside the factory five would cover it.
+- **The browser panel to the same tiers.** Round 17 renamed and fixed the browser
+  version but did not move its layout to the pedal / side column / hood order.
+
+**Sound**
+
+- **Cleaner low CLOCK.** Better resampling between the core clock and the host
+  rate (polyphase or windowed-sinc instead of linear, plus a steeper
+  anti-aliasing filter), with today's grit kept as a switchable character.
+- **Gentler limiting.** The output soft clip starts at 0.9 and can flatten loud
+  reverb and overdub peaks; a look-ahead limiter or a higher knee would keep them.
+- **Better loop and grain reads.** Cubic or Hermite interpolation instead of linear
+  for TAPE and STRETCH, cleaner when stretched or pitched down.
+- **Sample-rate-true reverb.** The delay lengths are scaled from 48 kHz, so the
+  room's character shifts slightly at 96 kHz.
+- **One engine for a mono track.** A mono source runs two identical engines;
+  running one would halve the CPU.
+
 ## Parked: the pedal series (packaging decided 2026-11-01)
 
 Direction is settled, work is not: this becomes a **series of separate plug-ins in

@@ -697,10 +697,11 @@ void BroodEditor::resized() {
         knobDesign[i] = juce::Rectangle<int>(104, 104).withCentre({cx[i % 3], pedalArea.getY() + (row == 0 ? 172 : 394)});
         place(*knobs[static_cast<size_t>(i)].slider, knobDesign[i]);
     }
-    // The tempo switches sit in the gaps either side of MIX, level with the knobs
-    // they belong to: SYNC beside TIME, SYNC beside LENGTH. Neither has an extra row.
+    // Each tempo switch sits just right of the knob it governs, level with its
+    // centre, so neither reads as belonging to MIX. The LENGTH one has only the
+    // margin before the pedal's edge, so it hugs the knob's rim and is narrower.
     wetSyncDesign = { knobDesign[0].getRight() + 5, knobDesign[0].getCentreY() - 10, 54, 20 };
-    envSyncDesign = { knobDesign[2].getX() - 59, knobDesign[2].getCentreY() - 10, 54, 20 };
+    envSyncDesign = { knobDesign[2].getCentreX() + 46, knobDesign[2].getCentreY() - 10, 46, 20 };
     place(wetSync, wetSyncDesign);
     place(envSync, envSyncDesign);
     const int ty = pedalArea.getY() + 282;
