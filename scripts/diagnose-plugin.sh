@@ -27,6 +27,30 @@ VST3_BUNDLE="$PLUGIN_NAME.vst3"
 AU_BUNDLE="$PLUGIN_NAME.component"
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
+# A command with a deadline, logging to a file: `auval` has no timeout of its own and
+# can wedge while the component registry re-scans. Polled rather than guarded by a
+# background `sleep` killer, which would keep this script's output open afterwards.
+DEADLINE_HIT=0
+deadline_run() {   # deadline_run SECONDS LOGFILE COMMAND...
+  local secs=$1 log=$2
+  shift 2
+  DEADLINE_HIT=0
+  "$@" >"$log" 2>&1 &
+  local child=$! ticks=0 limit=$((secs * 4))
+  while kill -0 "$child" 2>/dev/null; do
+    if [ "$ticks" -ge "$limit" ]; then
+      kill -9 "$child" 2>/dev/null || true
+      DEADLINE_HIT=1
+      break
+    fi
+    sleep 0.25
+    ticks=$((ticks + 1))
+  done
+  local rc=0
+  wait "$child" 2>/dev/null || rc=$?
+  return "$rc"
+}
+
 if [ "$(uname -s)" = Darwin ]; then
   mtime() { stat -f '%Sm' "$1" 2>/dev/null; }
   is_mac=1
@@ -217,23 +241,38 @@ fi
 section "Audio Unit validation (auval)"
 if command -v auval >/dev/null 2>&1; then
   # The type has to match what macOS filed the component as: a plug-in that takes
-  # MIDI input is a music effect (aumf), not a plain effect (aufx).
-  registered=$(auval -a 2>/dev/null | awk '$2 == "BrMd" { print $1, $2, $3; exit }' || true)
+  # MIDI input is a music effect (aumf), not a plain effect (aufx), and validating
+  # against the wrong one fails every time. Ask the registry, then try both.
+  deadline_run 20 /tmp/brood-au-list.log auval -a || true
+  registered=$(awk '$2 == "BrMd" { print $1, $2, $3; exit }' /tmp/brood-au-list.log 2>/dev/null || true)
+  candidates="${registered:-}
+aumf BrMd Broo
+aufx BrMd Broo"
   passed=0
-  for triple in ${registered:-} "aumf BrMd Broo" "aufx BrMd Broo"; do
-    set -- $triple
-    [ -n "${1:-}" ] || continue
-    out=$(auval -v "$1" "$2" "$3" 2>&1)
+  tried=""
+  out=""
+  while IFS=' ' read -r au_type au_sub au_man; do
+    if [ -z "$au_type" ] || [ -z "$au_sub" ] || [ -z "$au_man" ]; then continue; fi
+    case " $tried " in *" $au_type $au_sub $au_man "*) continue ;; esac
+    tried="$tried $au_type $au_sub $au_man"
+    deadline_run 90 /tmp/brood-auval.log auval -v "$au_type" "$au_sub" "$au_man" || true
+    out=$(cat /tmp/brood-auval.log 2>/dev/null || true)
     if printf '%s' "$out" | grep -q 'AU VALIDATION SUCCEEDED'; then
-      ok "auval: the plug-in loads and passes validation ($1 $2 $3)"
+      ok "auval: the plug-in loads and passes validation ($au_type $au_sub $au_man)"
       passed=1
       break
     fi
-  done
+  done <<< "$candidates"
   if [ "$passed" = 0 ]; then
-    bad "auval did not succeed, and the component is not in the AU registry"
-    printf '%s\n' "$out" | grep -iE 'error|fail|crash|cannot|not found' | head -8 | sed 's/^/        /'
-    info "if the AU folder has the bundle but auval cannot see it, run: killall -9 AudioComponentRegistrar"
+    if [ "$DEADLINE_HIT" = 1 ]; then
+      bad "auval did not answer within 90 s (the registry may be re-scanning)"
+      info "retry with: make doctor"
+    else
+      bad "auval did not succeed"
+      printf '%s\n' "$out" | grep -iE 'error|fail|crash|cannot|not found' | head -8 | sed 's/^/        /'
+      info "if the AU folder has the bundle but auval cannot see it, run: killall -9 AudioComponentRegistrar"
+    fi
+    info "the VST3 is a separate format and is unaffected by this check"
     issue
   fi
 else

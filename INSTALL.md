@@ -30,11 +30,22 @@ brew install cmake         # CMake 3.22 or newer
 
 In VS Code: **⌘⇧B** (the default build task, `Brood Mood: build + install`).
 
-Or from the terminal: `make install`.
+Or from the terminal, when you already have the source: `make install`.
+
+To fetch the newest source first — the one command to reach for after a new round —
+run `make update`. It pulls fast-forward, then builds and installs.
+
+Either way the build starts by printing the commit it came from
+(`==> Source 1c3fdc4`), so a stale checkout can never be mistaken for a bug: a
+`-dirty` suffix means local edits, and `unknown (not a git checkout)` means the
+folder was copied rather than cloned.
 
 That compiles the VST3, Audio Unit and standalone app, signs them ad-hoc (no
 Apple Developer account needed), copies them into
-`~/Library/Audio/Plug-Ins/` and runs `auval`.
+`~/Library/Audio/Plug-Ins/` and runs `auval` — with a deadline, and with the
+component type the plug-in actually registers as (it takes MIDI input, so macOS
+files it as a music effect, `aumf`). A failed or timed-out `auval` is reported but
+never fails the install, because the bundles are already in place by then.
 
 ## 4. Show it in Ableton Live
 
