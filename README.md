@@ -45,8 +45,8 @@ END are markers you drag on the waveform itself; see below.)
 The A and L keys trigger the wet and loop switches when focus is not in another
 control. **HOW TO PLAY** opens the in-app field guide.
 
-Five factory patches set the controls; **SAVE PATCH** stores one additional
-patch in local browser storage. A patch does not automatically engage either
+Five factory patches set the controls; **SAVE TO** stores what you hear in one of
+four user slots in local browser storage (the plugin keeps its four in a file). A patch does not automatically engage either
 channel. Captured audio is temporary and is not saved in a patch.
 
 ## Native plugin
@@ -425,10 +425,10 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   Texture/Rhythm switch, root-aligned pitch set and per-element levels are the
   reference; its microphone, trigger outputs and CV are not modelled.
 - **TEMPO SYNC** is three switches, each under the knob it governs and each drawn
-  only in the modes that can use it. `SYNC` beside TIME turns the delay's TIME knob
+  only in the modes that can use it. `SYNC` under TIME turns the delay's TIME knob
   into a musical division — 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/4D, 1/2,
   1/1 — and does the same for WEAVE's reach; it is absent in REVERB and SLIP,
-  which have nothing to put on the beat. `ENV SYNC` beside LENGTH makes the
+  which have nothing to put on the beat. `SYNC` under LENGTH (in ENV) makes the
   envelope's slice a division of the beat instead of a free length, and appears
   only in ENV. The modulation panel has its own SYNC for the rate (eight bars to a
   sixteenth). All three are independent: a synced delay can run against a free

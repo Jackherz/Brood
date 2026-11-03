@@ -588,6 +588,14 @@ class BroodCore {
     return { W: Math.max(64, Math.floor(W0 * trim)), start: Math.round((1 - where) * room) };
   }
 
+  // The widest the window can be: the whole take in ENV and STRETCH, LENGTH's
+  // share of it in TAPE. The waveform's markers measure END against this.
+  loopSpan() {
+    const len = Math.max(64, this.lsrc);
+    if (this.p.loopMode !== 1) return len;
+    return Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(this.e.length))));
+  }
+
   rand() { this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0; return this.rng / 4294967296; }
 
   // ── ramps ──
@@ -1010,7 +1018,7 @@ class BroodCore {
     const win = this.lsrc > 0 ? this.loopWindow() : { W: 0, start: 0 };
     return {
       wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
-      lsrc: this.lsrc, winStart: win.start, winLen: win.W, pos: this.loopPos,
+      lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
     };
   }

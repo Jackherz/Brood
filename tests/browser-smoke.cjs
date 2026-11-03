@@ -94,10 +94,21 @@ let browser;
  const box = await time.boundingBox(); await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2,box.y+box.height/2-25);await page.mouse.up();
  assert(+await time.getAttribute('aria-valuenow')>before+1);
  const saved=await time.getAttribute('aria-valuenow');
- await page.getByRole('button',{name:'[ SAVE PATCH ]'}).click();
+ await page.getByLabel('Save what you hear to a user slot').selectOption('0');
+ await page.getByText('Saved to user 1 on this device.').waitFor();
+ // The waveform's END marker: press near the right edge of a playing loop and drag
+ // it in, and END stops being the whole take.
+ const waveBox = await page.locator('.loop-wave canvas').boundingBox();
+ await page.waitForFunction(()=>document.querySelector('.loop-wave').classList.contains('live'));
+ await page.mouse.move(waveBox.x+waveBox.width-3, waveBox.y+waveBox.height/2); await page.mouse.down();
+ await page.mouse.move(waveBox.x+waveBox.width*0.6, waveBox.y+waveBox.height/2, {steps:5}); await page.mouse.up();
+ await page.waitForFunction(()=>/END PLAYS TO/.test(document.querySelector('.loop-wave').getAttribute('aria-label')));
+ await page.locator('.loop-wave canvas').dblclick();
+ await page.waitForFunction(()=>/END TO THE END/.test(document.querySelector('.loop-wave').getAttribute('aria-label')));
+ console.log('waveform END marker drag and reset passed');
  await page.reload();
  assert.equal(await time.getAttribute('aria-valuenow'),saved);
- assert(await page.locator('option').filter({hasText:'YOUR PATCH'}).count());
+ assert.equal(await page.locator('option').filter({hasText:'USER 1'}).first().isDisabled(), false);
  console.log('presets, save/reload, keyboard and drag passed');
  await page.setViewportSize({width:390,height:844});
  await page.getByRole('button',{name:/HOW TO PLAY/}).click();

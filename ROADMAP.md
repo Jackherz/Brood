@@ -15,11 +15,8 @@ lives. What is left of the pedal's own list:
 
 ## Ideas still open (noted 2026-11-03)
 
-Round 18 worked through most of the list written after round 17. What is left:
+Rounds 18 and 19 worked through most of the list written after round 17. What is left:
 
-- **The browser panel to the same tiers.** The browser version shares every DSP
-  change but still has its round-16 layout: START/END sliders, the sync switches
-  beside the knobs, one saved patch.
 - **A look-ahead limiter.** Round 18 widened the soft clip's knee; a true limiter
   with a millisecond or two of look-ahead would hold peaks without shaping them.
 - **Windowed-sinc or polyphase resampling.** Hermite in and out removed the
@@ -88,6 +85,13 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 19: **the browser panel catches up.** START and END are markers on the
+  browser's waveform too (drag, press to jump the nearer one, double-click for the
+  whole take, arrows from the keyboard); MEMORY is the one trim slider left; SYNC
+  sits straight under TIME and LENGTH; the knob ring is gone and the marks turn ink
+  on hover; four user slots replace the one saved patch (an old one becomes USER
+  1). The worklet now reports `winSpan`, so the markers do the same arithmetic as
+  the plugin's. The browser smoke test drags and resets END.
 - Round 18: **a waveform you drag, values where you look, and a cleaner clock.**
   START and END are markers on the waveform (the two trim sliders are gone); a
   touched knob shows its value in place of its whisper; the rate prints its period;

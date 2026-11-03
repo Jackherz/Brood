@@ -58,6 +58,7 @@ const PRESETS = [
   { name: 'LITTLE GHOST', subtitle: 'a strange harmony', params: { ...BASE, time: 0.45, mix: 0.54, modWet: 0.83, wetMode: 2, routing: 1, loopMode: 1, clock: 0.8 } },
   { name: 'MELT AWAY', subtitle: 'a slow-motion memory', params: { ...BASE, time: 0.67, mix: 0.58, length: 0.35, modWet: 0.75, clock: 0.7, modLoop: 0.57, wetMode: 0, routing: 2, loopMode: 2 } },
 ];
+const USER_SLOTS = 4;
 const KNOB_DEFAULTS = { time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66 };
 const WET = ['REVERB', 'DELAY', 'SLIP', 'WEAVE'];
 const LOOP = ['ENV', 'TAPE', 'STRETCH'];
@@ -180,8 +181,9 @@ function TinyArrow({ direction = 'right' }) {
 }
 
 // `toggle` is the one switch that belongs to a knob rather than to the panel: the
-// tempo switch for a block that can follow the beat. It is rendered only when the
-// mode in question actually uses it, so it never appears as a dead control.
+// tempo switch for a block that can follow the beat. It sits straight under its
+// knob and is rendered only when the mode in question actually uses it, so it
+// never appears as a dead control.
 function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, toggle }) {
   const element = useRef(null);
   const drag = useRef(null);
@@ -240,20 +242,23 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, 
       onKeyDown={key} onFocus={() => onTouch(id)} onDoubleClick={() => onChange(id, KNOB_DEFAULTS[id])}>
       <svg viewBox="0 0 120 120" aria-hidden="true">
         <g className="knob-ticks">{ticks}</g>
-        {/* A flat disc with a thin pointer, after the SR-01: one hairline ring,
-            one line standing up from the middle, and a hard offset shadow so it
-            still belongs to this panel. */}
+        {/* A flat disc with a thin pointer: no ring, just the five marks around
+            it, one line standing up from the middle, and a hard offset shadow so
+            it still belongs to this panel. */}
         <circle className="knob-shadow" cx="62.6" cy="63" r="41" />
         <circle className="knob-face" cx="60" cy="60" r="41" />
-        <circle className="knob-ring" cx="60" cy="60" r="46.5" />
         <g transform={`rotate(${-135 + value * 270} 60 60)`}><rect className="knob-pointer" x="58.6" y="26" width="2.8" height="34" /></g>
       </svg>
     </div>
+    {/* The slot is always there, so a knob with a switch and its neighbour
+        without one keep their whispers on the same line. */}
+    <div className="knob-sync-slot">
+      {toggle && <button type="button" className={`knob-sync ${params[toggle.id] ? 'on' : ''}`} role="switch"
+        aria-checked={!!params[toggle.id]} aria-label={toggle.name}
+        onClick={() => onChange(toggle.id, params[toggle.id] ? 0 : 1)}>SYNC</button>}
+    </div>
     <p className="knob-whisper">{sub}</p>
     <div className="knob-caption"><b>{describe(id, params)}</b></div>
-    {toggle && <button type="button" className={`knob-sync ${params[toggle.id] ? 'on' : ''}`} role="switch"
-      aria-checked={!!params[toggle.id]} aria-label={toggle.label}
-      onClick={() => onChange(toggle.id, params[toggle.id] ? 0 : 1)}>{toggle.label}</button>}
   </div>;
 }
 
@@ -333,57 +338,153 @@ function Scope({ engineRef, running }) {
   </div>;
 }
 
-function LoopWave({ wave, state }) {
+// The take, with START and END as markers you drag. Pressing anywhere picks up the
+// nearer marker; START hangs a tab from the top and END stands one on the bottom,
+// so the pair stays readable when they nearly meet. Double-click opens the whole take.
+const WAVE_W = 620, WAVE_H = 84;
+function loopMarkers(state) {
+  if (!state?.lsrc) return null;
+  const s = clamp(state.winStart, 0, state.lsrc);
+  return { s, e: clamp(s + state.winLen, s, state.lsrc), len: state.lsrc };
+}
+function nearestMarker(m, at) {
+  // Equal distance (a window squeezed to a sliver): right of the pair is END's
+  // side, left is START's, so both stay reachable.
+  const toStart = Math.abs(at - m.s), toEnd = Math.abs(at - m.e);
+  if (Math.abs(toStart - toEnd) < m.len / WAVE_W / 2) return at > m.e ? 1 : 0;
+  return toStart < toEnd ? 0 : 1;
+}
+
+function LoopWave({ wave, state, params, onChange, onTouch, help }) {
   const canvas = useRef(null);
+  const drag = useRef(null);
+  const [hot, setHot] = useState(-1);
+  const stateRef = useRef(state); stateRef.current = state;
+  const paramsRef = useRef(params); paramsRef.current = params;
   useEffect(() => {
     const c = canvas.current, g = c.getContext('2d'), w = c.width, h = c.height;
     g.clearRect(0, 0, w, h);
     g.fillStyle = '#f8f7f0'; g.fillRect(0, 0, w, h);
     g.strokeStyle = '#d5d4cc'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(0, h / 2 + .5); g.lineTo(w, h / 2 + .5); g.stroke();
-    if (wave?.peaks && state?.lsrc) {
+    const m = loopMarkers(state);
+    if (wave?.peaks && m) {
       const peaks = wave.peaks;
-      const start = clamp(state.winStart / state.lsrc), end = clamp((state.winStart + state.winLen) / state.lsrc);
-      // Trimmed-away audio stays visible but recedes; the two edges are drawn as markers.
+      const start = m.s / m.len, end = m.e / m.len;
+      // Trimmed-away audio stays visible but recedes.
       g.fillStyle = '#e6e5dd';
       g.fillRect(0, 0, start * w, h);
       g.fillRect(end * w, 0, w - end * w, h);
       for (let i = 0; i < peaks.length; i++) {
-        const x = Math.floor(i / peaks.length * w), amplitude = Math.max(1, Math.min(1, peaks[i] * 2) * (h / 2 - 3));
+        const x = Math.floor(i / peaks.length * w), amplitude = Math.max(1, Math.min(1, peaks[i] * 2) * (h / 2 - 14));
         const inside = i / peaks.length >= start && i / peaks.length < end;
         g.fillStyle = inside ? '#151512' : '#b3b3ab';
         g.fillRect(x, Math.floor(h / 2 - amplitude), 2, Math.max(2, Math.floor(amplitude * 2)));
       }
-      g.fillStyle = '#151512';
-      g.fillRect(start * w, 0, 2, h);
-      g.fillRect(Math.max(0, end * w - 2), 0, 2, h);
-      const playhead = clamp((state.winStart + state.pos) / state.lsrc) * w;
-      g.fillRect(playhead, 0, 2, h);
+      g.fillStyle = '#77776f';
+      g.fillRect(Math.round(clamp((state.winStart + state.pos) / m.len) * w), 12, 1, h - 24);
+      // The markers: a full-height line, and a labelled tab the hand can find.
+      const marker = (x, top, label, lit) => {
+        const px = Math.round(clamp(x, 0, 1) * w);
+        g.fillStyle = '#151512';
+        g.fillRect(Math.min(w - 2, Math.max(0, px - 1)), 0, 2, h);
+        g.font = '11px Terminal, monospace';
+        const tw = Math.ceil(g.measureText(label).width) + 8;
+        const tx = top ? Math.min(px, w - tw) : Math.max(0, px - tw);
+        const ty = top ? 0 : h - 13;
+        g.fillStyle = lit ? '#151512' : '#f8f7f0';
+        g.fillRect(tx, ty, tw, 13);
+        g.strokeStyle = '#151512'; g.strokeRect(tx + .5, ty + .5, tw - 1, 12);
+        g.fillStyle = lit ? '#f8f7f0' : '#151512';
+        g.textBaseline = 'middle';
+        g.fillText(label, tx + 4, ty + 7);
+      };
+      marker(start, true, 'START', hot === 0);
+      marker(end, false, 'END', hot === 1);
     } else {
       g.fillStyle = '#9a9a92';
       for (let x = 6; x < w; x += 12) g.fillRect(x, h / 2, 2, 2);
     }
-  }, [wave, state]);
-  return <canvas ref={canvas} width="620" height="46" aria-label={wave ? 'Captured loop waveform' : 'No loop captured yet'} />;
+  }, [wave, state, hot]);
+
+  const sampleAt = (event) => {
+    const r = canvas.current.getBoundingClientRect();
+    return clamp((event.clientX - r.left) / Math.max(1, r.width)) * Math.max(64, stateRef.current.lsrc);
+  };
+  // The inverse of loopWindow() in the worklet: a marker position in samples of the
+  // take becomes START and END. ENV and STRETCH measure both against the whole take;
+  // TAPE measures END against LENGTH's span and START backwards from the tail.
+  const moveMarker = (at) => {
+    const st = stateRef.current, m = loopMarkers(st);
+    if (!m || !drag.current) return;
+    const len = Math.max(64, st.lsrc), span = Math.max(64, st.winSpan || len);
+    const tape = paramsRef.current.loopMode === 1;
+    const minW = Math.max(64, 0.02 * span);          // END never closes the window
+    if (drag.current.which === 1) {
+      onChange('loopEnd', clamp(clamp(at - m.s, minW, span) / span));
+      onTouch('loopEnd');
+      return;
+    }
+    const anchor = drag.current.anchorEnd;           // START moves under a fixed end
+    const room = tape ? len - span : len - 64;
+    // START may not pass END, may not open the window wider than the span, and in
+    // TAPE cannot leave the room LENGTH allows.
+    const lo = Math.max(0, anchor - span);
+    let xs = clamp(at, lo, Math.max(lo, anchor - minW));
+    if (tape) xs = Math.min(xs, Math.max(0, room));
+    onChange('start', room <= 0 ? 0 : clamp(tape ? 1 - xs / room : xs / room));
+    onChange('loopEnd', clamp((anchor - xs) / span, 0.02, 1));
+    onTouch('start');
+  };
+  const down = (event) => {
+    const m = loopMarkers(stateRef.current);
+    if (event.button !== 0 || !m) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const at = sampleAt(event);
+    drag.current = { which: nearestMarker(m, at), anchorEnd: m.e };
+    setHot(drag.current.which);
+    moveMarker(at);
+  };
+  const move = (event) => {
+    if (drag.current) { moveMarker(sampleAt(event)); return; }
+    const m = loopMarkers(stateRef.current);
+    const h = m ? nearestMarker(m, sampleAt(event)) : -1;
+    if (h !== hot) setHot(h);
+  };
+  const up = () => { drag.current = null; };
+  const reset = () => { onChange('start', BASE.start); onChange('loopEnd', BASE.loopEnd); onTouch('loopEnd'); };
+  // From the keyboard: the arrows move END, with shift they move START; either way
+  // right is towards the present.
+  const key = (event) => {
+    const d = event.key === 'ArrowRight' ? 0.01 : event.key === 'ArrowLeft' ? -0.01 : 0;
+    if (!d) { if (event.key === 'Home') { event.preventDefault(); reset(); } return; }
+    event.preventDefault();
+    const p = paramsRef.current;
+    if (event.shiftKey) { onChange('start', clamp(p.start + (p.loopMode === 1 ? -d : d))); onTouch('start'); }
+    else { onChange('loopEnd', clamp(p.loopEnd + d, 0.02, 1)); onTouch('loopEnd'); }
+  };
+  const has = !!(wave && state?.lsrc);
+  return <div className={`loop-wave ${has ? 'live' : ''}`} tabIndex={has ? 0 : -1} role="group"
+    aria-label={has ? `Captured loop. START ${describe('start', params)}, END ${describe('loopEnd', params)}. Arrow keys move END, shift and arrow keys move START.` : 'No loop captured yet'}
+    onKeyDown={key} {...help('START / END', 'drag the markers, or press anywhere and the nearer one jumps to you. moving START keeps the end where it is. double-click to hear the whole take again.')}>
+    <canvas ref={canvas} width={WAVE_W} height={WAVE_H} className={hot >= 0 && has ? 'grab' : ''}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+      onPointerLeave={() => { if (!drag.current) setHot(-1); }} onDoubleClick={reset}/>
+    {!wave && <span>YOUR LITTLE MOMENTS LIVE HERE_</span>}
+  </div>;
 }
 
 function TrimStrip({ params, onChange, help }) {
-  const controls = [
-    ['memory', 'MEMORY', memoryText(params.memory), 'how much of the recent past the looper may keep'],
-    ['start', 'START', describe('start', params), 'where the loop begins inside what was recorded. in ENV and STRETCH it slides towards the present; in TAPE it reaches back. it crossfades as it moves, so it will not click.'],
-    ['loopEnd', 'END', describe('loopEnd', params), 'where the loop stops playing. it moves the end marker and nothing else, so the window grows or shrinks from the right while START stays where you put it.'],
-  ];
+  const hint = 'how much of the recent past the looper may keep';
   return <div className="trim-strip" role="group" aria-label="Loop trim">
-    <span className="trim-title">TRIM<br/>THE<br/>MOMENT</span>
-    <div className="trim-row">
-      {controls.map(([id, label, value, hint]) => (
-        <label key={id} className="trim-control" {...help(label, hint)}>
-          <span>{label}</span>
-          <input type="range" min="0" max="1" step="0.005" value={params[id]} aria-label={`${label}: ${hint}`} onChange={(event) => onChange(id, Number(event.target.value))}/>
-          <b>{value}</b>
-        </label>
-      ))}
-    </div>
+    <label className="trim-control" {...help('MEMORY', hint)}>
+      <span>MEMORY</span>
+      <input type="range" min="0" max="1" step="0.005" value={params.memory} aria-label={`MEMORY: ${hint}`} onChange={(event) => onChange('memory', Number(event.target.value))}/>
+      <b>{memoryText(params.memory)}</b>
+    </label>
+    <div className="trim-readout"><span>START</span><b>{describe('start', params)}</b></div>
+    <div className="trim-readout"><span>END</span><b>{describe('loopEnd', params)}</b></div>
+    <span className="trim-hint">DRAG THE MARKERS · DOUBLE-CLICK FOR ALL</span>
   </div>;
 }
 
@@ -470,7 +571,15 @@ function Dip({ label, checked, onClick, help }) {
 
 function App() {
   const [params, setParams] = useState(() => sanitize(safeRead('brood-params-v1')));
-  const [userPatch, setUserPatch] = useState(() => { const saved = safeRead('brood-user-patch-v1'); return saved ? sanitize(saved) : null; });
+  // Four user slots, as in the plugin. A patch saved by the old single slot
+  // becomes USER 1.
+  const [userPatches, setUserPatches] = useState(() => {
+    const saved = safeRead('brood-user-patches-v1');
+    const slots = Array.from({ length: USER_SLOTS }, (_, i) => (Array.isArray(saved) && saved[i] ? sanitize(saved[i]) : null));
+    const legacy = safeRead('brood-user-patch-v1');
+    if (!Array.isArray(saved) && legacy) slots[0] = sanitize(legacy);
+    return slots;
+  });
   const [preset, setPreset] = useState(0);
   const [source, setSource] = useState('demo');
   const [fileName, setFileName] = useState('');
@@ -522,14 +631,24 @@ function App() {
     window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', blur);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', blur); };
   }, [gesture]);
-  const patches = userPatch ? [...PRESETS, { name: 'YOUR PATCH', subtitle: 'saved on this device', params: userPatch }] : PRESETS;
+  const patches = [...PRESETS, ...userPatches.map((saved, i) => ({ name: `USER ${i + 1}`, subtitle: saved ? 'saved on this device' : 'empty: save into it', params: saved }))];
   const loadPatch = (index) => {
     const n = (index + patches.length) % patches.length;
+    if (!patches[n].params) return;
     setPreset(n); setParams(sanitize(patches[n].params)); setNotice(`Loaded ${patches[n].name.toLowerCase()}.`);
   };
-  const savePatch = () => {
-    const saved = sanitize(params);
-    setUserPatch(saved); safeWrite('brood-user-patch-v1', saved); setPreset(PRESETS.length); setNotice('Your patch is saved on this device.');
+  // The arrows step over empty slots rather than stopping on them.
+  const stepPatch = (d) => {
+    for (let k = 1; k <= patches.length; k++) {
+      const n = (preset + d * k + patches.length * k) % patches.length;
+      if (patches[n].params) { loadPatch(n); return; }
+    }
+  };
+  const savePatch = (slot) => {
+    const next = userPatches.slice();
+    next[slot] = sanitize(params);
+    setUserPatches(next); safeWrite('brood-user-patches-v1', next);
+    setPreset(PRESETS.length + slot); setNotice(`Saved to user ${slot + 1} on this device.`);
   };
   const startAudio = async () => {
     if (busy) return;
@@ -585,8 +704,8 @@ function App() {
         <div className="hero-art" aria-hidden="true"><Orbit/><div className="art-caption">SOUND GOES IN<br/>SOMETHING NEW COMES OUT</div></div>
         <div className="patch-box">
           <div className="patch-top"><span>✦ &nbsp;PATCH SELECTOR</span><span>{String(preset + 1).padStart(2, '0')} / {String(patches.length).padStart(2, '0')}</span></div>
-          <div className="patch-controls"><button aria-label="Previous patch" onClick={() => loadPatch(preset - 1)}><TinyArrow direction="left"/></button><label className="patch-select"><span className="sr-only">Choose patch</span><select value={Math.min(preset, patches.length - 1)} onChange={(event) => loadPatch(Number(event.target.value))}>{patches.map((patch, i) => <option value={i} key={patch.name}>{patch.name}</option>)}</select></label><button aria-label="Next patch" onClick={() => loadPatch(preset + 1)}><TinyArrow/></button></div>
-          <div className="patch-bottom"><span>{patches[preset]?.subtitle || 'a place to begin'}</span><button onClick={savePatch}>[ SAVE PATCH ]</button></div>
+          <div className="patch-controls"><button aria-label="Previous patch" onClick={() => stepPatch(-1)}><TinyArrow direction="left"/></button><label className="patch-select"><span className="sr-only">Choose patch</span><select value={Math.min(preset, patches.length - 1)} onChange={(event) => loadPatch(Number(event.target.value))}>{patches.map((patch, i) => <option value={i} key={patch.name} disabled={!patch.params}>{patch.name}{patch.params ? '' : ' · EMPTY'}</option>)}</select></label><button aria-label="Next patch" onClick={() => stepPatch(1)}><TinyArrow/></button></div>
+          <div className="patch-bottom"><span>{patches[preset]?.subtitle || 'a place to begin'}</span><label className="patch-save"><span>[ SAVE TO ]</span><select aria-label="Save what you hear to a user slot" value="" onChange={(event) => { if (event.target.value !== '') savePatch(Number(event.target.value)); }}><option value="">SAVE WHAT YOU HEAR TO…</option>{userPatches.map((saved, i) => <option key={i} value={i}>USER {i + 1}{saved ? ' (REPLACE)' : ''}</option>)}</select></label></div>
         </div>
       </header>
 
@@ -599,7 +718,7 @@ function App() {
               <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)} help={help} hint="four ways of treating time: reverb, delay, slip, weave."/>
               <div className="knob-row">
                 <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}
-                  toggle={(params.wetMode === 1 || params.wetMode === 3) ? { id: 'sync', label: 'SYNC' } : null}/>
+                  toggle={(params.wetMode === 1 || params.wetMode === 3) ? { id: 'sync', name: 'Sync wet to tempo' } : null}/>
                 <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} dark/>
               </div>
               <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
@@ -618,7 +737,7 @@ function App() {
               <ModeSelector label="LOOP MODE" options={LOOP} value={params.loopMode} onChange={(v) => update('loopMode', v)} help={help} hint="three ways of holding a moment: envelope, tape, stretch."/>
               <div className="knob-row">
                 <Knob id="length" title="LENGTH" sub={WHISPERS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch}
-                  toggle={params.loopMode === 0 ? { id: 'envSync', label: 'ENV SYNC' } : null}/>
+                  toggle={params.loopMode === 0 ? { id: 'envSync', name: 'Sync envelope to tempo' } : null}/>
                 <Knob id="modLoop" title="MODIFY" sub={WHISPERS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch}/>
               </div>
               <Footswitch kind="loop" active={loopActive} state={loopStatus} running={running} onGesture={gesture}/>
@@ -626,7 +745,7 @@ function App() {
           </div>
           <div className="capture-strip">
             <div className="capture-label"><span className="capture-icon">▧</span><div><strong>LOOP MEMORY</strong><small>{state?.lsrc ? `${timeText(state.winLen / state.clockHz)} CAPTURED` : 'ALWAYS LISTENING'}</small></div></div>
-            <div className="loop-wave"><LoopWave wave={wave} state={state}/>{!wave && <span>YOUR LITTLE MOMENTS LIVE HERE_</span>}</div>
+            <LoopWave wave={wave} state={state} params={params} onChange={update} onTouch={touch} help={help}/>
             <div className="capture-end"><Eyes/><span>LISTEN<br/>CLOSER.</span></div>
           </div>
           <TrimStrip params={params} onChange={update} help={help}/>
@@ -668,14 +787,14 @@ function App() {
           </div>
         </aside>
       </div>
-      <div className="window-footer"><span><span className="footer-led"/> {running ? 'AUDIO IS RUNNING' : 'READY WHEN YOU ARE'}</span><span className="footer-readout">{hover ? `${hover.label} : ${hover.text}` : `${touched === 'modWet' ? 'MODIFY / WET' : touched === 'modLoop' ? 'MODIFY / LOOP' : touched.toUpperCase()} : ${describe(touched, params)}`}</span><span>✳ &nbsp;MADE FOR GETTING LOST &nbsp; ✳</span></div>
+      <div className="window-footer"><span><span className="footer-led"/> {running ? 'AUDIO IS RUNNING' : 'READY WHEN YOU ARE'}</span><span className="footer-readout">{hover ? `${hover.label} : ${hover.text}` : `${touched === 'modWet' ? 'MODIFY / WET' : touched === 'modLoop' ? 'MODIFY / LOOP' : touched === 'loopEnd' ? 'END' : touched.toUpperCase()} : ${describe(touched, params)}`}</span><span>✳ &nbsp;MADE FOR GETTING LOST &nbsp; ✳</span></div>
     </main>
 
     <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL PEDAL-INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><div className="below-actions"><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div></div>
     {guideOpen && <section className="guide layout-width" aria-label="Field guide">
       <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
       <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div>
-        <div><b>05 / KEEP THE BEAT</b><p>The SYNC switch beside TIME makes the delay a musical division — 1/32 to a whole note, triplets and dotted notes included — instead of a length of time, and does the same for WEAVE's reach. It only appears in the modes that can use it: REVERB and SLIP ignore the beat, so the switch is not there at all. ENV has its own ENV SYNC beside LENGTH, and the modulation panel has a third. The plugin follows your DAW's tempo automatically; here you set it yourself, and the readout shows the division and what it lands on.</p></div></div>
+        <div><b>05 / KEEP THE BEAT</b><p>The SYNC switch under TIME makes the delay a musical division — 1/32 to a whole note, triplets and dotted notes included — instead of a length of time, and does the same for WEAVE's reach. It only appears in the modes that can use it: REVERB and SLIP ignore the beat, so the switch is not there at all. ENV has its own SYNC under LENGTH, and the modulation panel has a third. The plugin follows your DAW's tempo automatically; here you set it yourself, and the readout shows the division and what it lands on.</p></div></div>
       <div className="guide-whispers">
         <b>WHAT AM I TURNING?</b>
         <p className="guide-whispers-note">Every knob whispers rather than explains. These are the whispers for the modes you have selected; the readout beside each knob gives the exact value.</p>
@@ -688,7 +807,7 @@ function App() {
           <div><dt>CLOCK <span>/ shared</span></dt><dd>{SHARED_WHISPER.clock}</dd></div>
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
-          <div><dt>END <span>/ loop trim</span></dt><dd>How much of the captured loop plays before it wraps. Where the loop <em>starts</em> is the LENGTH knob's business — in TAPE the window is the most recent part of what you caught, so turning LENGTH moves the start and pulling END back only moves the end. Everything trimmed away still shows in the waveform, dimmed, so you can see what you let go of.</dd></div>
+          <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
           <div><dt>MODULATION <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over; <b>SYNC</b> makes a turn a division of the beat — eight bars down to a sixteenth — so the drift walks with the tempo instead of against it. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
