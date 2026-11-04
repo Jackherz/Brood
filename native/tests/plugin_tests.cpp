@@ -1,5 +1,7 @@
 // Headless integration tests for the JUCE processor (no DAW or GUI required).
 #include "plugin/PluginProcessor.h"
+#include "plugin/BroodPresets.h"
+#include "kit/Bench.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -123,10 +125,83 @@ int main() {
             CHECK(std::fabs(reopened.apvts.getRawParameterValue("mix")->load() - 0.25f) < 1e-4f, "legacy state loads");
         }
     }
+    // Presets: a factory sound, a saved one, a category, a favourite, and the old
+    // user slots becoming ordinary presets exactly once.
+    {
+        juce::TemporaryFile folderFile;
+        const auto folder = folderFile.getFile();
+        const auto slots = folder.getSiblingFile(folder.getFileName() + "-slots.xml");
+        slots.replaceWithText("<BROOD_PATCHES><PATCH slot=\"2\"><P id=\"mix\" v=\"0.125\"/></PATCH></BROOD_PATCHES>");
+        BroodProcessor sound;
+        BroodPresets presets(sound, folder, slots);
+        CHECK(!slots.existsAsFile() && slots.withFileExtension("old").existsAsFile(), "the old slots are set aside");
+        slots.withFileExtension("old").deleteFile();
+        auto find = [&](const juce::String& name) {
+            for (const auto& e : presets.list()) if (e.name == name) return std::optional<kit::PresetLibrary::Entry>(e);
+            return std::optional<kit::PresetLibrary::Entry>();
+        };
+        const auto migrated = find("User 2");
+        CHECK(migrated.has_value() && migrated->category == "USER", "a slot becomes a USER preset");
+        if (migrated) {
+            presets.load(*migrated);
+            CHECK(std::fabs(sound.apvts.getParameter("mix")->getValue() - 0.125f) < 1e-4f, "with its values");
+        }
+        const auto echo = find("Glass Echo");
+        CHECK(echo.has_value() && echo->factory && echo->category == "ECHOES", "the factory set is listed");
+        if (echo) {
+            presets.load(*echo);
+            CHECK(juce::roundToInt(sound.apvts.getRawParameterValue("wetMode")->load()) == 1, "a factory preset sets its mode");
+            CHECK(sound.presetName == "Glass Echo", "the name follows");
+        }
+        CHECK(presets.save("Mine", "LOOPS") && sound.presetName == "Mine", "save");
+        const auto mine = find("Mine");
+        CHECK(mine.has_value() && mine->category == "LOOPS", "saved with its category");
+        CHECK(presets.shows(*mine, "LOOPS", "min") && !presets.shows(*mine, "ECHOES", ""), "views and search");
+        presets.setFavourite("Mine", true);
+        CHECK(presets.shows(*mine, "FAVOURITES", ""), "favourites");
+        juce::MemoryBlock withName;
+        sound.getStateInformation(withName);
+        BroodProcessor back;
+        back.setStateInformation(withName.getData(), static_cast<int>(withName.getSize()));
+        CHECK(back.presetName == "Mine", "the name is kept with the project");
+        folder.deleteRecursively();
+    }
+    // The Bench: a caught window goes out as a WAV and a note, and comes back the same.
+    {
+        BroodProcessor catcher;
+        catcher.setPlayConfigDetails(2, 2, rate, size);
+        catcher.prepareToPlay(rate, size);
+        juce::AudioBuffer<float> empty;
+        double momentRate = 0;
+        CHECK(!catcher.copyMoment(empty, momentRate), "nothing caught, nothing to send");
+        juce::AudioBuffer<float> io(2, size);
+        juce::MidiBuffer none;
+        auto run = [&](int blocks) {
+            for (int i = 0; i < blocks; ++i) {
+                for (int c = 0; c < 2; ++c) for (int n = 0; n < size; ++n) io.setSample(c, n, 0.3f);
+                catcher.processBlock(io, none);
+            }
+        };
+        run(static_cast<int>(rate / size));
+        auto* sw = catcher.apvts.getParameter("loopSwitch");
+        sw->setValueNotifyingHost(1.f); run(2); sw->setValueNotifyingHost(0.f); run(4);
+        juce::AudioBuffer<float> moment;
+        CHECK(catcher.copyMoment(moment, momentRate) && moment.getNumChannels() == 2 && moment.getNumSamples() >= 1, "a caught loop can be sent");
+        juce::TemporaryFile folderFile;
+        const auto folder = folderFile.getFile();
+        CHECK(!kit::bench::latest(folder).has_value(), "an empty bench");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", folder), "send");
+        const auto got = kit::bench::latest(folder);
+        CHECK(got.has_value() && got->fromChip == "E-01" && got->audio.existsAsFile()
+              && std::fabs(got->seconds - moment.getNumSamples() / momentRate) < 1e-3, "the note matches the audio");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", folder), "send again");
+        CHECK(folder.findChildFiles(juce::File::findFiles, false, "moment-*.wav").size() == 1, "only the latest is kept");
+        folder.deleteRecursively();
+    }
     // Construct and paint the editor offscreen to catch UI/resource regressions.
     {
         std::unique_ptr<juce::AudioProcessorEditor> editor(restored.createEditor());
-        CHECK(editor && editor->getWidth() == 900 && editor->getHeight() == 712, "editor size");
+        CHECK(editor && editor->getWidth() == 1200 && editor->getHeight() == 820, "editor size");
         if (editor) {
             juce::Image image(juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
             juce::Graphics graphics(image);

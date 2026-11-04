@@ -83,6 +83,13 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 21: **one maker, two lines.** The look moved into a shared kit (`kit/`, the
+  same copy in each plug-in's repository until the range has a name and a repository):
+  masthead with a catalogue number, numbered panels, a readout, flat knobs, VT323 and
+  Press Start 2P. The panel is now 1200 x 820. The four user slots gave way to the
+  preset browser every plug-in shares, in the browser version too. The Bench passes a
+  caught moment to an instrument as a WAV in a shared folder, so no plug-in needs
+  another's process. The browser version keeps its own layout for now.
 - Round 20: **the ramps can hold.** CC 52 stops both generators where they are, and
   a HOLD switch in the modulation panel shows it and does the same, so a controller
   can never freeze the modulation invisibly. Both cores agree (`ramps.txt`). The

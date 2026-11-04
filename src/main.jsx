@@ -52,13 +52,13 @@ const BASE = {
   rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0,
 };
 const PRESETS = [
-  { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', params: BASE },
-  { name: 'SOFT FOCUS', subtitle: 'a warm, hazy reverb', params: { ...BASE, time: 0.73, mix: 0.56, modWet: 0.83, length: 0.65, clock: 0.8, wetMode: 0, routing: 1, loopMode: 2, modLoop: 0.62 } },
-  { name: 'GLASS ECHO', subtitle: 'a pocket of repeats', params: { ...BASE, time: 0.46, mix: 0.48, modWet: 0.70, wetMode: 1, routing: 0, loopMode: 1, clock: 0.9 } },
-  { name: 'LITTLE GHOST', subtitle: 'a strange harmony', params: { ...BASE, time: 0.45, mix: 0.54, modWet: 0.83, wetMode: 2, routing: 1, loopMode: 1, clock: 0.8 } },
-  { name: 'MELT AWAY', subtitle: 'a slow-motion memory', params: { ...BASE, time: 0.67, mix: 0.58, length: 0.35, modWet: 0.75, clock: 0.7, modLoop: 0.57, wetMode: 0, routing: 2, loopMode: 2 } },
+  { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', category: 'SPACES', params: BASE },
+  { name: 'SOFT FOCUS', subtitle: 'a warm, hazy reverb', category: 'SPACES', params: { ...BASE, time: 0.73, mix: 0.56, modWet: 0.83, length: 0.65, clock: 0.8, wetMode: 0, routing: 1, loopMode: 2, modLoop: 0.62 } },
+  { name: 'GLASS ECHO', subtitle: 'a pocket of repeats', category: 'ECHOES', params: { ...BASE, time: 0.46, mix: 0.48, modWet: 0.70, wetMode: 1, routing: 0, loopMode: 1, clock: 0.9 } },
+  { name: 'LITTLE GHOST', subtitle: 'a strange harmony', category: 'ECHOES', params: { ...BASE, time: 0.45, mix: 0.54, modWet: 0.83, wetMode: 2, routing: 1, loopMode: 1, clock: 0.8 } },
+  { name: 'MELT AWAY', subtitle: 'a slow-motion memory', category: 'LOOPS', params: { ...BASE, time: 0.67, mix: 0.58, length: 0.35, modWet: 0.75, clock: 0.7, modLoop: 0.57, wetMode: 0, routing: 2, loopMode: 2 } },
 ];
-const USER_SLOTS = 4;
+const PRESET_CATEGORIES = ['SPACES', 'ECHOES', 'LOOPS', 'USER'];
 const KNOB_DEFAULTS = { time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66 };
 const WET = ['REVERB', 'DELAY', 'SLIP', 'WEAVE'];
 const LOOP = ['ENV', 'TAPE', 'STRETCH'];
@@ -564,6 +564,42 @@ function RampPanel({ params, onChange, help }) {
   </div>;
 }
 
+// The browser the plug-ins share: search, categories, stars. Clicking a preset plays
+// it; KEEP keeps it, CANCEL puts back the sound there was.
+function PresetBrowser({ patches, current, favourites, onChoose, onStar, onKeep, onCancel, onSave, onDelete }) {
+  const [view, setView] = useState('ALL');
+  const [search, setSearch] = useState('');
+  const query = search.trim().toUpperCase();
+  const shown = patches.filter((patch) => (view === 'ALL' || (view === 'FAV' ? favourites.includes(patch.name) : patch.category === view))
+    && (!query || patch.name.toUpperCase().includes(query) || patch.category.includes(query)));
+  return <div className="preset-browser" role="dialog" aria-label="Presets" onKeyDown={(event) => {
+    if (event.key === 'Escape') onCancel();
+    if (event.key === 'Enter' && event.target.tagName !== 'BUTTON') onKeep();
+  }}>
+    <div className="preset-head"><span>{shown.length} {shown.length === 1 ? 'SOUND' : 'SOUNDS'}</span><span>CLICK TO HEAR / ENTER KEEPS / ESC GOES BACK</span></div>
+    <div className="preset-top">
+      <input autoFocus aria-label="Search presets" placeholder="SEARCH" value={search} onChange={(event) => setSearch(event.target.value)}/>
+      <div className="preset-views" role="group" aria-label="Preset category">
+        {['ALL', 'FAV', ...PRESET_CATEGORIES].map((name) => <button key={name} type="button" aria-pressed={view === name} className={view === name ? 'selected' : ''} onClick={() => setView(name)}>{name}</button>)}
+      </div>
+    </div>
+    <ul className="preset-list">
+      {shown.map((patch) => <li key={patch.name} className={patch.name === current ? 'current' : ''}>
+        <button type="button" className="preset-star" aria-pressed={favourites.includes(patch.name)} aria-label={`Favourite ${patch.name}`} onClick={() => onStar(patch.name)}>{favourites.includes(patch.name) ? '★' : '☆'}</button>
+        <button type="button" className="preset-name" onClick={() => onChoose(patch)}>{patch.name}</button>
+        <span>{patch.category}</span><span>{patch.factory ? 'FACTORY' : 'USER'}</span>
+        {!patch.factory && <button type="button" className="preset-remove" aria-label={`Delete ${patch.name}`} onClick={() => onDelete(patch.name)}>×</button>}
+      </li>)}
+    </ul>
+    <div className="preset-foot">
+      <button type="button" onClick={() => onSave(PRESET_CATEGORIES.includes(view) ? view : 'USER')}>SAVE AS...</button>
+      <span/>
+      <button type="button" onClick={onCancel}>CANCEL</button>
+      <button type="button" className="keep" onClick={onKeep}>KEEP</button>
+    </div>
+  </div>;
+}
+
 function Dip({ label, checked, onClick, help }) {
   return <button type="button" className="dip" role="switch" aria-checked={!!checked} aria-label={label} onClick={onClick} {...(help || {})}>
     <span className={`dip-track ${checked ? 'on' : ''}`}><span /></span><span>{label}</span>
@@ -572,15 +608,17 @@ function Dip({ label, checked, onClick, help }) {
 
 function App() {
   const [params, setParams] = useState(() => sanitize(safeRead('brood-params-v1')));
-  // Four user slots, as in the plugin. A patch saved by the old single slot
-  // becomes USER 1.
+  // User presets, named and filed. Anything saved in the old slots becomes a preset.
   const [userPatches, setUserPatches] = useState(() => {
-    const saved = safeRead('brood-user-patches-v1');
-    const slots = Array.from({ length: USER_SLOTS }, (_, i) => (Array.isArray(saved) && saved[i] ? sanitize(saved[i]) : null));
+    const saved = safeRead('brood-user-presets-v2');
+    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', params: sanitize(p.params) }));
+    const slots = safeRead('brood-user-patches-v1');
     const legacy = safeRead('brood-user-patch-v1');
-    if (!Array.isArray(saved) && legacy) slots[0] = sanitize(legacy);
-    return slots;
+    const old = Array.isArray(slots) ? slots : legacy ? [legacy] : [];
+    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', params: sanitize(p) } : null)).filter(Boolean);
   });
+  const [favourites, setFavourites] = useState(() => { const f = safeRead('brood-favourites-v1'); return Array.isArray(f) ? f : []; });
+  const [browsing, setBrowsing] = useState(null);   // the sound to go back to while the browser is open
   const [preset, setPreset] = useState(0);
   const [source, setSource] = useState('demo');
   const [fileName, setFileName] = useState('');
@@ -632,24 +670,41 @@ function App() {
     window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', blur);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', blur); };
   }, [gesture]);
-  const patches = [...PRESETS, ...userPatches.map((saved, i) => ({ name: `USER ${i + 1}`, subtitle: saved ? 'saved on this device' : 'empty: save into it', params: saved }))];
+  const patches = [...PRESETS.map((p) => ({ ...p, factory: true })), ...userPatches.map((p) => ({ ...p, subtitle: 'saved on this device' }))];
+  const currentPatch = patches[Math.min(preset, patches.length - 1)];
   const loadPatch = (index) => {
     const n = (index + patches.length) % patches.length;
-    if (!patches[n].params) return;
     setPreset(n); setParams(sanitize(patches[n].params)); setNotice(`Loaded ${patches[n].name.toLowerCase()}.`);
   };
-  // The arrows step over empty slots rather than stopping on them.
-  const stepPatch = (d) => {
-    for (let k = 1; k <= patches.length; k++) {
-      const n = (preset + d * k + patches.length * k) % patches.length;
-      if (patches[n].params) { loadPatch(n); return; }
-    }
+  const stepPatch = (d) => loadPatch(preset + d);
+  const openBrowser = () => setBrowsing({ params, preset });
+  const storeUser = (next) => { setUserPatches(next); safeWrite('brood-user-presets-v2', next); };
+  const savePatch = (category) => {
+    const name = (window.prompt('A name for this sound:', currentPatch.factory ? '' : currentPatch.name) || '').trim().toUpperCase();
+    if (!name) return;
+    if (PRESETS.some((p) => p.name === name)) { setNotice('That name belongs to a factory preset.'); return; }
+    const next = [...userPatches.filter((p) => p.name !== name), { name, category, params: sanitize(params) }]
+      .sort((a, b) => a.name.localeCompare(b.name));
+    storeUser(next);
+    setPreset(PRESETS.length + next.findIndex((p) => p.name === name));
+    setBrowsing((b) => (b ? { params, preset: PRESETS.length + next.findIndex((p) => p.name === name) } : b));
+    setNotice(`Saved ${name.toLowerCase()} on this device.`);
   };
-  const savePatch = (slot) => {
-    const next = userPatches.slice();
-    next[slot] = sanitize(params);
-    setUserPatches(next); safeWrite('brood-user-patches-v1', next);
-    setPreset(PRESETS.length + slot); setNotice(`Saved to user ${slot + 1} on this device.`);
+  const saveCurrent = () => {
+    if (currentPatch.factory) { savePatch('USER'); return; }
+    storeUser(userPatches.map((p) => (p.name === currentPatch.name ? { ...p, params: sanitize(params) } : p)));
+    setNotice(`Saved ${currentPatch.name.toLowerCase()} on this device.`);
+  };
+  const deletePatch = (name) => {
+    if (!window.confirm(`Delete ${name}?`)) return;
+    const at = PRESETS.length + userPatches.findIndex((p) => p.name === name);
+    storeUser(userPatches.filter((p) => p.name !== name));
+    if (preset === at) setPreset(0);
+    else if (preset > at) setPreset(preset - 1);
+  };
+  const starPatch = (name) => {
+    const next = favourites.includes(name) ? favourites.filter((n) => n !== name) : [...favourites, name];
+    setFavourites(next); safeWrite('brood-favourites-v1', next);
   };
   const startAudio = async () => {
     if (busy) return;
@@ -705,13 +760,17 @@ function App() {
         <div className="hero-art" aria-hidden="true"><Orbit/><div className="art-caption">SOUND GOES IN<br/>SOMETHING NEW COMES OUT</div></div>
         <div className="patch-box">
           <div className="patch-top"><span>✦ &nbsp;PATCH SELECTOR</span><span>{String(preset + 1).padStart(2, '0')} / {String(patches.length).padStart(2, '0')}</span></div>
-          <div className="patch-controls"><button aria-label="Previous patch" onClick={() => stepPatch(-1)}><TinyArrow direction="left"/></button><label className="patch-select"><span className="sr-only">Choose patch</span><select value={Math.min(preset, patches.length - 1)} onChange={(event) => loadPatch(Number(event.target.value))}>{patches.map((patch, i) => <option value={i} key={patch.name} disabled={!patch.params}>{patch.name}{patch.params ? '' : ' · EMPTY'}</option>)}</select></label><button aria-label="Next patch" onClick={() => stepPatch(1)}><TinyArrow/></button></div>
-          <div className="patch-bottom"><span>{patches[preset]?.subtitle || 'a place to begin'}</span><label className="patch-save"><span>[ SAVE TO ]</span><select aria-label="Save what you hear to a user slot" value="" onChange={(event) => { if (event.target.value !== '') savePatch(Number(event.target.value)); }}><option value="">SAVE WHAT YOU HEAR TO…</option>{userPatches.map((saved, i) => <option key={i} value={i}>USER {i + 1}{saved ? ' (REPLACE)' : ''}</option>)}</select></label></div>
+          <div className="patch-controls"><button aria-label="Previous patch" onClick={() => stepPatch(-1)}><TinyArrow direction="left"/></button><button className="patch-name" aria-label={`Browse presets: ${currentPatch.name}`} aria-expanded={!!browsing} onClick={() => (browsing ? setBrowsing(null) : openBrowser())}>{currentPatch.name}</button><button aria-label="Next patch" onClick={() => stepPatch(1)}><TinyArrow/></button></div>
+          <div className="patch-bottom"><span>{patches[preset]?.subtitle || 'a place to begin'}</span><button onClick={saveCurrent}>[ SAVE ]</button></div>
         </div>
       </header>
 
       <div className="body-grid">
         <section className="control-panel" aria-label="Effect controls">
+          {browsing && <PresetBrowser patches={patches} current={currentPatch.name} favourites={favourites} onStar={starPatch} onSave={savePatch} onDelete={deletePatch}
+            onChoose={(patch) => { setPreset(patches.indexOf(patches.find((p) => p.name === patch.name))); setParams(sanitize(patch.params)); }}
+            onKeep={() => setBrowsing(null)}
+            onCancel={() => { setParams(browsing.params); setPreset(browsing.preset); setBrowsing(null); }}/>}
           <div className="section-heading"><div><span className="heading-num">01</span><strong>THE CONTROL ROOM</strong><span className="heading-detail">/ MAKE A LITTLE MAGIC</span></div><span className="heading-end">DRAG KNOBS TO ADJUST ↕</span></div>
           <div className="control-columns">
             <div className="channel-column wet-column">

@@ -45,8 +45,9 @@ END are markers you drag on the waveform itself; see below.)
 The A and L keys trigger the wet and loop switches when focus is not in another
 control. **HOW TO PLAY** opens the in-app field guide.
 
-Five factory patches set the controls; **SAVE TO** stores what you hear in one of
-four user slots in local browser storage (the plugin keeps its four in a file). A patch does not automatically engage either
+Five factory presets set the controls. Click the name in the patch box for the preset
+browser: search, categories and stars, the same as the plug-in's. **SAVE** stores what
+you hear under a name in local browser storage (the plug-in keeps its presets as files). A patch does not automatically engage either
 channel. Captured audio is temporary and is not saved in a patch.
 
 ## Native plugin
@@ -259,8 +260,8 @@ explanation of its own makes the readout at the top of the side column explain i
 — the six knobs are left out on purpose, since they already whisper. The browser
 version says the same thing in its footer line.
 
-The editor is a 900 × 712 panel that can be resized from 675 × 534 up to
-1800 × 1280; the layout is drawn in design coordinates and scaled as a whole —
+The editor is a 1200 × 820 panel that can be resized from 840 × 574 up to
+2000 × 1367; the layout is drawn in design coordinates and scaled as a whole —
 the controls included, so the text inside a field or a cell grows with the window
 instead of staying at its pixel size — and labels cannot collide when the window
 changes. Everything is on that one page, because a second page is a menu, and the
@@ -298,12 +299,20 @@ recorded loops** are stored in the DAW project — the two takes travel with the
 state as gzipped 16-bit PCM and are swapped back in on the audio thread after a
 reload, so a bounce or a reopened session plays the loop you were hearing rather
 than an empty buffer. Effect tails and loaded file audio are not saved. The file
-source returns to live input after a project reload. The native patch menu has
-the same five factory patches as the browser, and a patch is a whole state: every
-control goes back to its default before the patch sets its own. Under them are
-four **user slots**, saved from the same menu (*SAVE WHAT YOU HEAR TO → USER n*)
-into `~/Library/Application Support/Brood/patches.xml` on macOS, so every project
-and every instance shares them. A patch never engages a channel.
+source returns to live input after a project reload. The patch box in the masthead
+has the same five factory presets as the browser, and a factory preset is a whole
+state: every control goes back to its default before it sets its own. Click the name
+for the preset browser, the same one every plug-in in the range uses: search, category
+keys and stars; clicking a preset plays it, KEEP (Return) keeps it, CANCEL (Esc) puts
+back the sound you had, and right-clicking a user preset renames, files or removes it.
+User presets are `.broodpreset` files in `~/Library/Audio/Presets/Brood/` on macOS, so
+every project and every instance shares them. The four user slots from round 18 become
+presets called User 1 to User 4 the first time this version opens. A preset never
+engages a channel.
+
+**The Bench** along the bottom passes a moment between plug-ins: SEND writes what the
+loop is playing to `~/Library/Application Support/Bench/`, and an instrument in the
+range (Silt) shows it and takes it as its sample.
 
 Sets saved under the old product name still open: the plug-in IDs did not change,
 and the old state tag is read as the new one.

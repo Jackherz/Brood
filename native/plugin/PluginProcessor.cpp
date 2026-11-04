@@ -452,10 +452,26 @@ static void writeTake(juce::ValueTree& parent, const brood::Core& core, const ch
     parent.appendChild(take, nullptr);
 }
 
+bool BroodProcessor::copyMoment(juce::AudioBuffer<float>& out, double& sampleRate) const {
+    const int n = juce::jmin(core_.capturedLength(), coreRight_.capturedLength());
+    if (n < 64) return false;
+    std::vector<float> left(static_cast<size_t>(n)), right(static_cast<size_t>(n));
+    core_.capturedLoop(left.data(), n);
+    coreRight_.capturedLoop(right.data(), n);
+    const int start = juce::jlimit(0, n - 1, ui.winStart.load());
+    const int len = juce::jlimit(1, n - start, ui.winLen.load());
+    out.setSize(2, len);
+    out.copyFrom(0, 0, left.data() + start, len);
+    out.copyFrom(1, 0, right.data() + start, len);
+    sampleRate = static_cast<double>(ui.clockHz.load());
+    return true;
+}
+
 void BroodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = apvts.copyState();
     state.setProperty("source", source.load(), nullptr);
     state.setProperty("inputGain", inputGain.load(), nullptr);
+    state.setProperty("presetName", presetName, nullptr);
     // A host may render offline in a fresh instance, and a reloaded set starts
     // empty; without the take in here a bounce comes back as silence or as
     // something other than what was playing.
@@ -483,6 +499,7 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
         auto state = juce::ValueTree::fromXml(*xml);
         if (state.hasProperty("source")) { const int saved = static_cast<int>(state["source"]); source = saved == File ? Live : juce::jlimit(0, 1, saved); }
         if (state.hasProperty("inputGain")) inputGain = static_cast<float>(state["inputGain"]);
+        if (state.hasProperty("presetName")) presetName = state["presetName"].toString();
         if (state.hasProperty("wetEnabled")) restoreWet_ = static_cast<bool>(state["wetEnabled"]) ? 1 : 0;
         // Unpack any take the state carries; the audio thread swaps it in at its
         // next block, so a render that starts from a saved state hears the loop.

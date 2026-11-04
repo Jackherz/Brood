@@ -46,6 +46,10 @@ public:
     std::atomic<int> source { Live };
     std::atomic<float> inputGain { 1.f };
     bool loadFile(const juce::File& f);           // message thread
+    // The sound the patch box shows; kept with the project.
+    juce::String presetName { "A Little Daydream" };
+    // What the loop is playing, for the Bench. Message thread; false with nothing caught.
+    bool copyMoment(juce::AudioBuffer<float>& out, double& sampleRate) const;
     juce::String fileName() const { return fileName_; }
 
     // ---- UI snapshot (written by the audio thread, read by the editor) ----

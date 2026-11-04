@@ -62,13 +62,12 @@ button:disabled { cursor: wait; opacity: .65; }
 .patch-select::after { content: '⌄'; position: absolute; right: 7px; top: 5px; pointer-events: none; font: 18px 'Terminal', monospace; }
 .patch-select select { appearance: none; border: 0; background: transparent; width: 100%; height: 100%; color: #181815; padding: 0 20px 0 8px; text-align: center; font: 17px 'Terminal', monospace; cursor: pointer; }
 .patch-bottom { margin-top: 6px; color: #77776f; }
-/* SAVE TO is a real select laid invisibly over its label, so it opens the
-   browser's own menu of slots. */
-.patch-save { position: relative; flex: none; color: #181815; cursor: pointer; }
-.patch-save select { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
-.patch-save:hover span, .patch-save:focus-within span { text-decoration: underline; }
+.patch-bottom button { background: none; border: 0; color: #181815; padding: 0; font: 13px 'Terminal', monospace; }
+.patch-bottom button:hover { text-decoration: underline; }
+.patch-name { min-width: 0; border: 0; background: transparent; padding: 0 8px; font: 17px 'Terminal', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.patch-name:hover { background: #f1f0e9; }
 .body-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
-.control-panel { min-width: 0; border-right: 2px solid #181815; }
+.control-panel { min-width: 0; border-right: 2px solid #181815; position: relative; }
 .section-heading { height: 34px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 6px; background: #efeee7; background-image: radial-gradient(var(--halftone) .5px, transparent .5px); background-size: 2px 2px; border-bottom: 1.5px solid #181815; font: 14px 'Terminal', monospace; letter-spacing: .045em; }
 .section-heading > div { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .section-heading strong { font: 9px 'Pixel', monospace; letter-spacing: 0; }
@@ -253,6 +252,27 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: va
 .trim-readout { display: flex; justify-content: space-between; gap: 6px; min-width: 0; padding-left: 12px; border-left: 1px solid #cfcec4; color: #77776f; font: 11px 'Terminal', monospace; }
 .trim-readout b { overflow: hidden; text-overflow: ellipsis; }
 .trim-hint { color: #8a8a82; font: 10px 'Terminal', monospace; letter-spacing: .04em; white-space: nowrap; }
+
+/* ── the preset browser: over the controls, the same in every plug-in ── */
+.preset-browser { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: #faf9f3; font: 15px 'Terminal', monospace; }
+.preset-head { display: flex; justify-content: space-between; gap: 10px; color: #5f5f57; border-bottom: 1px solid #181815; padding-bottom: 5px; }
+.preset-top { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset-top input { flex: 1 1 140px; min-width: 0; height: 30px; padding: 0 7px; border: 1.5px solid #181815; background: #181815; color: #faf9f3; font: 17px 'Terminal', monospace; }
+.preset-top input::placeholder { color: #c9c8bf; }
+.preset-views { flex: 3 1 300px; display: flex; flex-wrap: wrap; gap: 3px; }
+.preset-views button { flex: 1 0 auto; height: 30px; padding: 0 7px; border: 1.5px solid #181815; background: #faf9f3; font: 15px 'Terminal', monospace; box-shadow: 2px 2px 0 #181815; }
+.preset-views button.selected { background: #181815; color: #faf9f3; }
+.preset-list { flex: 1; min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; }
+.preset-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr) 76px 66px 24px; align-items: center; border-bottom: 1px solid #d8d6ca; color: #5f5f57; }
+.preset-list li.current, .preset-list li:hover { background: #f1f0e9; }
+.preset-list button { border: 0; background: transparent; height: 28px; padding: 0; font: 17px 'Terminal', monospace; color: #181815; }
+.preset-name { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-list .current .preset-name::before { content: '> '; }
+.preset-foot { display: flex; gap: 8px; align-items: center; }
+.preset-foot span { flex: 1; }
+.preset-foot button { height: 30px; padding: 0 12px; border: 1.5px solid #181815; background: #faf9f3; font: 15px 'Terminal', monospace; box-shadow: 2px 2px 0 #181815; }
+.preset-foot button.keep { background: #181815; color: #faf9f3; }
+@media (max-width: 520px) { .preset-list li { grid-template-columns: 28px minmax(0, 1fr) 24px; } .preset-list li > span { display: none; } }
 
 /* ── the ramps: two destinations, a shape, a rate, and two bends ── */
 .ramp-panel { margin-top: 13px; }
