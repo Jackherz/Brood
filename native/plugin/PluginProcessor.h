@@ -50,6 +50,15 @@ public:
     juce::String presetName { "A Little Daydream" };
     // What the loop is playing, for the Bench. Message thread; false with nothing caught.
     bool copyMoment(juce::AudioBuffer<float>& out, double& sampleRate) const;
+    // Or the exact output, for a number of bars from the next bar line (at once if the
+    // host is stopped). The message thread arms it and collects it; the audio thread
+    // only writes into what was allocated first.
+    enum class OutputCapture { idle, waiting, recording, done, cancelling };
+    void armOutputCapture(int bars);
+    void cancelOutputCapture() { outCapState_ = static_cast<int>(OutputCapture::cancelling); }
+    OutputCapture outputCaptureState() const { return static_cast<OutputCapture>(outCapState_.load()); }
+    float outputCaptureProgress() const { return outCap_.getNumSamples() > 0 ? static_cast<float>(outCapPos_.load()) / outCap_.getNumSamples() : 0.f; }
+    bool takeOutputCapture(juce::AudioBuffer<float>& out, double& sampleRate);
     juce::String fileName() const { return fileName_; }
 
     // ---- UI snapshot (written by the audio thread, read by the editor) ----
@@ -73,6 +82,9 @@ private:
     brood::Core core_, coreRight_;
     bool lastWetSw_ = false, lastLoopSw_ = false;
     std::atomic<float> hostBpm_ { 120.f };   // last tempo the host reported
+    std::atomic<float> hostBarQuarters_ { 4.f };   // a bar's length in quarter notes
+    std::atomic<int> outCapState_ { 0 }, outCapPos_ { 0 };
+    juce::AudioBuffer<float> outCap_;
     std::atomic<int> restoreWet_ { -1 };
     // A take restored from the state, waiting to be swapped in by the audio thread.
     // (A host that renders offline may be a fresh instance with nothing captured.)

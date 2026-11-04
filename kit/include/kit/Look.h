@@ -21,20 +21,21 @@ struct Stock
     juce::Colour shadow;    // the hard offset
     juce::Colour accent;    // the one colour a stock may have; ink if it has none
     juce::Colour onAccent;
+    juce::Colour lit;       // what "on" looks like, on every switch and light; shadow reads on it
 };
 
 inline Stock cream()
 {
     const juce::Colour ink (0xff181815), paper (0xfffaf9f3);
     return { juce::Colour (0xfff4f3ec), paper, juce::Colour (0xfff1f0e9), ink, juce::Colour (0xff5f5f57),
-             juce::Colour (0xffb9b8ad), ink, paper, ink, ink, paper };
+             juce::Colour (0xffb9b8ad), ink, paper, ink, ink, paper, juce::Colour (0xfff2cf7e) };
 }
 
 inline Stock graphite()
 {
     const juce::Colour ink (0xffe9e2d0), dark (0xff151716);
     return { juce::Colour (0xff2e332f), juce::Colour (0xff262a27), juce::Colour (0xff1d201e), ink, juce::Colour (0xffb8b19f),
-             juce::Colour (0xff4c524d), dark, ink, juce::Colour (0xff101211), juce::Colour (0xffe86a2c), dark };
+             juce::Colour (0xff4c524d), dark, ink, juce::Colour (0xff101211), juce::Colour (0xffe86a2c), dark, juce::Colour (0xffe86a2c) };
 }
 
 // VT323 for everything; Press Start 2P for the wordmark alone.
@@ -296,8 +297,10 @@ public:
             g.drawRect (light, 1.0f);
             if (b.getToggleState())
             {
-                g.setColour (s.accent);
-                g.fillRect (light.reduced (2.0f));
+                g.setColour (s.lit);
+                g.fillRect (light.reduced (1.0f));
+                g.setColour (s.ink);
+                g.drawRect (light, 1.0f);
             }
         }
     }
@@ -369,11 +372,11 @@ public:
         if (b.getProperties().getWithDefault ("plate", false))
         {
             const auto r = bounds.reduced (0.5f);
-            g.setColour (b.getToggleState() ? s.ink : hover ? s.panel.interpolatedWith (s.ink, 0.08f) : s.panel);
+            g.setColour (b.getToggleState() ? s.lit : hover ? s.panel.interpolatedWith (s.ink, 0.08f) : s.panel);
             g.fillRect (r);
             g.setColour (s.ink);
             g.drawRect (r, 1.0f);
-            g.setColour (b.getToggleState() ? s.panel : s.ink);
+            g.setColour (b.getToggleState() ? s.shadow : s.ink);
             g.setFont (label (15.0f));
             g.drawText (b.getButtonText().toUpperCase(), bounds, juce::Justification::centred);
             return;
@@ -381,10 +384,15 @@ public:
         // The "compact" property: a shorter track, for a row that has to fit five.
         const bool compact = b.getProperties().getWithDefault ("compact", false);
         const auto track = juce::Rectangle<float> (compact ? 16.0f : 24.0f, 14.0f).withCentre ({ compact ? 9.0f : 13.0f, bounds.getCentreY() });
-        g.setColour (s.ink);
+        // Off is a dark track with a pale block on the left. On, the track lights and the
+        // block goes dark on the right, so the state reads from across the room.
+        const bool on = b.getToggleState();
+        g.setColour (on ? s.lit : s.ink);
         g.fillRect (track);
-        const auto handle = juce::Rectangle<float> (compact ? 6.0f : 9.0f, 10.0f).withCentre ({ b.getToggleState() ? track.getRight() - (compact ? 4.5f : 6.0f) : track.getX() + (compact ? 4.5f : 6.0f), track.getCentreY() });
-        g.setColour (s.panel);
+        g.setColour (s.ink);
+        g.drawRect (track, 1.0f);
+        const auto handle = juce::Rectangle<float> (compact ? 6.0f : 9.0f, 10.0f).withCentre ({ on ? track.getRight() - (compact ? 4.5f : 6.0f) : track.getX() + (compact ? 4.5f : 6.0f), track.getCentreY() });
+        g.setColour (on ? s.shadow : s.panel);
         g.fillRect (handle);
         if (b.hasKeyboardFocus (true) || hover)
         {
@@ -395,7 +403,7 @@ public:
         if (text.isEmpty() || bounds.getWidth() < 30.0f)
             return;
         g.setColour (b.getToggleState() ? s.ink : s.soft);
-        g.setFont (label (16.0f));
+        g.setFont (label (compact ? 15.0f : 16.0f));
         g.drawFittedText (text, bounds.withTrimmedLeft (compact ? 21.0f : 30.0f).toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
     }
 

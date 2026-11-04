@@ -60,6 +60,7 @@ BroodProcessor::BroodProcessor()
           layout.add(loopParam("wetDiv", "Wet clock division", 0.f));
           layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("classic", 1), "Classic (MK I quirks)", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Wet before the loop", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze (hold the wet side)", false));
           // The ramp engine: two generators, one per channel.
           layout.add(loopParam("rampWet", "Ramp: wet", 0.f));
@@ -72,6 +73,7 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("rampSync", 1), "Modulation follows the tempo", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("rampHold", 1), "Modulation held", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV slice follows the tempo", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV slices fade", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
           return layout;
@@ -249,6 +251,8 @@ void BroodProcessor::pullParams() {
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
     p.classic = param("classic") > 0.5f;
+    p.wetPre = param("wetPre") > 0.5f;
+    p.envSoft = param("envSoft") > 0.5f;
     p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
     p.rampWet = param("rampWet"); p.rampLoop = param("rampLoop"); p.rampSpeed = param("rampSpeed");
     p.rampWave = param("rampWave");
@@ -303,8 +307,17 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     // DAW tempo for the sync dip. Static tempo, tempo ramps and offline renders
     // all reduce to "the bpm at this block"; if the host offers none, the last
     // known value stands (120 BPM until told otherwise).
+    bool hostPlaying = false;
+    double hostPpq = 0, hostBarStart = 0;
     if (auto* head = getPlayHead()) {   // not "playHead": that shadows AudioProcessor's own
         if (const auto position = head->getPosition()) {
+            if (const auto sig = position->getTimeSignature(); sig.hasValue() && sig->denominator > 0)
+                hostBarQuarters_.store(static_cast<float>(sig->numerator) * 4.f / static_cast<float>(sig->denominator));
+            if (const auto ppq = position->getPpqPosition(); ppq.hasValue() && position->getPpqPositionOfLastBarStart().hasValue()) {
+                hostPlaying = position->getIsPlaying();
+                hostPpq = *ppq;
+                hostBarStart = *position->getPpqPositionOfLastBarStart();
+            }
             if (const auto bpm = position->getBpm()) {
                 if (std::isfinite(*bpm) && *bpm > 5.0 && *bpm < 400.0) {
                     hostBpm_.store(static_cast<float>(*bpm));
@@ -407,6 +420,27 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         for (int i = 0; i < n; ++i) outL[i] = 0.5f * (outL[i] + outR[i]);
     for (int c = nOut; c < buffer.getNumChannels(); ++c) buffer.clear(c, 0, n);
 
+    // The Bench's bars: the exact output, from the next bar line.
+    if (outCapState_.load() == static_cast<int>(OutputCapture::cancelling)) outCapState_ = static_cast<int>(OutputCapture::idle);
+    int capFrom = 0;
+    if (outCapState_.load() == static_cast<int>(OutputCapture::waiting)) {
+        capFrom = -1;
+        if (!hostPlaying) capFrom = 0;
+        else {
+            const double intoBar = hostPpq - hostBarStart;
+            const double toBar = intoBar < 1e-6 ? 0.0 : (hostBarQuarters_.load() - intoBar) * 60.0 / hostBpm_.load() * getSampleRate();
+            if (toBar < n) capFrom = static_cast<int>(toBar);
+        }
+        if (capFrom >= 0) outCapState_ = static_cast<int>(OutputCapture::recording);
+    }
+    if (outCapState_.load() == static_cast<int>(OutputCapture::recording)) {
+        const int at = outCapPos_.load(), count = juce::jmin(n - capFrom, outCap_.getNumSamples() - at);
+        outCap_.copyFrom(0, at, outL + capFrom, count);
+        outCap_.copyFrom(1, at, (nOut > 1 ? outR : outL) + capFrom, count);
+        outCapPos_ = at + count;
+        if (at + count >= outCap_.getNumSamples()) outCapState_ = static_cast<int>(OutputCapture::done);
+    }
+
     const auto st = core_.state(), rightState = coreRight_.state();
     ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop);
     ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.winSpan = core_.loopSpan(); ui.pos = static_cast<float>(st.pos);
@@ -450,6 +484,23 @@ static void writeTake(juce::ValueTree& parent, const brood::Core& core, const ch
     take.setProperty("play", core.loopLedState() != brood::LoopState::Off, nullptr);
     take.setProperty("pcm", juce::MemoryBlock(raw.getData(), raw.getDataSize()).toBase64Encoding(), nullptr);
     parent.appendChild(take, nullptr);
+}
+
+void BroodProcessor::armOutputCapture(int bars) {
+    if (outputCaptureState() != OutputCapture::idle) return;
+    const double seconds = bars * static_cast<double>(hostBarQuarters_.load()) * 60.0 / juce::jmax(1.f, hostBpm_.load());
+    outCap_.setSize(2, juce::jmax(1, juce::roundToInt(juce::jmin(seconds, 300.0) * getSampleRate())));
+    outCapPos_ = 0;
+    outCapState_ = static_cast<int>(OutputCapture::waiting);
+}
+
+bool BroodProcessor::takeOutputCapture(juce::AudioBuffer<float>& out, double& sampleRate) {
+    if (outputCaptureState() != OutputCapture::done) return false;
+    out = outCap_;
+    sampleRate = getSampleRate();
+    outCap_.setSize(2, 0);
+    outCapState_ = static_cast<int>(OutputCapture::idle);
+    return true;
 }
 
 bool BroodProcessor::copyMoment(juce::AudioBuffer<float>& out, double& sampleRate) const {

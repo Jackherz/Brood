@@ -198,6 +198,38 @@ int main() {
         CHECK(folder.findChildFiles(juce::File::findFiles, false, "moment-*.wav").size() == 1, "only the latest is kept");
         folder.deleteRecursively();
     }
+    // SEND's bars: the exact output, and nothing goes out early.
+    {
+        BroodProcessor catcher;
+        catcher.setPlayConfigDetails(2, 2, rate, size);
+        catcher.prepareToPlay(rate, size);
+        using Capture = BroodProcessor::OutputCapture;
+        catcher.armOutputCapture(4);   // no host: 120 BPM, 4/4, from now
+        CHECK(catcher.outputCaptureState() == Capture::waiting, "armed");
+        juce::AudioBuffer<float> io(2, size), heard(2, juce::roundToInt(8.0 * rate) + size);
+        juce::MidiBuffer none;
+        int at = 0;
+        juce::Random noise(5);
+        juce::AudioBuffer<float> taken;
+        double takenRate = 0;
+        CHECK(!catcher.takeOutputCapture(taken, takenRate), "nothing to take yet");
+        while (catcher.outputCaptureState() != Capture::done && at + size <= heard.getNumSamples()) {
+            for (int c = 0; c < 2; ++c) for (int n = 0; n < size; ++n) io.setSample(c, n, 0.2f * noise.nextFloat());
+            catcher.processBlock(io, none);
+            for (int c = 0; c < 2; ++c) heard.copyFrom(c, at, io, c, 0, size);
+            at += size;
+        }
+        CHECK(catcher.outputCaptureState() == Capture::done, "it finishes");
+        CHECK(catcher.takeOutputCapture(taken, takenRate) && std::fabs(taken.getNumSamples() / takenRate - 8.0) < 0.01, "4 bars at 120 is 8 s");
+        bool same = true;
+        for (int c = 0; c < 2; ++c) for (int n = 0; n < taken.getNumSamples(); ++n) same = same && taken.getSample(c, n) == heard.getSample(c, n);
+        CHECK(same, "exactly what came out");
+        CHECK(catcher.outputCaptureState() == Capture::idle, "and it's ready again");
+        catcher.armOutputCapture(4);
+        catcher.cancelOutputCapture();
+        catcher.processBlock(io, none);
+        CHECK(catcher.outputCaptureState() == Capture::idle, "STOP stops it");
+    }
     // Construct and paint the editor offscreen to catch UI/resource regressions.
     {
         std::unique_ptr<juce::AudioProcessorEditor> editor(restored.createEditor());

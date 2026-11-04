@@ -91,6 +91,7 @@ public:
     }
 
     std::function<void()> onAction;
+    int reservedRight = 0;   // room left beside the key for a control the plug-in adds
 
     // What the left cell says about this plug-in, what the right cell says about the
     // moment, and the key that acts on it (none: no key).
@@ -142,6 +143,7 @@ public:
         auto rest = row.reduced (12, 0);
         if (action.isVisible())
             rest.removeFromRight (action.getWidth() + 8);
+        rest.removeFromRight (reservedRight);
         g.setColour (s.soft);
         g.drawFittedText (moment, rest, juce::Justification::centredLeft, 1, 0.8f);
     }

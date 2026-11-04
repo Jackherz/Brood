@@ -432,6 +432,8 @@ struct Params {
     bool envSync = false;                           // ENV slice follows the tempo
     bool rampSync = false;                          // modulation rate follows the tempo
     bool rampHold = false;                          // both generators stop where they are
+    bool envSoft = false;                           // ENV's slices fade in and out instead of cutting
+    bool wetPre = false;                            // the wet side runs into the looper instead of beside it
 };
 
 struct State {
@@ -469,6 +471,8 @@ public:
         overdub = false;
         loopGain = 0; tapeSpeed = 1; stretchSpeed = 0;
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
+        softStart = softPh = softS = softOldFade = softOldS = 0;
+        dubGain = dubPrev = 0; dubLast = -1;
         grain[0] = {0, 0}; grain[1] = {0.5, 0};
         rng = 22222;
         toneL = toneR = 0; wowPh = 0;
@@ -723,6 +727,8 @@ private:
     uint32_t histCycles = 0;
     LoopState loopState = LoopState::Off;
     bool overdub = false;
+    double dubGain = 0, dubPrev = 0;
+    int dubLast = -1;
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
     // Moving START moves the read head, and a jump is a click. These three carry a
     // short crossfade from where the loop was playing to where it now begins.
@@ -730,6 +736,7 @@ private:
     double startFade = 1;
     int startLen = -1;
     double env = 0, envHold = 0, envMix = 0, sliceStart = 0, slicePh = 0;
+    double softStart = 0, softPh = 0, softS = 0, softOldFade = 0, softOldS = 0;   // SOFT: the slice being let go
     bool envGate = false;
     Grain grain[2] = {{0, 0}, {0.5, 0}};
     uint32_t rng = 22222;
@@ -876,13 +883,14 @@ private:
         return {std::max(64, static_cast<int>(std::floor(W0 * trim))), static_cast<int>(std::lround((1.0 - where) * room))};
     }
 
-    double loopTick(double x) {
+    // `x` is what the looper listens to; `rec` is what an overdub lays down.
+    double loopTick(double x, double rec) {
         const double ax = std::fabs(x);
         env += (ax - env) * (ax > env ? 0.02 : 0.0005);
 
         const double target = loopState == LoopState::Play ? 1.0 : 0.0;
         loopGain += (target - loopGain) * 0.003;
-        if (loopState == LoopState::Off && loopGain < 1e-4) { loopGain = 0; return 0; }
+        if (loopState == LoopState::Off && loopGain < 1e-4) { loopGain = 0; dubGain = 0; dubLast = -1; return 0; }
         if (lsrc < 64) return 0;
 
         const Window win = loopWindow();
@@ -963,12 +971,26 @@ private:
             pos += tapeSpeed * lstep;
         } else {
             const double thr = expMap(1 - m, 0.008, 0.35);
+            const bool soft = p.envSoft;
             if (env > thr) {
-                if (!envGate) { envGate = true; sliceStart = pos; slicePh = 0; }
+                if (!envGate) {
+                    envGate = true;
+                    // SOFT: a new slice while the last is still sounding would jump the
+                    // read head, which is the click. The last one is let go over 20 ms.
+                    if (soft && envMix > 1e-4) { softStart = sliceStart; softPh = slicePh; softOldS = softS; softOldFade = 1; }
+                    sliceStart = pos; slicePh = 0;
+                }
                 envHold = 0.08 * kCoreFs;
             } else if (envGate && --envHold <= 0) envGate = false;
-            envMix += ((envGate ? 1.0 : 0.0) - envMix) * 0.005;
-            const double mainV = rd(pos) * edgeAt(pos);
+            envMix += ((envGate ? 1.0 : 0.0) - envMix) * (soft ? 0.0008 : 0.005);
+            const double softF = 0.02 * kCoreFs;
+            const double mainF = std::min(soft ? softF : 0.004 * kCoreFs, Wd / 4);
+            double mainEdge = edgeAt(pos);
+            if (soft) {
+                double q = jsMod(pos, Wd); if (q < 0) q += Wd;
+                mainEdge = 0.5 - 0.5 * std::cos(kPi * std::min({1.0, q / mainF, (Wd - q) / mainF}));
+            }
+            const double mainV = rd(pos) * mainEdge;
             double sl = 0;
             if (envMix > 1e-4) {
                 // ENV slices to a length, so synced LENGTH is a division of the beat,
@@ -976,9 +998,24 @@ private:
                 const double S = p.envSync
                     ? std::min(Wd, std::max(64.0, syncSecondsRaw(p.bpm, e.length) * clockRatio * fs))
                     : std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
-                if (slicePh >= S) slicePh -= S;
-                const double F2 = std::min(0.004 * kCoreFs, S / 4);
-                sl = rd(sliceStart + slicePh) * std::min({1.0, slicePh / F2, (S - slicePh) / F2});
+                if (soft) {
+                    // The slice length glides, so a moving LENGTH can't cut a fade short.
+                    softS = softS <= 0 ? S : softS + (S - softS) * 0.0005;
+                    if (slicePh >= softS) slicePh -= softS;
+                    const double F3 = std::min(softF, softS / 4);
+                    sl = rd(sliceStart + slicePh) * (0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3})));
+                    if (softOldFade > 0) {
+                        const double F4 = std::min(softF, softOldS / 4);
+                        const double shape = 0.5 - 0.5 * std::cos(kPi * std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0));
+                        sl += rd(softStart + softPh) * shape * (0.5 - 0.5 * std::cos(kPi * softOldFade));
+                        softPh += lstep;
+                        softOldFade = std::max(0.0, softOldFade - 1.0 / softF);
+                    }
+                } else {
+                    if (slicePh >= S) slicePh -= S;
+                    const double F2 = std::min(0.004 * kCoreFs, S / 4);
+                    sl = rd(sliceStart + slicePh) * std::min({1.0, slicePh / F2, (S - slicePh) / F2});
+                }
                 slicePh += lstep;
             }
             y = mainV * (1 - envMix) + sl * envMix;
@@ -992,23 +1029,43 @@ private:
             pos += 0.006 * std::sin(wowPh) + 0.002 * std::sin(wowPh * 5.7);
         }
 
-        if (overdub) {
+        // Overdub fades in and out over about 8 ms, because a hard start or stop is a step
+        // recorded into the take, there on every pass from then on. It also writes every
+        // cell the head crosses, once: at any speed but 1x a single write per tick left
+        // gaps or stacked layers, and those were clicks too.
+        dubGain += ((overdub ? 1.0 : 0.0) - dubGain) * 0.002;
+        if (dubGain > 1e-4) {
             // FADE: how much of the old loop survives each overdub pass. 0 keeps
             // the pedal's slow decay; 1 lets the new layer replace it completely.
-            const double keep = 0.97 * (1 - clampd(s.fade, 0, 1));
+            const double keep = 1 - (1 - 0.97 * (1 - clampd(s.fade, 0, 1))) * dubGain;
             int q = static_cast<int>(jsMod(std::floor(mode == 1 ? loopPos : pos), Wd)); if (q < 0) q += W;
-            // Overdubs land in the window as it is headed for, not as it was.
-            const int wi = std::min(len - 1, std::max(0, startB + q));
-            float& cell = loopBuf[static_cast<size_t>(wi)];
-            cell = static_cast<float>(cell * keep + x);
-        }
+            auto write = [&](int cellQ, double v) {
+                // Overdubs land in the window as it is headed for, not as it was.
+                const int wi = std::min(len - 1, std::max(0, startB + cellQ));
+                float& cell = loopBuf[static_cast<size_t>(wi)];
+                cell = static_cast<float>(cell * keep + v * dubGain);
+            };
+            if (dubLast < 0) write(q, rec);
+            else {
+                int d = q - dubLast;
+                if (d * 2 > W) d -= W; else if (d * 2 < -W) d += W;
+                const int count = std::min(std::abs(d), 16), dir = d > 0 ? 1 : -1;
+                for (int k = 1; k <= count; ++k)
+                    write(((dubLast + dir * k) % W + W) % W, dubPrev + (rec - dubPrev) * k / count);
+            }
+            dubLast = q; dubPrev = rec;
+        } else dubLast = -1;
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);
         return y * loopGain;
     }
 
     void coreTick(double x) {
-        const double loopOut = loopTick(x);
-        const double wetSrc = loopState != LoopState::Play ? x : p.routing == 0 ? x : p.routing == 1 ? x + loopOut : loopOut;
+        // PRE: input, then wet, then loop, so the wet side is recorded into whatever the
+        // looper keeps. It comes first, so it hears only the input and ROUTING stands
+        // aside: feeding the loop to a wet side that feeds the loop would never settle.
+        const bool pre = p.wetPre;
+        double loopOut = pre ? 0.0 : loopTick(x, x);
+        const double wetSrc = pre || loopState != LoopState::Play ? x : p.routing == 0 ? x : p.routing == 1 ? x + loopOut : loopOut;
         // The FREEZE switch is the hold gesture without the holding: it brings the
         // wet side up and freezes it, so a reverb can be left ringing on its own.
         const bool held = p.freezeLatch > 0.5;
@@ -1076,6 +1133,7 @@ private:
             wr += (toneR - wr) * toneAmt;
         }
         wl *= wetOut; wr *= wetOut;
+        if (pre) loopOut = loopTick(x, softClip(x + (wl + wr) * 0.5));
 
         // The history always advances, whether or not a loop is playing: pausing it
         // left a splice in the buffer and every extra tap stitched in another one,
@@ -1083,7 +1141,7 @@ private:
         // dry input is recorded (feeding the loop back would be a feedback path);
         // while listening the live wet channel is caught too, as before.
         const bool listening = loopState == LoopState::Off;
-        hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (listening ? (wl + wr) * 0.5 : 0)));
+        hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (listening || pre ? (wl + wr) * 0.5 : 0)));
         if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
         if (histCount < static_cast<int>(hist.size())) ++histCount;
 

@@ -312,7 +312,9 @@ engages a channel.
 
 **The Bench** along the bottom passes a moment between plug-ins: SEND writes what the
 loop is playing to `~/Library/Application Support/Bench/`, and an instrument in the
-range (Silt) shows it and takes it as its sample.
+range (Silt) shows it and takes it as its sample. The menu beside SEND can send the
+exact output instead: 4, 8 or 16 bars from the next bar line (at once if the host is
+stopped). Silt keeps the first 30 seconds of anything longer.
 
 Sets saved under the old product name still open: the plug-in IDs did not change,
 and the old state tag is read as the new one.
@@ -477,6 +479,17 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   sample-to-sample step stays within the signal's own slope. The waveform display
   dims everything outside the window. Both cores allocate for the longest possible
   loop up front (about 32 MB), so MEMORY never reallocates on the audio thread.
+- **SOFT** sits beside SYNC under LENGTH, in ENV only. The slices fade in and out over
+  20 ms instead of 4, a new slice takes over from the last rather than jumping the read
+  head, and a moving LENGTH glides, so nothing clicks. It's a rounder, less percussive
+  stutter; off is the sharp cut the pedal makes. Both cores agree
+  (`tests/parity/scenarios/env_soft.txt`).
+- **PRE** puts the wet side before the looper: input, then wet, then loop. Overdubs
+  and every later catch keep the wet sound, and the Bench's SEND carries it to Silt. The
+  wet side hears only the input then, so ROUTING stands aside. With PRE off, a catch
+  still takes whatever is ringing while the looper is listening, as the pedal does;
+  after that the wet side stays out of the loop. Both cores agree
+  (`tests/parity/scenarios/wet_pre.txt`).
 - **WET / LOOP** blends two complete worlds rather than fading one into the
   other: the loop keeps its own level across the whole knob and the wet side adds
   on top, so the middle hears both. It used to duck the direct loop against the

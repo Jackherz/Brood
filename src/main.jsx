@@ -49,7 +49,7 @@ const BASE = {
   trails: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0, envSync: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0,
+  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0, wetPre: 0, envSoft: 0,
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', category: 'SPACES', params: BASE },
@@ -109,7 +109,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'envSync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'rampHold', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'envSync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'rampHold', 'wetPre', 'envSoft', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -253,20 +253,20 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, 
     {/* The slot is always there, so a knob with a switch and its neighbour
         without one keep their whispers on the same line. */}
     <div className="knob-sync-slot">
-      {toggle && <button type="button" className={`knob-sync ${params[toggle.id] ? 'on' : ''}`} role="switch"
-        aria-checked={!!params[toggle.id]} aria-label={toggle.name}
-        onClick={() => onChange(toggle.id, params[toggle.id] ? 0 : 1)}>SYNC</button>}
+      {(toggle || []).map((t) => <button key={t.id} type="button" className={`knob-sync ${params[t.id] ? 'on' : ''}`} role="switch"
+        aria-checked={!!params[t.id]} aria-label={t.name}
+        onClick={() => onChange(t.id, params[t.id] ? 0 : 1)}>{t.label}</button>)}
     </div>
     <p className="knob-whisper">{sub}</p>
     <div className="knob-caption"><b>{describe(id, params)}</b></div>
   </div>;
 }
 
-function ModeSelector({ label, options, value, onChange, help, hint }) {
-  return <div className="mode-selector" {...(help ? help(label, hint) : {})}>
+function ModeSelector({ label, options, value, onChange, help, hint, disabled = false }) {
+  return <div className={`mode-selector ${disabled ? 'stood-aside' : ''}`} {...(help ? help(label, hint) : {})}>
     <div className="micro-label"><span>{label}</span><span className="micro-dots">•••</span></div>
     <div className="mode-buttons" role="radiogroup" aria-label={label}>
-      {options.map((option, i) => <button key={option} type="button" role="radio" aria-checked={value === i} className={value === i ? 'selected' : ''} onClick={() => onChange(i)}>{option}</button>)}
+      {options.map((option, i) => <button key={option} type="button" role="radio" aria-checked={value === i} disabled={disabled} className={value === i ? 'selected' : ''} onClick={() => onChange(i)}>{option}</button>)}
     </div>
   </div>;
 }
@@ -523,12 +523,19 @@ function HoodPanel({ params, onChange, help }) {
 function Stepper({ label, names, value, onChange, hint, help }) {
   const index = rampIndex(value, names);
   const step = (d) => onChange(rampValue((index + d + names.length) % names.length, names));
+  const lastOn = useRef(1);
+  // A cell with an OFF stop turns off in one click and comes back the same way; the
+  // arrows are what step it. A cell without one just steps.
+  const press = () => {
+    if (names[0] !== 'OFF') { step(1); return; }
+    if (index > 0) { lastOn.current = index; onChange(rampValue(0, names)); } else onChange(rampValue(lastOn.current, names));
+  };
   // Anywhere on the cell steps forward — the arrows are the same gesture with a
   // direction, not the only live part of it. A filled display means the tide is
   // running; OFF is drawn as an outline so on and off cannot be confused.
   return <div className={`stepper ${names[index] === 'OFF' ? 'off' : 'on'}`} role="group"
     aria-label={`${label}: ${names[index]}. ${hint}`}
-    title={`${label}: ${names[index]} — click anywhere to step, ◀ to step back`} onClick={() => step(1)} {...(help || {})}>
+    title={`${label}: ${names[index]}. ${names[0] === 'OFF' ? 'Click to turn off or back on, arrows to step' : 'Click to step'}`} onClick={press} {...(help || {})}>
     <button type="button" aria-label={`previous ${label}`} onClick={(event) => { event.stopPropagation(); step(-1); }}>◀</button>
     <span className="stepper-cap">{label}</span>
     <b aria-live="polite">{names[index]}</b>
@@ -541,12 +548,12 @@ function Stepper({ label, names, value, onChange, hint, help }) {
 function RampPanel({ params, onChange, help }) {
   const synced = !!params.rampSync;
   return <div className="ramp-panel">
-    <div className="side-rule ramp-heading"><span>MODULATION</span><span>CLICK A CELL TO STEP</span></div>
+    <div className="side-rule ramp-heading"><span>MODULATION</span><span>CLICK: OFF / ON. ARROWS: STEP</span></div>
     <div className="ramp-grid">
-      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="click anywhere to step what the first tide turns"
-        help={help('MODULATION / WET', 'click anywhere to step the first tide through off, time, mix, length, modify, clock and balance; the left arrow steps back. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
-      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="click anywhere to step what the second tide turns"
-        help={help('MODULATION / LOOP', 'click anywhere to step the second tide through the same list; its MODIFY means this channel\u2019s own. OFF leaves the knob alone, and a filled display means the tide is running.')}/>
+      <Stepper label="WET" names={RAMP_TARGETS} value={params.rampWet} onChange={(v) => onChange('rampWet', v)} hint="click to turn the first tide off or back on; the arrows step what it turns"
+        help={help('MODULATION / WET', 'the arrows step what the first tide moves: time, mix, length, modify, clock, balance. click the cell to turn it off, and again to bring it back.')}/>
+      <Stepper label="LOOP" names={RAMP_TARGETS} value={params.rampLoop} onChange={(v) => onChange('rampLoop', v)} hint="click to turn the second tide off or back on; the arrows step what it turns"
+        help={help('MODULATION / LOOP', 'the arrows step what the second tide moves; its MODIFY means this channel\u2019s own. click the cell to turn it off, and again to bring it back.')}/>
       <Stepper label="SHAPE" names={RAMP_WAVES} value={params.rampWave} onChange={(v) => onChange('rampWave', v)} hint="click anywhere to step the shape"
         help={help('MODULATION SHAPE', 'click anywhere to step the shape: triangle, square, sine, random, smooth random. it only changes what the two tides do, never where they are pointed.')}/>
       <label className="rate-row" {...help('MODULATION RATE', 'how slowly the tide turns. both sides share it, so they stay in step with each other. with SYNC on, the rate becomes a musical span instead of a free speed.')}><span>{synced ? 'SPAN' : 'RATE'}</span>
@@ -778,7 +785,7 @@ function App() {
               <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)} help={help} hint="four ways of treating time: reverb, delay, slip, weave."/>
               <div className="knob-row">
                 <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch}
-                  toggle={(params.wetMode === 1 || params.wetMode === 3) ? { id: 'sync', name: 'Sync wet to tempo' } : null}/>
+                  toggle={(params.wetMode === 1 || params.wetMode === 3) ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }] : null}/>
                 <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} dark/>
               </div>
               <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
@@ -789,7 +796,7 @@ function App() {
                 <Knob id="mix" title="MIX" sub={SHARED_WHISPER.mix} value={params.mix} params={params} onChange={update} onTouch={touch}/>
                 <Knob id="clock" title="CLOCK" sub={params.smooth ? 'the heartbeat, breathing freely' : SHARED_WHISPER.clock} value={params.clock} params={params} onChange={update} onTouch={touch}/>
               </div>
-              <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)} help={help} hint="what the wet side is allowed to hear: the input, the loop, or both."/>
+              <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)} help={help} hint="what the wet side is allowed to hear: the input, the loop, or both. with PRE on it hears only the input." disabled={!!params.wetPre}/>
               <div className="between-card"><div className="between-art"><span>IN</span><span className="between-dash">···▶</span><Spark size={18}/><span className="between-dash">▶···</span><span>OUT</span></div><p>ONE CLOCK. TWO WORLDS.</p></div>
             </div>
             <div className="channel-column loop-column">
@@ -797,7 +804,7 @@ function App() {
               <ModeSelector label="LOOP MODE" options={LOOP} value={params.loopMode} onChange={(v) => update('loopMode', v)} help={help} hint="three ways of holding a moment: envelope, tape, stretch."/>
               <div className="knob-row">
                 <Knob id="length" title="LENGTH" sub={WHISPERS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch}
-                  toggle={params.loopMode === 0 ? { id: 'envSync', name: 'Sync envelope to tempo' } : null}/>
+                  toggle={params.loopMode === 0 ? [{ id: 'envSync', name: 'Sync envelope to tempo', label: 'SYNC' }, { id: 'envSoft', name: 'Fade the envelope slices', label: 'SOFT' }] : null}/>
                 <Knob id="modLoop" title="MODIFY" sub={WHISPERS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch}/>
               </div>
               <Footswitch kind="loop" active={loopActive} state={loopStatus} running={running} onGesture={gesture}/>
@@ -832,7 +839,8 @@ function App() {
             <div className="dips">
               {[['trails', 'TRAILS', 'the tails keep falling after you switch the wet side off.'],
               ['smooth', 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.'],
-              ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
+              ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.'],
+              ['wetPre', 'PRE', 'the wet side runs into the looper: overdubs and every later catch keep it. it hears only the input, so ROUTING stands aside.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
             </div>
             <label className={`level-row tempo-row ${params.sync || params.envSync || params.rampSync ? 'live' : ''}`}>
               <span>TEMPO {params.sync || params.envSync || params.rampSync ? '· SYNCED' : ''}</span>
@@ -869,6 +877,8 @@ function App() {
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
           <div><dt>MODULATION <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over; <b>SYNC</b> makes a turn a division of the beat — eight bars down to a sixteenth — so the drift walks with the tempo instead of against it; <b>HOLD</b> stops both tides where they are until you let them go. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
+          <div><dt>SOFT <span>/ under LENGTH, in ENV</span></dt><dd>The slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. A rounder, less percussive stutter. Off is the sharp cut the pedal makes.</dd></div>
+          <div><dt>PRE <span>/ the little switches</span></dt><dd>Puts the wet side before the looper: input, then wet, then loop. Overdubs and every later catch keep the wet sound. It hears only the input, so ROUTING stands aside. With PRE off, a catch still takes whatever is ringing while the looper is listening, as the pedal does; after that the wet side stays out of the loop.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>

@@ -1199,3 +1199,100 @@ test('a hold on the wet footswitch freezes only while it is held', () => {
   render(core, 0.1, () => 0);
   assert.ok(!core.state().freeze, 'letting go lets go');
 });
+
+test('wetPre records the wet side while a loop plays; beside the loop it stays out', () => {
+  const tail = (wetPre) => {
+    const core = new BroodCore(FS);
+    core.setParam('wetMode', 1);
+    core.setParam('time', 0.3);
+    core.setParam('modWet', 0.7);
+    core.setParam('wetPre', wetPre);
+    const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+    const run = (seconds, level) => {
+      for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) {
+        for (let i = 0; i < BLOCK; i++) inp[i] = level * Math.sin(i * 0.05);
+        core.process(inp, oL, oR);
+      }
+    };
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    run(0.5, 0.4);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    run(0.05, 0.4);
+    assert.strictEqual(core.state().loop, 'play');
+    run(0.3, 0);                 // silence in, echoes still ringing
+    let peak = 0;
+    const n = core.hist.length, last = core.histW;
+    for (let i = 1; i < 2000; i++) peak = Math.max(peak, Math.abs(core.hist[(last - i + n) % n]));
+    return peak;
+  };
+  assert.ok(tail(1) > 0.01, 'the echoes are in the history');
+  assert.strictEqual(tail(0), 0, 'only the dry input, as before');
+});
+
+test('envSoft rounds off the corners ENV cuts into the loop; off stays the sharp cut', () => {
+  // A low tone in the loop and input bursts that keep slicing it. A corner shows up in
+  // the second difference long before it shows in the first, and a 110 Hz tone adds
+  // almost none of its own.
+  const worstCorner = (envSoft) => {
+    const core = new BroodCore(FS);
+    core.setParam('loopMode', 0);
+    core.setParam('modLoop', 0.7);
+    core.setParam('length', 0.3);
+    core.setParam('mix', 1);     // the wet and loop side only: the dry path isn't what's being measured
+    core.setParam('envSoft', envSoft);
+    const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+    let t = 0, worst = 0, a = 0, b = 0, seen = 0;
+    const run = (seconds, burst, measure) => {
+      for (let n = 0; n < Math.ceil((seconds * FS) / BLOCK); n++) {
+        for (let i = 0; i < BLOCK; i++, t++) {
+          const at = (t / FS) % 0.2;
+          const level = burst ? (at < 0.03 ? 0.5 * Math.sin(Math.PI * at / 0.03) ** 2 : 0) : 0.5;
+          inp[i] = level * Math.sin(2 * Math.PI * 110 * t / FS);
+        }
+        core.process(inp, oL, oR);
+        if (measure) for (let i = 0; i < BLOCK; i++) { if (seen++ >= 2) worst = Math.max(worst, Math.abs(oL[i] - 2 * a + b)); b = a; a = oL[i]; }
+      }
+    };
+    run(1, false, false);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    run(0.3, true, false);
+    run(3, true, true);
+    return worst;
+  };
+  const cut = worstCorner(0), soft = worstCorner(1);
+  assert.ok(soft < cut * 0.7, `the worst corner falls (${soft.toFixed(5)} from ${cut.toFixed(5)})`);
+});
+
+test('overdub leaves no step in the take, at any tape speed', () => {
+  const worstStep = (modLoop) => {
+    const core = new BroodCore(FS);
+    core.setParam('loopMode', 1);
+    core.setParam('length', 1);
+    core.setParam('modLoop', modLoop);
+    const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+    let t = 0;
+    const run = (seconds) => {
+      for (let n = 0; n < Math.ceil((seconds * FS) / BLOCK); n++) {
+        for (let i = 0; i < BLOCK; i++, t++) inp[i] = 0.3 * Math.sin(2 * Math.PI * 110 * t / FS);
+        core.process(inp, oL, oR);
+      }
+    };
+    run(1.5);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    run(0.5);
+    core.footswitch('loop', 'down');
+    run(1.4);
+    assert.strictEqual(core.state().loop, 'dub');
+    core.footswitch('loop', 'up');
+    run(0.1);
+    let worst = 0;
+    const buf = core.loopBuf, n = core.lsrc;
+    for (let i = 1; i < n; i++) worst = Math.max(worst, Math.abs(buf[i] - buf[i - 1]));
+    return worst;
+  };
+  // The 1x tone's own slope at the core clock is about 0.01; two layers of it, 0.02.
+  for (const [name, m] of [['1x', 0.66], ['2x', 0.84], ['1/2x', 0.58], ['reverse', 0.34]]) {
+    const step = worstStep(m);
+    assert.ok(step < 0.06, `${name}: worst step ${step.toFixed(4)}`);
+  }
+});

@@ -41,6 +41,7 @@ public:
         int count() const { return juce::jmax(2, names.size()); }
         int arrowWidth() const { return juce::jlimit(12, 20, juce::jmax(1, getWidth() - 6) / 6); }
         void step(int by);
+        int lastOn = 1;   // what a click on an OFF cell goes back to
         juce::RangedAudioParameter& param;
         juce::String cap;
         juce::StringArray names;
@@ -98,7 +99,9 @@ private:
     kit::PresetBar presetBar;
     kit::PresetBrowser presetBrowser;
     kit::bench::Strip benchStrip;
+    juce::ComboBox benchSource;   // what SEND sends: the loop, or bars of the output
     juce::int64 momentSent = 0;
+    void benchSend();
     int benchWasCaught = -1;
     void updateBench();
 
@@ -118,7 +121,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<Dip, 4> dips;
+    std::array<Dip, 5> dips;
     std::unique_ptr<juce::FileChooser> chooser;
     // The ramp engine: two destinations, a shape, a rate and a polarity, plus the
     // BOUNCE and SWEEP dips that bend the shape.
@@ -129,10 +132,10 @@ private:
     std::array<RampSwitch, 5> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC, HOLD
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
-    juce::ToggleButton wetSync, envSync;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt;
-    juce::Rectangle<int> wetSyncDesign, envSyncDesign;
-    int lastModeWet = -1, lastModeLoop = -1;
+    juce::ToggleButton wetSync, envSync, envSoft;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt, envSoftAtt;
+    juce::Rectangle<int> wetSyncDesign, envSyncDesign, envSoftDesign;
+    int lastModeWet = -1, lastModeLoop = -1, lastPre = -1;
     // Under the hood: the five sliders the pedal hides behind both footswitches.
     // They live along the bottom of the window, so there is no second page.
     struct HoodControl { juce::Slider slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
@@ -148,7 +151,7 @@ private:
     juce::Rectangle<int> whisperRect(int knob) const;
     int activeKnob = -1;
     juce::String activeKnobText;
-    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[4];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains
@@ -160,7 +163,7 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign;
+    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign;
     juce::Rectangle<int> rampWetDesign, rampLoopDesign, rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

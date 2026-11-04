@@ -83,6 +83,13 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 22: **wet before the loop.** A PRE switch runs input, wet, loop, so overdubs and
+  later catches keep the wet sound and SEND carries it to Silt. Off is unchanged, so
+  old sets and the parity scenarios sound as they did. SOFT, beside SYNC under LENGTH in
+  ENV, fades the slices and crossfades a retrigger, which takes out ENV's clicks. Overdub
+  fades in and out and writes every cell it crosses, once, so it stops recording clicks
+  into the take. SEND can capture 4, 8 or 16 bars of the exact output. A cell with an OFF
+  stop turns off in one click, and "on" now lights up on every switch.
 - Round 21: **one maker, two lines.** The look moved into a shared kit (`kit/`, the
   same copy in each plug-in's repository until the range has a name and a repository):
   masthead with a catalogue number, numbered panels, a readout, flat knobs, VT323 and

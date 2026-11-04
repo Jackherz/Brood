@@ -9,7 +9,7 @@
   --ink: #181815; --paper: #faf9f3; --paper-dim: #f1f0e9; --board: #e9e9e2;
   --muted: #77776f; --line: #b9b8ad; --grid: #e4e2d6; --halftone: #c2c1b6;
   --sp1: 4px; --sp2: 8px; --sp3: 16px; --sp4: 24px; --sp5: 32px;
-  --e1: 2px; --e2: 3px; --e3: 5px;                      /* shadow depth: control, panel, window */
+  --lit: #f2cf7e; --e1: 2px; --e2: 3px; --e3: 5px;                      /* shadow depth: control, panel, window */
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
@@ -111,12 +111,13 @@ button:disabled { cursor: wait; opacity: .65; }
 /* A knob's own switch: the one control that belongs to the block rather than to the
    panel, drawn as a small plate straight under the knob. Only rendered for modes
    that can use it; the slot keeps its height either way so whispers line up. */
-.knob-sync-slot { height: 20px; margin-top: 4px; display: flex; justify-content: center; align-items: flex-start; }
+.knob-sync-slot { height: 20px; margin-top: 4px; display: flex; justify-content: center; align-items: flex-start; gap: 4px; }
 .knob-sync { margin: 0; padding: 3px 9px 2px; border: 1px solid #181815; background: #faf9f3; color: #66665e; font: 10px/1 'Terminal', monospace; letter-spacing: .08em; cursor: pointer; white-space: nowrap; }
 .knob-sync:hover { background: #f1eee4; color: #181815; }
 .knob-sync:focus-visible { outline: 2px solid #181815; outline-offset: 1px; }
-.knob-sync.on { background: #181815; color: #faf9f3; }
+.knob-sync.on { background: var(--lit); color: #181815; }
 .mode-selector { padding: 4px 0 9px; }
+.mode-selector.stood-aside { opacity: .35; }
 .mode-selector + .knob-row { border-top: 1px solid #d8d6ca; }
 .micro-label { display: flex; justify-content: space-between; color: #77776f; font: 12px 'Terminal', monospace; letter-spacing: .06em; margin-bottom: 5px; }
 .micro-dots { letter-spacing: 2px; }
@@ -193,16 +194,19 @@ input[type="range"]::-moz-range-track { height: 2px; background: #181815; }
 input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: var(--paper); border: 1.5px solid #181815; border-radius: 0; box-shadow: inset 0 0 0 3px #181815; }
 .notice { margin-top: 8px; border: 1px solid #b9b8ad; background: #faf9f3; padding: 5px 6px; font: 13px/1.05 'Terminal', monospace; }
 .dip-heading { margin-top: 12px; }
-.dips { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; }
+.dips { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
 /* Each switch is a cell of a small table, as in the editor: hairline box, the
    switch inside it, the name under. Three floating things read as an accident. */
 .dip { display: flex; flex-direction: column; align-items: center; gap: 4px; background: #fbfaf5; border: 1px solid #b9b8ad; padding: 7px 2px 5px; font: 10px/1 'Terminal', monospace; color: #66665e; min-width: 0; text-align: center; white-space: normal; }
 .dip:hover { border-color: #181815; }
 .dip[aria-checked="true"] { border-color: #181815; background: #f4f3ec; }
-.dip-track { display: block; position: relative; background: #181815; width: 22px; height: 31px; padding: 2px; }
+.dip-track { display: block; position: relative; background: #181815; border: 1px solid #181815; width: 22px; height: 31px; padding: 2px; }
+/* On is drawn, not just named: the track lights and the block goes dark. */
+.dip-track.on { background: var(--lit); }
+.dip-track.on::before { background: #181815; opacity: .35; }
 .dip-track::before { content: ''; position: absolute; width: 2px; height: 23px; background: #77776f; top: 4px; left: 10px; }
 .dip-track span { position: absolute; left: 4px; bottom: 3px; width: 14px; height: 11px; background: #f7f6ef; border: 1px solid #898981; }
-.dip-track.on span { top: 3px; bottom: auto; background: #fff; }
+.dip-track.on span { top: 3px; bottom: auto; background: #181815; border-color: #181815; }
 .dip[aria-checked="true"] { color: #181815; }
 .balance-row { margin-top: 10px; }
 .tempo-row { margin-top: 9px; opacity: .55; }
@@ -293,7 +297,7 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: va
 .stepper button:hover { background: #4a4a44; }
 .stepper button:focus-visible { outline: 2px solid #181815; outline-offset: 1px; }
 .stepper-cap { color: #66665e; white-space: nowrap; }
-.stepper b { font: 12px 'Terminal', monospace; color: #faf9f3; background: #181815; text-align: center; padding: 3px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stepper b { font: 12px 'Terminal', monospace; color: #181815; background: var(--lit); box-shadow: inset 0 0 0 1px #181815; text-align: center; padding: 3px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* On and off are drawn, not tinted: a filled display means the tide runs. */
 .stepper.off b { color: #77776f; background: #faf9f3; box-shadow: inset 0 0 0 1px #b9b8ad; }
 .stepper.off { background: #f6f5ee; }

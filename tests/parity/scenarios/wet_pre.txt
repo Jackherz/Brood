@@ -1,0 +1,26 @@
+# PRE: the wet side before the looper. A loop caught with a delay running, overdubbed
+# so the echoes land in the take, caught again while playing, then back to beside it.
+rate 48000
+seconds 12
+0 param wetMode 1
+0 param loopMode 1
+0 param routing 2
+0 param clock 0.8
+0 param time 0.4
+0 param modWet 0.6
+0 param mix 0.7
+0 param length 0.8
+0 param wetPre 1
+0 fs wet down
+3 fs wet up
+300 fs loop down
+304 fs loop up
+700 fs loop down
+1200 fs loop up
+1800 param wetMode 0
+2200 fs loop down
+2204 fs loop up
+2600 fs loop down
+2604 fs loop up
+3000 param wetPre 0
+3600 param routing 1

@@ -1,0 +1,16 @@
+# ENV with SOFT: a loop, bursts that retrigger the slice while the last still sounds,
+# LENGTH moving, the switch going off and on again.
+rate 48000
+seconds 8
+0 param loopMode 0
+0 param modLoop 0.85
+0 param length 0.35
+0 param envSoft 1
+300 fs loop down
+304 fs loop up
+900 param length 0.2
+1300 param length 0.5
+1700 param envSync 1
+2000 param envSync 0
+2300 param envSoft 0
+2600 param envSoft 1

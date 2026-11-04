@@ -399,7 +399,7 @@ class BroodCore {
       sync: 0, bpm: 120,
       loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0,
+      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0, wetPre: 0, envSoft: 0,
       envSync: 0,
     };
     // host-rate smoothed knobs
@@ -430,6 +430,8 @@ class BroodCore {
     this.wetOn = false;
     this.freeze = false;
     this.wetMomentary = false;
+    this.dubGain = 0; this.dubPrev = 0; this.dubLast = -1;
+    this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
     this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
     this.decor = [new Allpass(Math.round(113 * CORE_FS / 48000), 0.6), new Allpass(Math.round(337 * CORE_FS / 48000), 0.6)];
@@ -672,7 +674,8 @@ class BroodCore {
     return this.toneC;
   }
 
-  loopTick(x) {
+  // `x` is what the looper listens to; `rec` is what an overdub lays down.
+  loopTick(x, rec) {
     // The detector and overdub use clean input, even when the wet channel is on.
     const fs = CORE_FS;
     const a = Math.abs(x);
@@ -766,27 +769,53 @@ class BroodCore {
       // hit a note repeats until you stop; then the loop carries on in time.
       // LENGTH = slice size (grains → short phrases), MODIFY = sensitivity.
       const thr = expMap(1 - m, 0.008, 0.35);
+      const soft = !!this.p.envSoft;
       if (this.env > thr) {
         if (!this.envGate) {
           this.envGate = true;
+          // SOFT: a new slice while the last is still sounding would jump the read
+          // head, which is the click. The last one is let go over 20 ms.
+          if (soft && this.envMix > 1e-4) { this.softStart = this.slice.start; this.softPh = this.slice.ph; this.softOldS = this.softS; this.softOldFade = 1; }
           this.slice.start = pos;
           this.slice.ph = 0;
         }
         this.envHold = 0.08 * fs;
       } else if (this.envGate && --this.envHold <= 0) this.envGate = false;
-      this.envMix += ((this.envGate ? 1 : 0) - this.envMix) * 0.005;
-      const main = rd(pos) * edgeAt(pos);
+      this.envMix += ((this.envGate ? 1 : 0) - this.envMix) * (soft ? 0.0008 : 0.005);
+      const softF = 0.02 * fs;
+      const mainF = Math.min(soft ? softF : 0.004 * fs, W / 4);
+      let mainEdge = edgeAt(pos);
+      if (soft) {
+        let q = pos % W; if (q < 0) q += W;
+        mainEdge = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, q / mainF, (W - q) / mainF));
+      }
+      const main = rd(pos) * mainEdge;
       let sl = 0;
       if (this.envMix > 1e-4) {
         // ENV slices to a length, so synced LENGTH is a division of the beat,
         // converted into core ticks the same way the delay's is.
         const S = this.p.envSync
-          ? Math.min(W, Math.max(64, syncSecondsRaw(this.p.bpm, this.e.length) * this.clockRatio * fs))
+          ? Math.min(W, Math.max(64, syncSecondsRaw(this.p.bpm, this.e.length) * this.clockRatio * this.fs))
           : Math.min(expMap(this.e.length, 0.01 * fs, 1.0 * fs), W);
         const sl0 = this.slice;
-        if (sl0.ph >= S) sl0.ph -= S;
-        const F2 = Math.min(0.004 * fs, S / 4);
-        sl = rd(sl0.start + sl0.ph) * Math.min(1, sl0.ph / F2, (S - sl0.ph) / F2);
+        if (soft) {
+          // The slice length glides, so a moving LENGTH can't cut a fade short.
+          this.softS = this.softS <= 0 ? S : this.softS + (S - this.softS) * 0.0005;
+          if (sl0.ph >= this.softS) sl0.ph -= this.softS;
+          const F3 = Math.min(softF, this.softS / 4);
+          sl = rd(sl0.start + sl0.ph) * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3)));
+          if (this.softOldFade > 0) {
+            const F4 = Math.min(softF, this.softOldS / 4);
+            const shape = 0.5 - 0.5 * Math.cos(Math.PI * clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1));
+            sl += rd(this.softStart + this.softPh) * shape * (0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade));
+            this.softPh += lstep;
+            this.softOldFade = Math.max(0, this.softOldFade - 1 / softF);
+          }
+        } else {
+          if (sl0.ph >= S) sl0.ph -= S;
+          const F2 = Math.min(0.004 * fs, S / 4);
+          sl = rd(sl0.start + sl0.ph) * Math.min(1, sl0.ph / F2, (S - sl0.ph) / F2);
+        }
         sl0.ph += lstep;
       }
       y = main * (1 - this.envMix) + sl * this.envMix;
@@ -800,24 +829,43 @@ class BroodCore {
       pos += 0.006 * Math.sin(this.wowPh) + 0.002 * Math.sin(this.wowPh * 5.7);
     }
 
-    if (this.overdub) {
+    // Overdub fades in and out over about 8 ms, because a hard start or stop is a step
+    // recorded into the take, there on every pass from then on. It also writes every
+    // cell the head crosses, once: at any speed but 1x a single write per tick left
+    // gaps or stacked layers, and those were clicks too.
+    this.dubGain += ((this.overdub ? 1 : 0) - this.dubGain) * 0.002;
+    if (this.dubGain > 1e-4) {
       // FADE: how much of the old loop survives each overdub pass. 0 keeps the
       // pedal's slow decay; 1 lets the new layer replace it completely.
-      const keep = 0.97 * (1 - clamp(this.s.fade));
+      const keep = 1 - (1 - 0.97 * (1 - clamp(this.s.fade))) * this.dubGain;
       let q = Math.floor(mode === 1 ? this.loopPos : pos) % W; if (q < 0) q += W;
-      const wi = Math.min(len - 1, Math.max(0, Math.round(this.startB) + q));
-      buf[wi] = buf[wi] * keep + x;
-    }
+      const write = (cellQ, v) => {
+        const wi = Math.min(len - 1, Math.max(0, Math.round(this.startB) + cellQ));
+        buf[wi] = buf[wi] * keep + v * this.dubGain;
+      };
+      if (this.dubLast < 0) write(q, rec);
+      else {
+        let d = q - this.dubLast;
+        if (d * 2 > W) d -= W; else if (d * 2 < -W) d += W;
+        const count = Math.min(Math.abs(d), 16), dir = d > 0 ? 1 : -1;
+        for (let k = 1; k <= count; k++) write(((this.dubLast + dir * k) % W + W) % W, this.dubPrev + (rec - this.dubPrev) * k / count);
+      }
+      this.dubLast = q; this.dubPrev = rec;
+    } else this.dubLast = -1;
     this.loopPos = ((pos % W) + W) % W;
     return y * this.loopGain;
   }
 
   coreTick(x) {
     const p = this.p, e = this.e;
-    const loopOut = this.loopTick(x);
+    // PRE: input, then wet, then loop, so the wet side is recorded into whatever the
+    // looper keeps. It comes first, so it hears only the input and ROUTING stands
+    // aside: feeding the loop to a wet side that feeds the loop would never settle.
+    const pre = !!p.wetPre;
+    let loopOut = pre ? 0 : this.loopTick(x, x);
 
     // Routing only changes the wet input when the loop is playing.
-    const wetSrc = this.loopState !== 'play' ? x : p.routing === 0 ? x : p.routing === 1 ? x + loopOut : loopOut;
+    const wetSrc = pre || this.loopState !== 'play' ? x : p.routing === 0 ? x : p.routing === 1 ? x + loopOut : loopOut;
     // The FREEZE switch is the hold gesture without the holding: it brings the wet
     // side up and freezes it, so a reverb can be left ringing on its own.
     const held = p.freeze > 0.5;
@@ -887,6 +935,7 @@ class BroodCore {
       wr += (this.toneR - wr) * toneAmt;
     }
     wl *= this.wetOut; wr *= this.wetOut;
+    if (pre) loopOut = this.loopTick(x, softClip(x + (wl + wr) * 0.5));
 
     // The history always advances, whether or not a loop is playing: pausing it
     // left a splice in the buffer, and every extra tap stitched in another one,
@@ -894,7 +943,7 @@ class BroodCore {
     // dry input is recorded — feeding the loop back would be a feedback path —
     // and while listening the live wet channel is caught as well, as before.
     const listening = this.loopState === 'off';
-    this.hist[this.histW] = softClip(x + (listening ? (wl + wr) * 0.5 : 0));
+    this.hist[this.histW] = softClip(x + (listening || pre ? (wl + wr) * 0.5 : 0));
     if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
     if (this.histCount < this.hist.length) this.histCount++;
 
