@@ -403,6 +403,17 @@ int main() {
         CHECK(resets(bouncy) == 0, "BOUNCE removes the snap-back (%zu)", resets(bouncy));
         CHECK(rising(bouncy) > 0.3 && rising(bouncy) < 0.7, "and turns it into a tide (%.2f)", rising(bouncy));
     }
+    {   // HOLD: the generator stops where it is, then carries on from the same place
+        brood::Core c; c.p.rampWet = 0.2; c.p.rampSpeed = 0.5; c.prepare(FS);
+        render(c, 0.7, [](double) { return 0.0; });
+        const double before = c.rampValue(0);
+        c.p.rampHold = true;
+        render(c, 0.7, [](double) { return 0.0; });
+        CHECK(c.rampValue(0) == before, "HOLD stops the ramp (%.4f, %.4f)", before, c.rampValue(0));
+        c.p.rampHold = false;
+        render(c, 0.1, [](double) { return 0.0; });
+        CHECK(c.rampValue(0) != before, "and it runs again when released");
+    }
     {   // POLARITY: unipolar never dips under the knob
         auto range = [](bool uni) {
             brood::Core c; c.p.rampWet = 0.2; c.p.rampUni = uni; c.p.time = 0.5; c.p.rampSpeed = 0.5;

@@ -399,7 +399,7 @@ class BroodCore {
       sync: 0, bpm: 120,
       loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0,
+      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0,
       envSync: 0,
     };
     // host-rate smoothed knobs
@@ -631,6 +631,8 @@ class BroodCore {
     for (let k = 0; k < 2; k++) {
       const g = this.ramp[k];
       if (rampTargetIndex(k === 0 ? this.p.rampWet : this.p.rampLoop) === 0) { this.rampRaw[k] = 0; continue; }
+      // HOLD stops the phase: the knob stays pushed wherever the tide had got to.
+      if (this.p.rampHold) { this.rampRaw[k] = this.rampShape(g, wave); continue; }
       g.ph += rate * g.dir;
       if (g.ph >= 1) {
         if (this.p.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }

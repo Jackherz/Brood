@@ -651,7 +651,7 @@ BroodEditor::BroodEditor(BroodProcessor& p) : AudioProcessorEditor(p), proc(p), 
     rampRateAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "rampSpeed", rampRate);
     // The two dips that bend the shape, the polarity that keeps it above the knob,
     // and the switch that hands the rate to the tempo instead.
-    const std::pair<const char*, const char*> rampSwitchDefs[] = {{"rampUni", "UNI"}, {"bounce", "BOUNCE"}, {"sweep", "SWEEP"}, {"rampSync", "SYNC"}};
+    const std::pair<const char*, const char*> rampSwitchDefs[] = {{"rampUni", "UNI"}, {"bounce", "BOUNCE"}, {"sweep", "SWEEP"}, {"rampSync", "SYNC"}, {"rampHold", "HOLD"}};
     for (size_t i = 0; i < rampSwitches.size(); ++i) {
         auto& rs = rampSwitches[i];
         const juce::String lab = rampSwitchDefs[i].second;
@@ -932,9 +932,11 @@ void BroodEditor::resized() {
     place(rampRate, rampRateDesign.withTrimmedLeft(36).withTrimmedRight(40).reduced(0, 3));
     ramp.removeFromTop(5);
     rampRow = ramp.removeFromTop(26);
-    const int swCell = rampRow.getWidth() / static_cast<int>(rampSwitches.size());
+    // Five cells, sized to their words: BOUNCE needs more room than UNI.
+    const int swWeights[] = {50, 70, 64, 56, 57};
+    const int swTotal = rampRow.getWidth();
     for (size_t i = 0; i < rampSwitches.size(); ++i) {
-        rampSwitchDesign[i] = rampRow.removeFromLeft(swCell);
+        rampSwitchDesign[i] = i + 1 == rampSwitches.size() ? rampRow : rampRow.removeFromLeft(swTotal * swWeights[i] / 297);
         place(*rampSwitches[i].button, rampSwitchDesign[i]);
     }
 
@@ -1006,9 +1008,10 @@ void BroodEditor::rebuildHoverHelp() {
         "the swing reflects instead of snapping back, so nothing jumps.",
         "the shape is ignored and the knob just climbs, again and again.",
         "the rate becomes a division of the beat: eight bars down to a sixteenth.",
+        "both tides stop where they are and the knobs stay pushed there. CC 52 does the same.",
     };
-    static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP", "MOD SYNC"};
-    for (int i = 0; i < 4; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
+    static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP", "MOD SYNC", "MOD HOLD"};
+    for (int i = 0; i < 5; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left is the pedal's own buffer, which shrinks as CLOCK drops.");
     add(loopViewDesign, "START / END", "drag a marker to trim what plays; START keeps the end where it is. double-click opens the whole take. moves crossfade, so they do not click.");

@@ -317,6 +317,7 @@ the effect. Changes are applied at audio-block boundaries:
 | --- | --- |
 | 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
 | 20 | Ramp speed (the pedal's own automation target) |
+| 52 | Hold the ramps: both stop where they are (`0` running, `1–127` held) |
 | 66, 67 | Bounce, Sweep (`0` off, `1–127` on) |
 | 53, 54 | Wet and loop clock division |
 | 71 | Classic mode (`0` off, `1–127` on) |
@@ -366,7 +367,7 @@ Nothing is rounded, nothing is dashed, and nothing is a tint of a colour that is
 not in the palette.
 
 The browser version does not receive MIDI. MIDI clock sync, expression/CV, synth
-mode, MISO, true bypass, the direct micro-loop blend and the remaining hardware
+mode, MISO, true bypass and the remaining hardware
 DIP switches are not implemented. Automatable native parameters are
 available to the host; the wet/loop footswitch parameters are momentary controls.
 

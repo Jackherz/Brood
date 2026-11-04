@@ -431,6 +431,7 @@ struct Params {
     bool rampUni = false, bounce = false, sweep = false;
     bool envSync = false;                           // ENV slice follows the tempo
     bool rampSync = false;                          // modulation rate follows the tempo
+    bool rampHold = false;                          // both generators stop where they are
 };
 
 struct State {
@@ -768,7 +769,8 @@ private:
 
     // Advance both generators. Once per host sample, not per core tick: the ramp is
     // a time function, so turning CLOCK down must not slow it down. BOUNCE
-    // ping-pongs the phase instead of letting it reset.
+    // ping-pongs the phase instead of letting it reset. HOLD stops the phase, so the
+    // knob stays pushed wherever the tide had got to and picks up from there.
     void rampTick() {
         // Free-running by default; synced, one cycle is a musical span instead.
         const double hz = p.rampSync ? 1.0 / rampCycleSeconds(p.bpm, s.rampSpeed) : rampHertz(s.rampSpeed);
@@ -777,6 +779,7 @@ private:
         for (int k = 0; k < 2; ++k) {
             Ramp& g = ramp[k];
             if (rampTargetIndex(k == 0 ? p.rampWet : p.rampLoop) == 0) { rampRaw[k] = 0; continue; }
+            if (p.rampHold) { rampRaw[k] = rampShape(g, wave); continue; }
             g.ph += rate * g.dir;
             if (g.ph >= 1) {
                 if (p.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }

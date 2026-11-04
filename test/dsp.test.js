@@ -419,6 +419,24 @@ test('a synced modulation span is measured against the tempo, not the clock', ()
   assert.ok(syncSecondsRaw(40, 1) > 2, 'raw divisions are not clamped to the delay');
 });
 
+test('rampHold stops both generators and they carry on from the same place', () => {
+  const core = new BroodCore(FS);
+  core.setParam('rampWet', 1 / 6);
+  core.setParam('rampLoop', 1 / 6);
+  const run = (seconds) => {
+    const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+    for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) core.process(inp, oL, oR);
+  };
+  run(0.7);
+  const phases = [core.ramp[0].ph, core.ramp[1].ph];
+  core.setParam('rampHold', 1);
+  run(0.7);
+  assert.deepEqual([core.ramp[0].ph, core.ramp[1].ph], phases);
+  core.setParam('rampHold', 0);
+  run(0.1);
+  assert.notEqual(core.ramp[0].ph, phases[0]);
+});
+
 test('rampSync hands the rate to the tempo and free mode takes it back', () => {
   // Count how often the generator wraps: the phase only ever jumps backwards.
   const turns = (rampSync, rampSpeed, bpm, seconds) => {

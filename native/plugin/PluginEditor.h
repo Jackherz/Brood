@@ -143,7 +143,7 @@ private:
     juce::Slider rampRate;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rampRateAtt;
     struct RampSwitch { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<RampSwitch, 4> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC
+    std::array<RampSwitch, 5> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC, HOLD
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
     juce::ToggleButton wetSync, envSync;
@@ -177,7 +177,7 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[4], presetBoxDesign;
+    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBoxDesign;
     juce::Rectangle<int> rampWetDesign, rampLoopDesign, rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

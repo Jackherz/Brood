@@ -49,7 +49,7 @@ const BASE = {
   trails: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0, envSync: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0,
+  rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0,
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', params: BASE },
@@ -109,7 +109,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'envSync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'envSync', 'rampUni', 'bounce', 'sweep', 'rampSync', 'rampHold', 'freeze', 'classic'].includes(key)) out[key] = input[key] ? 1 : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -158,7 +158,7 @@ function describe(id, p) {
   if (id === 'rampWet' || id === 'rampLoop') return RAMP_TARGETS[rampIndex(v, RAMP_TARGETS)];
   if (id === 'rampWave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES)];
   if (id === 'rampSpeed') return p.rampSync ? `${rampDivLabel(v)} · ${timeText(rampCycleSeconds(p.bpm, v))} A TURN` : rampHint(v);
-  if (id === 'rampUni' || id === 'bounce' || id === 'sweep' || id === 'rampSync') return v ? 'ON' : 'OFF';
+  if (id === 'rampUni' || id === 'bounce' || id === 'sweep' || id === 'rampSync' || id === 'rampHold') return v ? 'ON' : 'OFF';
   if (id === 'envSync') return v ? 'TEMPO' : 'FREE';
   if (id === 'freeze') return v ? 'HELD, RINGING' : 'MOVING';
   return percent(v);
@@ -558,7 +558,8 @@ function RampPanel({ params, onChange, help }) {
       {[['rampUni', 'UNI', 'the swing sits above the knob instead of either side of it.'],
         ['bounce', 'BOUNCE', 'the swing reflects instead of snapping back, so nothing jumps.'],
         ['sweep', 'SWEEP', 'the shape is ignored and the knob just climbs, again and again.'],
-        ['rampSync', 'SYNC', 'the rate stops being a free speed and becomes a division of the beat: eight bars down to a sixteenth, so a slow tempo turns slowly.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => onChange(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
+        ['rampSync', 'SYNC', 'the rate stops being a free speed and becomes a division of the beat: eight bars down to a sixteenth, so a slow tempo turns slowly.'],
+        ['rampHold', 'HOLD', 'both tides stop where they are, and the knobs stay pushed there. switch it off and they carry on from the same place.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => onChange(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
     </div>
   </div>;
 }
@@ -808,7 +809,7 @@ function App() {
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
-          <div><dt>MODULATION <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over; <b>SYNC</b> makes a turn a division of the beat — eight bars down to a sixteenth — so the drift walks with the tempo instead of against it. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
+          <div><dt>MODULATION <span>/ both channels</span></dt><dd>Two function generators, one per side. Each steps through what it drives — TIME, MIX, LENGTH, MODIFY, CLOCK or BALANCE — and writes into it on top of where that knob sits, so the knob still sets the middle of the swing. SHAPE picks the tide (triangle, square, sine, random, smooth random), RATE sets how slowly it turns, and UNI keeps it above the knob instead of either side. <b>BOUNCE</b> reflects the swing so it never snaps back; <b>SWEEP</b> drops the shape and just climbs, over and over; <b>SYNC</b> makes a turn a division of the beat — eight bars down to a sixteenth — so the drift walks with the tempo instead of against it; <b>HOLD</b> stops both tides where they are until you let them go. Two generators can run against each other: the wet side drifting up while the loop drifts down is most of what this pedal is for.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>

@@ -31,7 +31,9 @@ int main() {
     m.addEvent(juce::MidiMessage::controllerEvent(1, 15, 100), 0);
     m.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
     m.addEvent(juce::MidiMessage::controllerEvent(1, 75, 1), 0);
+    m.addEvent(juce::MidiMessage::controllerEvent(1, 52, 127), 0);
     b.clear(); process(p, b, m);
+    CHECK(p.apvts.getRawParameterValue("rampHold")->load() == 1.f, "MIDI CC 52 holds the ramps");
     CHECK(std::fabs(p.apvts.getRawParameterValue("mix")->load() - 100.f / 127.f) < 0.001f, "MIDI CC 15 controls MIX");
     CHECK(p.ui.wetOn.load(), "MIDI CC 103 engages wet at value 1");
     CHECK(p.apvts.getRawParameterValue("trails")->load() == 1.f, "MIDI switches accept value 1");

@@ -31,6 +31,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     else if (n == "rampUni") p.rampUni = v != 0; else if (n == "bounce") p.bounce = v != 0;
     else if (n == "sweep") p.sweep = v != 0;
     else if (n == "rampSync") p.rampSync = v != 0;
+    else if (n == "rampHold") p.rampHold = v != 0;
     else if (n == "envSync") p.envSync = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }
 }

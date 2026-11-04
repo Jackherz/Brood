@@ -8,10 +8,8 @@ Tempo sync is done (rounds 15 and 16): the wet side, ENV and the modulation rate
 each follow the host clock, with a switch of their own in the place the block
 lives. What is left of the pedal's own list:
 
-- **DIRECT MICRO-LOOP blend** — how much of the *unprocessed* loop reaches the
-  output, mixed in beside the wet side.
-- **CC 52** stops a running ramp; the MIDI map currently reaches every other
-  ramp control.
+Nothing. Round 20 closed the last two: CC 52 and the direct loop blend, which
+WET / LOOP already does (below).
 
 ## Ideas still open (noted 2026-11-03)
 
@@ -85,6 +83,12 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 20: **the ramps can hold.** CC 52 stops both generators where they are, and
+  a HOLD switch in the modulation panel shows it and does the same, so a controller
+  can never freeze the modulation invisibly. Both cores agree (`ramps.txt`). The
+  DIRECT MICRO-LOOP blend came off the list without any code: the left half of WET /
+  LOOP already sets how much of the unprocessed loop reaches the output, with the
+  wet side at full, and a second control would only duplicate it.
 - Round 19: **the browser panel catches up.** START and END are markers on the
   browser's waveform too (drag, press to jump the nearer one, double-click for the
   whole take, arrows from the keyboard); MEMORY is the one trim slider left; SYNC

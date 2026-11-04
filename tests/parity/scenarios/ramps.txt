@@ -34,3 +34,8 @@ seconds 16
 640 param rampWet 0
 680 param rampLoop 0
 700 param rampUni 0
+720 param rampWet 0.2
+720 param rampLoop 0.67
+760 param rampHold 1
+820 param rampWave 0.5
+880 param rampHold 0

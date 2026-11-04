@@ -70,6 +70,7 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("bounce", 1), "Dip: Bounce", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("sweep", 1), "Dip: Sweep", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("rampSync", 1), "Modulation follows the tempo", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("rampHold", 1), "Modulation held", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV slice follows the tempo", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
@@ -170,6 +171,7 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         return fmtTime(1.0 / brood::rampHertz(v)) + " a turn";
     }
     if (id == "rampSync") return v > 0.5f ? "follows the tempo" : "free rate";
+    if (id == "rampHold") return v > 0.5f ? "held where it is" : "running";
     if (id == "envSync") return v > 0.5f ? "slice follows the tempo" : "free slice";
     if (id == "wetDiv" || id == "loopDiv") {
         const int div = brood::divMap(v);
@@ -252,6 +254,7 @@ void BroodProcessor::pullParams() {
     p.rampWave = param("rampWave");
     p.rampUni = param("rampUni") > 0.5f; p.bounce = param("bounce") > 0.5f; p.sweep = param("sweep") > 0.5f;
     p.rampSync = param("rampSync") > 0.5f;
+    p.rampHold = param("rampHold") > 0.5f;
     p.envSync = param("envSync") > 0.5f;
     p.bpm = hostBpm_.load();
     coreRight_.p = p;
@@ -337,6 +340,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (cc == 67) { if (auto* parameter = apvts.getParameter("sweep")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 52) id = "rampHold";
             else if (cc == 71) id = "classic";
             else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
