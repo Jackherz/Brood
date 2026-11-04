@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { BroodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/brood-worklet.js');
+const { BroodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/brood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -277,18 +277,20 @@ test('wet input ignores routing when the loop is listening', () => {
   assert.ok(rms(L, 0.5, 1) > 0.01, 'wet receives input even in LOOP routing when looper is off');
 });
 
-test('listening history includes wet ambience and overdubs use clean input', () => {
-  const run = (wet) => {
+test('the history is clean unless PRE puts the wet side ahead of the looper', () => {
+  const run = (wetPre) => {
     const core = new BroodCore(FS);
     core.setParam('wetMode', 1); core.setParam('time', 0.2); core.setParam('modWet', 0.9);
-    if (wet) { core.footswitch('wet', 'down'); core.footswitch('wet', 'up'); }
+    core.setParam('wetPre', wetPre);
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
     render(core, 1.0, tone(330, 0.15));
     let energy = 0;
-    // Recent history after the dry tone has stopped should contain the wet repeats.
+    // Recent history after the dry tone has stopped holds only the wet repeats.
     for (let i = 35000; i < 60000; i++) energy += core.hist[i] * core.hist[i];
     return energy;
   };
-  assert.ok(run(true) > run(false) + 0.1, 'wet delay is captured by the listening looper');
+  assert.ok(run(1) > 0.1, 'with PRE the looper hears the repeats');
+  assert.strictEqual(run(0), 0, 'without it, only the input');
 });
 
 test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => {
@@ -419,32 +421,30 @@ test('a synced modulation span is measured against the tempo, not the clock', ()
   assert.ok(syncSecondsRaw(40, 1) > 2, 'raw divisions are not clamped to the delay');
 });
 
-test('rampHold stops both generators and they carry on from the same place', () => {
+test('HOLD stops a source and it carries on from the same place', () => {
   const core = new BroodCore(FS);
-  core.setParam('rampWet', 1 / 6);
-  core.setParam('rampLoop', 1 / 6);
   const run = (seconds) => {
     const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
     for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) core.process(inp, oL, oR);
   };
   run(0.7);
   const phases = [core.ramp[0].ph, core.ramp[1].ph];
-  core.setParam('rampHold', 1);
+  core.setParam('mod1Hold', 1); core.setParam('mod2Hold', 1);
   run(0.7);
   assert.deepEqual([core.ramp[0].ph, core.ramp[1].ph], phases);
-  core.setParam('rampHold', 0);
+  core.setParam('mod1Hold', 0); core.setParam('mod2Hold', 0);
   run(0.1);
   assert.notEqual(core.ramp[0].ph, phases[0]);
 });
 
-test('rampSync hands the rate to the tempo and free mode takes it back', () => {
+test('a source\'s SYNC hands its rate to the tempo and free mode takes it back', () => {
   // Count how often the generator wraps: the phase only ever jumps backwards.
   const turns = (rampSync, rampSpeed, bpm, seconds) => {
     const core = new BroodCore(FS);
-    core.setParam('rampWet', 1 / 6);          // TIME, the first target list entry after OFF
-    core.setParam('rampWave', 0);
-    core.setParam('rampSpeed', rampSpeed);
-    core.setParam('rampSync', rampSync);
+    core.setParam('mod1_time', 0.5);
+    core.setParam('mod1Wave', 0);
+    core.setParam('mod1Rate', rampSpeed);
+    core.setParam('mod1Sync', rampSync);
     core.setParam('bpm', bpm);
     let wraps = 0, prev = core.ramp[0].ph;
     const n = Math.ceil((seconds * FS) / BLOCK);
@@ -826,7 +826,7 @@ function rampTrace(patch, seconds, field = 'time') {
 const rminmax = (a) => [Math.min(...a), Math.max(...a)];
 const wrapsIn = (seconds, speed) => {
   const core = new BroodCore(FS);
-  core.setParam('rampWet', 0.2); core.setParam('rampSpeed', speed);
+  core.setParam('mod1_time', 0.5); core.setParam('mod1Rate', speed);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   let wraps = 0, last = core.ramp[0].ph;
   for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) {
@@ -837,36 +837,45 @@ const wrapsIn = (seconds, speed) => {
   return wraps;
 };
 
-test('RAMPS destinations and waveforms are the documented lists', () => {
-  assert.deepStrictEqual(RAMP_TARGETS, ['OFF', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE']);
+test('the modulation targets and shapes are the documented lists', () => {
+  assert.deepStrictEqual(MOD_TARGETS, ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance']);
   assert.deepStrictEqual(RAMP_WAVES, ['TRI', 'SQR', 'SIN', 'RND', 'SMTH']);
-  assert.deepStrictEqual([0, 1].map(rampTargetIndex), [0, 6]);
-  assert.deepStrictEqual([0, 1].map(rampWaveIndex), [0, 4]);
+  RAMP_WAVES.forEach((_, i) => assert.strictEqual(rampWaveIndex(i / (RAMP_WAVES.length - 1)), i));
+  assert.strictEqual(rampWaveIndex(-4), 0);
+  assert.strictEqual(rampWaveIndex(4), RAMP_WAVES.length - 1);
 });
 
-test('every ramp stop survives the index <-> value round trip', () => {
-  // The ramp parameters are plain 0..1 floats with `count` stops. The plugin
-  // editor used to hand the index straight to the parameter, so only "off" and
-  // the first entry were reachable; this pins the conversion the engine and
-  // both editors share: value = index / (count - 1).
-  const cases = [[RAMP_TARGETS, rampTargetIndex], [RAMP_WAVES, rampWaveIndex]];
-  for (const [names, indexOf] of cases) {
-    const n = names.length;
-    for (let i = 0; i < n; i++) {
-      const v = i / (n - 1);
-      assert.strictEqual(indexOf(v), i, `${names[i]} (${i}/${n - 1}) reads back as ${i}`);
-    }
-    assert.deepStrictEqual([0, 1].map(indexOf), [0, n - 1], `${n} stops span 0..1`);
-  }
-  assert.strictEqual(rampTargetIndex(-4), 0, 'below 0 clamps to off');
-  assert.strictEqual(rampTargetIndex(4), 6, 'above 1 clamps to balance');
-  assert.strictEqual(RAMP_TARGETS[0], 'OFF', 'the first ramp target is off');
+test('one source moves several controls by its own depth, and a negative depth inverts', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ time: 0.5, mix: 0.5, length: 0.5, mod1_time: 0.4, mod1_mix: -0.4, mod1_length: 0.1, mod1Wave: 0.5 })) core.setParam(k, v);
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+  for (let b = 0; b < Math.ceil((1 * FS) / BLOCK); b++) core.process(inp, L, R);   // the knobs settle
+  const t = [], m = [], l = [];
+  for (let b = 0; b < Math.ceil((5 * FS) / BLOCK); b++) { core.process(inp, L, R); t.push(core.e.time); m.push(core.e.mix); l.push(core.e.length); }
+  const spread = (a) => Math.max(...a) - Math.min(...a);
+  assert.ok(Math.abs(spread(t) - 0.8) < 0.05, `depth 0.4 swings 0.8 (${spread(t).toFixed(3)})`);
+  assert.ok(Math.abs(spread(l) - 0.2) < 0.03, `depth 0.1 swings 0.2 (${spread(l).toFixed(3)})`);
+  const later = t.length - 1;
+  assert.ok(Math.abs((t[later] - 0.5) + (m[later] - 0.5)) < 1e-6, 'the inverted route mirrors the other');
+});
+
+test('each source has its own rate, and muting one lets its knobs come home', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ mod1_time: 0.4, mod2_modLoop: 0.4, mod1Rate: 0.2, mod2Rate: 0.9, time: 0.5, modLoop: 0.5 })) core.setParam(k, v);
+  const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
+  const run = (seconds) => { for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) core.process(inp, L, R); };
+  const ph0 = core.ramp.map((g) => g.ph);
+  run(0.1);
+  assert.ok(Math.abs(core.ramp[1].ph - ph0[1]) > 4 * Math.abs(core.ramp[0].ph - ph0[0]), 'two rates');
+  core.setParam('mod1On', 0);
+  run(0.5);
+  assert.ok(Math.abs(core.e.time - 0.5) < 1e-3, `muted, TIME is the knob (${core.e.time})`);
 });
 
 test('a ramp moves its control and stops where the knob says', () => {
-  const still = rampTrace({ rampWet: 0, time: 0.6 }, 2);
+  const still = rampTrace({ time: 0.6 }, 2);
   assert.ok(Math.abs(still[still.length - 1] - 0.6) < 1e-6, 'off is the knob, untouched');
-  const moved = rampTrace({ rampWet: 0.2, time: 0.6 }, 4);
+  const moved = rampTrace({ mod1_time: 0.5, time: 0.6 }, 4);
   const [lo, hi] = rminmax(moved);
   assert.ok(hi - lo > 0.6, `TIME should sweep (${lo.toFixed(2)}..${hi.toFixed(2)})`);
   assert.ok(hi <= 1 && lo >= 0, 'stays inside the knob range');
@@ -875,7 +884,7 @@ test('a ramp moves its control and stops where the knob says', () => {
 });
 
 test('each waveform has its own shape', () => {
-  const shapes = RAMP_WAVES.map((_, w) => rampTrace({ rampWet: 0.2, rampWave: w / 4, time: 0.5 }, 6));
+  const shapes = RAMP_WAVES.map((_, w) => rampTrace({ mod1_time: 0.5, mod1Wave: w / 4, time: 0.5 }, 6));
   const [tri, sqr, sin, rnd, smth] = shapes;
   const ends = (a) => a.filter((v) => v < 0.15 || v > 0.85).length / a.length;
   const middle = (a) => a.filter((v) => Math.abs(v - 0.5) < 0.15).length / a.length;
@@ -900,7 +909,7 @@ test('RAMP SPEED is a rate in hertz, and the CLOCK does not change it', () => {
   assert.ok(rampHz(0.5) > 0.5 && rampHz(0.5) < 0.8, 'mid speed is about 0.6 Hz');
   for (const clock of [0, 0.5, 1]) {
     const core = new BroodCore(FS);
-    core.setParam('rampWet', 0.2); core.setParam('rampSpeed', 0.5); core.setParam('clock', clock);
+    core.setParam('mod1_time', 0.5); core.setParam('mod1Rate', 0.5); core.setParam('clock', clock);
     const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
     let wraps = 0, last = core.ramp[0].ph;
     for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) {
@@ -926,8 +935,8 @@ function rawTrace(patch, seconds) {
 }
 
 test('SWEEP is a one-way climb and BOUNCE takes the snap out of it', () => {
-  const saw = rawTrace({ rampWet: 0.2, sweep: 1, time: 0.5 }, 8);
-  const bouncy = rawTrace({ rampWet: 0.2, sweep: 1, bounce: 1, time: 0.5 }, 8);
+  const saw = rawTrace({ mod1_time: 0.5, mod1Sweep: 1, time: 0.5 }, 8);
+  const bouncy = rawTrace({ mod1_time: 0.5, mod1Sweep: 1, mod1Bounce: 1, time: 0.5 }, 8);
   const resets = (a) => a.filter((v, i) => i > 0 && v < a[i - 1] - 0.5).length;
   const rising = (a) => a.filter((v, i) => i > 0 && v > a[i - 1]).length / (a.length - 1);
   assert.ok(resets(saw) >= 2, `the sweep climbs and starts again (${resets(saw)} resets)`);
@@ -937,8 +946,8 @@ test('SWEEP is a one-way climb and BOUNCE takes the snap out of it', () => {
 });
 
 test('POLARITY: unipolar only ever adds to the knob', () => {
-  const bi = rampTrace({ rampWet: 0.2, time: 0.5 }, 6);
-  const uni = rampTrace({ rampWet: 0.2, time: 0.5, rampUni: 1 }, 6);
+  const bi = rampTrace({ mod1_time: 0.5, time: 0.5 }, 6);
+  const uni = rampTrace({ mod1_time: 0.5, time: 0.5, mod1Uni: 1 }, 6);
   assert.ok(rminmax(uni)[0] >= 0.5 - 0.01, `unipolar never goes under the knob (${rminmax(uni)[0].toFixed(2)})`);
   assert.ok(rminmax(uni)[1] > 0.8, 'and still reaches the top');
   assert.ok(rminmax(bi)[0] < 0.3, 'bipolar goes both ways');
@@ -946,22 +955,22 @@ test('POLARITY: unipolar only ever adds to the knob', () => {
 
 test('the two generators are independent, and MODIFY means this channel', () => {
   const spread = (a) => rminmax(a)[1] - rminmax(a)[0];
-  const wetOnly = rampTrace({ rampWet: 0.2, rampLoop: 0, time: 0.5, modLoop: 0.5 }, 4);
+  const wetOnly = rampTrace({ mod1_time: 0.5, time: 0.5, modLoop: 0.5 }, 4);
   assert.ok(spread(wetOnly) > 0.5, 'the wet generator moves TIME');
   // The wet ramp must leave the loop's MODIFY alone.
   const loopStill = [];
   const core = new BroodCore(FS);
-  core.setParam('rampWet', 0.2); core.setParam('modLoop', 0.5);
+  core.setParam('mod1_time', 0.5); core.setParam('modLoop', 0.5);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) { core.process(inp, L, R); loopStill.push(core.e.modLoop); }
   assert.ok(spread(loopStill) < 1e-6, 'the wet ramp does not touch the loop');
   // The loop generator pointed at MODIFY drives the loop's own MODIFY.
-  const loopRamp = rampTrace({ rampWet: 0, rampLoop: 0.67, modLoop: 0.5 }, 4, 'modLoop');
+  const loopRamp = rampTrace({ mod2_modLoop: 0.5, modLoop: 0.5 }, 4, 'modLoop');
   assert.ok(spread(loopRamp) > 0.5, 'the loop generator moves loop MODIFY');
   // Both at once: two different controls, two different phases.
   const both = [];
   const c2 = new BroodCore(FS);
-  c2.setParam('rampWet', 0.2); c2.setParam('rampLoop', 0.67);
+  c2.setParam('mod1_time', 0.5); c2.setParam('mod2_modLoop', 0.5);
   for (let b = 0; b < Math.ceil((4 * FS) / BLOCK); b++) { c2.process(inp, L, R); both.push([c2.e.time, c2.e.modLoop]); }
   const timeSpread = spread(both.map((v) => v[0])), modSpread = spread(both.map((v) => v[1]));
   assert.ok(timeSpread > 0.5 && modSpread > 0.5, 'both run together');
@@ -974,7 +983,7 @@ test('with every ramp off the audio is bit-identical to before the engine existe
   const one = render(a, 1, tone(220, 1));
   const b = new BroodCore(FS);
   b.setParam('wetMode', 0); b.setParam('mix', 0.8); b.wetOn = true; b.s.mix = 0.8;
-  b.setParam('rampWet', 0); b.setParam('rampLoop', 0); b.setParam('rampSpeed', 1);
+  b.setParam('mod1Rate', 1);
   const two = render(b, 1, tone(220, 1));
   assert.deepStrictEqual(Array.from(one.L), Array.from(two.L));
 });
@@ -982,7 +991,7 @@ test('with every ramp off the audio is bit-identical to before the engine existe
 test('a TIME ramp makes the echo breathe', () => {
   const core = new BroodCore(FS);
   core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.55);
-  core.setParam('time', 0.4); core.setParam('rampWet', 0.2); core.setParam('rampSpeed', 0.35);
+  core.setParam('time', 0.4); core.setParam('mod1_time', 0.5); core.setParam('mod1Rate', 0.35);
   core.wetOn = true; core.s.mix = 1; core.modeGain = [0, 1, 0, 0];
   const { L } = render(core, 4, click);
   assert.ok(finite(L), 'stays finite while the ramp moves the delay');
@@ -1295,4 +1304,17 @@ test('overdub leaves no step in the take, at any tape speed', () => {
     const step = worstStep(m);
     assert.ok(step < 0.06, `${name}: worst step ${step.toFixed(4)}`);
   }
+});
+
+test('GAIN sets the loop level in dB and leaves the dry side alone', () => {
+  const level = (loopDb) => {
+    const core = new BroodCore(FS);
+    core.setParam('loopMode', 1); core.setParam('balance', 1); core.setParam('modLoop', 0.66); core.setParam('loopDb', loopDb);
+    const { L } = render(core, 3, tone(220, 1), { [blk(1)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); } });
+    return rms(L, 2, 3);
+  };
+  const flat = level(0);
+  assert.ok(flat > 0.01, 'the loop plays');
+  assert.ok(Math.abs(level(-6) / flat - 0.501) < 0.03, '-6 dB is half');
+  assert.ok(level(-24) < flat * 0.1, '-24 dB nearly gone');
 });

@@ -42,14 +42,16 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Dip: Trails", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Dip: Smooth clock", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Dip: Tempo sync", false));
-          auto loopParam = [this](const char* id, const char* name, float def) {
+          auto loopParam = [this](const juce::String& id, const juce::String& name, float def) {
               // The capture gets its own name: reusing "id" here shadows the
               // parameter of the same name (clang's -Wshadow-uncaptured-local).
-              const juce::String paramId(id);
+              const juce::String paramId = id;
               return std::make_unique<APF>(juce::ParameterID(id, 1), name, juce::NormalisableRange<float>(0.f, 1.f), def,
                   juce::AudioParameterFloatAttributes().withStringFromValueFunction(
                       [this, paramId](float v, int) { return describe(paramId, v); }));
           };
+          layout.add(std::make_unique<APF>(juce::ParameterID("loopDb", 1), "Loop gain", juce::NormalisableRange<float>(-24.f, 12.f), 0.f,
+              juce::AudioParameterFloatAttributes().withLabel("dB")));
           layout.add(loopParam("memory", "Loop memory", 0.f));
           layout.add(loopParam("loopEnd", "Loop end", 1.f));
           layout.add(loopParam("start", "Loop start", 0.f));
@@ -63,15 +65,22 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Wet before the loop", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze (hold the wet side)", false));
           // The ramp engine: two generators, one per channel.
-          layout.add(loopParam("rampWet", "Ramp: wet", 0.f));
-          layout.add(loopParam("rampLoop", "Ramp: loop", 0.f));
-          layout.add(loopParam("rampSpeed", "Ramp speed", 0.45f));
-          layout.add(loopParam("rampWave", "Ramp wave", 0.f));
-          layout.add(std::make_unique<APB>(juce::ParameterID("rampUni", 1), "Ramp unipolar", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("bounce", 1), "Dip: Bounce", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("sweep", 1), "Dip: Sweep", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("rampSync", 1), "Modulation follows the tempo", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("rampHold", 1), "Modulation held", false));
+          // The two modulation sources: a rate, a shape and five switches each, and a
+          // depth for each control it can move (0 is no route).
+          for (int n = 1; n <= 2; ++n) {
+              const juce::String m = "mod" + juce::String(n), name = "Mod " + juce::String(n) + " ";
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "On", 1), name + "on", true));
+              layout.add(loopParam(m + "Rate", name + "rate", 0.45f));
+              layout.add(loopParam(m + "Wave", name + "shape", 0.f));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Uni", 1), name + "unipolar", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Bounce", 1), name + "bounce", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sweep", 1), name + "sweep", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sync", 1), name + "follows the tempo", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Hold", 1), name + "held", false));
+              for (int t = 0; t < brood::kModTargets; ++t)
+                  layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID(m + "_" + brood::kModTargetIds[t], 1),
+                      name + "to " + juce::String(brood::kModTargetNames[t]).toLowerCase(), juce::NormalisableRange<float>(-1.f, 1.f), 0.f));
+          }
           layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV slice follows the tempo", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV slices fade", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
@@ -161,19 +170,20 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
     // WIDTH is where the removed SPREAD lives now: hard left is mono.
     if (id == "width") return v <= 0.005f ? "mono" : v < 0.49f ? "narrow " + pct(v * 2) :
                         v > 0.51f ? "wide " + pct((v - 0.5f) * 2) : "as built";
-    if (id == "rampWet" || id == "rampLoop") {
-        const int t = brood::rampTargetIndex(v);
-        return juce::String(brood::kRampTargets[t]).toLowerCase();     // "off" at the bottom of the list
+    if (id.startsWith("mod1") || id.startsWith("mod2")) {
+        const auto field = id.substring(4);
+        const juce::String rateOwner = id.substring(0, 4);
+        if (field == "Wave") return juce::String(brood::kRampWaves[brood::rampWaveIndex(v)]).toLowerCase();
+        if (field == "Rate") {
+            const auto* rs = apvts.getRawParameterValue(rateOwner + "Sync");
+            if (rs != nullptr && rs->load() > 0.5f)
+                return juce::String(brood::rampDivLabel(v)) + " · " + fmtTime(brood::rampCycleSeconds(hostBpm_.load(), v)) + " a turn";
+            return fmtTime(1.0 / brood::rampHertz(v)) + " a turn";
+        }
+        if (field == "Sync") return v > 0.5f ? "follows the tempo" : "free rate";
+        if (field == "Hold") return v > 0.5f ? "held where it is" : "running";
+        if (field.startsWith("_")) return (v > 0 ? "+" : "") + juce::String(juce::roundToInt(v * 100.f)) + "%";
     }
-    if (id == "rampWave") return juce::String(brood::kRampWaves[brood::rampWaveIndex(v)]).toLowerCase();
-    if (id == "rampSpeed") {
-        const auto* rs = apvts.getRawParameterValue("rampSync");
-        if (rs != nullptr && rs->load() > 0.5f)
-            return juce::String(brood::rampDivLabel(v)) + " · " + fmtTime(brood::rampCycleSeconds(hostBpm_.load(), v)) + " a turn";
-        return fmtTime(1.0 / brood::rampHertz(v)) + " a turn";
-    }
-    if (id == "rampSync") return v > 0.5f ? "follows the tempo" : "free rate";
-    if (id == "rampHold") return v > 0.5f ? "held where it is" : "running";
     if (id == "envSync") return v > 0.5f ? "slice follows the tempo" : "free slice";
     if (id == "wetDiv" || id == "loopDiv") {
         const int div = brood::divMap(v);
@@ -252,13 +262,18 @@ void BroodProcessor::pullParams() {
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
     p.classic = param("classic") > 0.5f;
     p.wetPre = param("wetPre") > 0.5f;
+    p.loopDb = param("loopDb");
     p.envSoft = param("envSoft") > 0.5f;
     p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
-    p.rampWet = param("rampWet"); p.rampLoop = param("rampLoop"); p.rampSpeed = param("rampSpeed");
-    p.rampWave = param("rampWave");
-    p.rampUni = param("rampUni") > 0.5f; p.bounce = param("bounce") > 0.5f; p.sweep = param("sweep") > 0.5f;
-    p.rampSync = param("rampSync") > 0.5f;
-    p.rampHold = param("rampHold") > 0.5f;
+    for (int k = 0; k < 2; ++k) {
+        const juce::String n = "mod" + juce::String(k + 1);
+        auto& m = p.mods[k];
+        const auto value = [this, &n](const char* f) { return apvts.getRawParameterValue(n + f)->load(); };
+        m.on = value("On") > 0.5f; m.rate = value("Rate"); m.wave = value("Wave");
+        m.uni = value("Uni") > 0.5f; m.bounce = value("Bounce") > 0.5f; m.sweep = value("Sweep") > 0.5f;
+        m.sync = value("Sync") > 0.5f; m.hold = value("Hold") > 0.5f;
+        for (int t = 0; t < brood::kModTargets; ++t) m.depth[t] = apvts.getRawParameterValue(n + "_" + brood::kModTargetIds[t])->load();
+    }
     p.envSync = param("envSync") > 0.5f;
     p.bpm = hostBpm_.load();
     coreRight_.p = p;
@@ -348,12 +363,12 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             if (cc == 75) id = "trails"; else if (cc == 78) id = "smooth";   // SPREAD / DRY KILL / LATCH retired
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
-            else if (cc == 20) { if (auto* parameter = apvts.getParameter("rampSpeed")) parameter->setValueNotifyingHost(value / 127.f); }
-            else if (cc == 66) { if (auto* parameter = apvts.getParameter("bounce")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
-            else if (cc == 67) { if (auto* parameter = apvts.getParameter("sweep")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
+            else if (cc == 20) { for (const char* m : {"mod1Rate", "mod2Rate"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value / 127.f); }
+            else if (cc == 66) { for (const char* m : {"mod1Bounce", "mod2Bounce"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
+            else if (cc == 67) { for (const char* m : {"mod1Sweep", "mod2Sweep"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
-            else if (cc == 52) id = "rampHold";
+            else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 71) id = "classic";
             else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
@@ -442,6 +457,9 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     }
 
     const auto st = core_.state(), rightState = coreRight_.state();
+    ui.envGate = core_.envGateOpen();
+    for (int t = 0; t < brood::kModTargets; ++t) ui.effective[static_cast<size_t>(t)] = static_cast<float>(core_.effective(t));
+    for (int k = 0; k < 2; ++k) ui.modValue[static_cast<size_t>(k)] = static_cast<float>(core_.rampValue(k));
     ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop);
     ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.winSpan = core_.loopSpan(); ui.pos = static_cast<float>(st.pos);
     ui.clockHz = static_cast<float>(st.clockHz); ui.histCycles = st.histCycles;
@@ -486,6 +504,34 @@ static void writeTake(juce::ValueTree& parent, const brood::Core& core, const ch
     parent.appendChild(take, nullptr);
 }
 
+bool BroodProcessor::takeMoment(const juce::File& file) {
+    std::unique_ptr<juce::AudioFormatReader> reader(formats_.createReaderFor(file));
+    if (reader == nullptr || reader->lengthInSamples < 64 || reader->sampleRate <= 0) return false;
+    const auto frames = static_cast<int>(juce::jmin<juce::int64>(reader->lengthInSamples, static_cast<juce::int64>(300.0 * reader->sampleRate)));
+    juce::AudioBuffer<float> source(2, frames);
+    reader->read(&source, 0, frames, 0, true, true);
+    // Resampled to the clock the looper runs at now, so it plays back at its own pitch.
+    const double ratio = reader->sampleRate / juce::jmax(1.f, ui.clockHz.load());
+    const int n = juce::jlimit(64, static_cast<int>(brood::kMaxLoopSamples), static_cast<int>(frames / ratio));
+    const juce::SpinLock::ScopedLockType lock(takeLock_);
+    for (int c = 0; c < 2; ++c) {
+        const float* in = source.getReadPointer(c);
+        PendingTake ready;
+        ready.pcm.resize(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            const double at = i * ratio;
+            const int i0 = juce::jmin(frames - 1, static_cast<int>(at));
+            const double f = at - i0;
+            const auto sample = [&](int j) { return static_cast<double>(in[juce::jlimit(0, frames - 1, j)]); };
+            ready.pcm[static_cast<size_t>(i)] = static_cast<float>(brood::hermite(sample(i0 - 1), sample(i0), sample(i0 + 1), sample(i0 + 2), f));
+        }
+        ready.play = true;
+        ready.has = true;
+        pendingTake_[c] = std::move(ready);
+    }
+    return true;
+}
+
 void BroodProcessor::armOutputCapture(int bars) {
     if (outputCaptureState() != OutputCapture::idle) return;
     const double seconds = bars * static_cast<double>(hostBarQuarters_.load()) * 60.0 / juce::jmax(1.f, hostBpm_.load());
@@ -514,6 +560,7 @@ bool BroodProcessor::copyMoment(juce::AudioBuffer<float>& out, double& sampleRat
     out.setSize(2, len);
     out.copyFrom(0, 0, left.data() + start, len);
     out.copyFrom(1, 0, right.data() + start, len);
+    out.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue("loopDb")->load()));   // sent as you hear it
     sampleRate = static_cast<double>(ui.clockHz.load());
     return true;
 }

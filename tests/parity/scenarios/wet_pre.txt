@@ -24,3 +24,5 @@ seconds 12
 2604 fs loop up
 3000 param wetPre 0
 3600 param routing 1
+3800 param loopDb -6
+4100 param loopDb 6

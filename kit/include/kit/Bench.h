@@ -5,9 +5,10 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <optional>
 
-// The Bench: what passes between plug-ins. An effect catches a moment and sends it; an
-// instrument takes it. The moment is a WAV and a note in a shared folder, so it works
-// whichever process or host each plug-in lives in, and neither needs the other open.
+// The Bench: what passes between plug-ins, either way. A plug-in sends a moment and
+// another takes it. A moment is a WAV and a note in a folder in Music, so it works
+// whichever process or host each plug-in lives in, neither needs the other open, and
+// everything sent stays there to use in the Finder.
 namespace kit::bench
 {
 struct Moment
@@ -24,17 +25,37 @@ inline juce::File defaultFolder()
 {
     if (folderForTests != juce::File())
         return folderForTests;
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Bench");
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Bench");
 }
 
-// Writes the audio first and the note last, so a reader never finds half a moment.
+// Where a new moment's audio goes: named for who sent it and when, so it reads in the Finder.
+inline juce::File newAudioFile (const juce::String& name, const juce::File& folder = defaultFolder())
+{
+    folder.createDirectory();
+    const auto when = juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S");
+    return folder.getNonexistentChildFile (juce::File::createLegalFileName (name + " " + when), ".wav", false);
+}
+
+// A finished WAV goes on the Bench. The note is written last, so a reader never finds
+// half a moment. Each sender keeps one note: its latest.
+inline bool publish (const juce::File& audio, double seconds, const juce::String& chip, const juce::String& name,
+                     const juce::File& folder = defaultFolder())
+{
+    juce::XmlElement note ("MOMENT");
+    note.setAttribute ("file", audio.getFileName());
+    note.setAttribute ("chip", chip);
+    note.setAttribute ("name", name);
+    note.setAttribute ("seconds", seconds);
+    note.setAttribute ("stamp", juce::String (juce::Time::currentTimeMillis()));
+    return note.writeTo (folder.getChildFile ("." + juce::File::createLegalFileName (chip) + ".moment"));
+}
+
 inline bool send (const juce::AudioBuffer<float>& audio, double sampleRate, const juce::String& chip, const juce::String& name,
                   const juce::File& folder = defaultFolder())
 {
     if (audio.getNumSamples() == 0 || sampleRate <= 0.0 || ! folder.createDirectory())
         return false;
-    const auto stamp = juce::Time::currentTimeMillis();
-    const auto file = folder.getChildFile ("moment-" + juce::String (stamp) + ".wav");
+    const auto file = newAudioFile (name, folder);
     {
         juce::WavAudioFormat wav;
         std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
@@ -49,64 +70,63 @@ inline bool send (const juce::AudioBuffer<float>& audio, double sampleRate, cons
         if (! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()))
             return false;
     }
-    juce::XmlElement note ("MOMENT");
-    note.setAttribute ("file", file.getFileName());
-    note.setAttribute ("chip", chip);
-    note.setAttribute ("name", name);
-    note.setAttribute ("seconds", (double) audio.getNumSamples() / sampleRate);
-    note.setAttribute ("stamp", juce::String (stamp));
-    if (! note.writeTo (folder.getChildFile ("moment.xml")))
-        return false;
-    // Only the latest is kept.
-    for (const auto& old : folder.findChildFiles (juce::File::findFiles, false, "moment-*.wav"))
-        if (old != file)
-            old.deleteFile();
-    return true;
+    return publish (file, (double) audio.getNumSamples() / sampleRate, chip, name, folder);
 }
 
-inline std::optional<Moment> latest (const juce::File& folder = defaultFolder())
+// The newest moment from anyone but `myChip`.
+inline std::optional<Moment> latest (const juce::String& myChip, const juce::File& folder = defaultFolder())
 {
-    const auto note = folder.getChildFile ("moment.xml");
-    if (! note.existsAsFile())
-        return std::nullopt;
-    const auto xml = juce::XmlDocument::parse (note);
-    if (xml == nullptr || ! xml->hasTagName ("MOMENT"))
-        return std::nullopt;
-    Moment m { folder.getChildFile (xml->getStringAttribute ("file")), xml->getStringAttribute ("chip"), xml->getStringAttribute ("name"),
-               xml->getDoubleAttribute ("seconds"), xml->getStringAttribute ("stamp").getLargeIntValue() };
-    if (! m.audio.existsAsFile())
-        return std::nullopt;
-    return m;
+    std::optional<Moment> best;
+    for (const auto& noteFile : folder.findChildFiles (juce::File::findFiles, false, ".*.moment"))
+    {
+        const auto xml = juce::XmlDocument::parse (noteFile);
+        if (xml == nullptr || ! xml->hasTagName ("MOMENT") || xml->getStringAttribute ("chip") == myChip)
+            continue;
+        Moment m { folder.getChildFile (xml->getStringAttribute ("file")), xml->getStringAttribute ("chip"), xml->getStringAttribute ("name"),
+                   xml->getDoubleAttribute ("seconds"), xml->getStringAttribute ("stamp").getLargeIntValue() };
+        if (m.audio.existsAsFile() && (! best.has_value() || m.stamp > best->stamp))
+            best = m;
+    }
+    return best;
 }
 
-// The strip along the bottom of every plug-in: its own name and state, then the one
-// thing it can do with a moment.
+// The strip along the bottom of every plug-in: its own name and state, what's waiting
+// from elsewhere, and SEND, TAKE and the folder it all lives in.
 class Strip final : public juce::Component
 {
 public:
     Strip (const Stock& stockToUse, juce::String chipText, juce::String nameText) : s (stockToUse), chip (std::move (chipText)), name (std::move (nameText))
     {
-        action.onClick = [this] { if (onAction) onAction(); };
-        addAndMakeVisible (action);
+        sendKey.onClick = [this] { if (onSend) onSend(); };
+        takeKey.onClick = [this] { if (onTake) onTake(); };
+        folderKey.onClick = []
+        {
+            defaultFolder().createDirectory();
+            defaultFolder().revealToUser();
+        };
+        folderKey.setTooltip ("Everything sent is kept here, to use in the Finder");
+        addAndMakeVisible (sendKey);
+        addAndMakeVisible (takeKey);
+        addAndMakeVisible (folderKey);
     }
 
-    std::function<void()> onAction;
-    int reservedRight = 0;   // room left beside the key for a control the plug-in adds
+    std::function<void()> onSend, onTake;
+    int reservedRight = 0;   // room left beside the keys for a control the plug-in adds
 
-    // What the left cell says about this plug-in, what the right cell says about the
-    // moment, and the key that acts on it (none: no key).
-    void set (const juce::String& state, const juce::String& momentText, const juce::String& key, bool enabled)
+    void set (const juce::String& state, const juce::String& momentText, const juce::String& sendText, bool sendOn, bool takeOn)
     {
-        if (state == stateText && momentText == moment && key == action.getButtonText() && enabled == action.isEnabled())
+        if (state == stateText && momentText == moment && sendText == sendKey.getButtonText() && sendOn == sendKey.isEnabled() && takeOn == takeKey.isEnabled())
             return;
         stateText = state;
         moment = momentText;
-        action.setButtonText (key);
-        action.setEnabled (enabled);
-        action.setVisible (key.isNotEmpty());
-        resized();
+        sendKey.setButtonText (sendText);
+        sendKey.setEnabled (sendOn);
+        takeKey.setEnabled (takeOn);
         repaint();
     }
+
+    // Where the plug-in's own control goes, in this strip's coordinates.
+    juce::Rectangle<int> reservedArea() const { return keysArea().withWidth (reservedRight - 8).withX (sendKey.getX() - reservedRight); }
 
     void paint (juce::Graphics& g) override
     {
@@ -125,7 +145,7 @@ public:
         g.drawText ("BENCH", title.withTrimmedLeft (10), juce::Justification::centredTop);
 
         g.drawVerticalLine (row.getX(), (float) row.getY(), (float) row.getBottom());
-        auto mine = row.removeFromLeft (row.getWidth() * 4 / 10).withTrimmedLeft (1);
+        auto mine = row.removeFromLeft (row.getWidth() * 3 / 10).withTrimmedLeft (1);
         g.setColour (s.panel);
         g.fillRect (mine);
         auto text = mine.reduced (12, 0);
@@ -136,27 +156,31 @@ public:
         g.drawText (head, text.removeFromLeft (textWidth (font, head) + 4), juce::Justification::centredLeft);
         text.removeFromLeft (10);
         g.setColour (s.soft);
-        g.drawFittedText (stateText, text, juce::Justification::centredLeft, 1, 0.8f);
+        g.drawFittedText (stateText, text, juce::Justification::centredLeft, 1, 0.7f);
 
         g.setColour (s.ink);
         g.drawVerticalLine (row.getX(), (float) row.getY(), (float) row.getBottom());
-        auto rest = row.reduced (12, 0);
-        if (action.isVisible())
-            rest.removeFromRight (action.getWidth() + 8);
-        rest.removeFromRight (reservedRight);
+        auto rest = row.reduced (12, 0).withRight (sendKey.getX() - reservedRight - 6);
         g.setColour (s.soft);
-        g.drawFittedText (moment, rest, juce::Justification::centredLeft, 1, 0.8f);
+        g.drawFittedText (moment, rest, juce::Justification::centredLeft, 1, 0.7f);
     }
 
     void resized() override
     {
-        const auto r = getLocalBounds().withTrimmedRight (3).withTrimmedBottom (3).reduced (6, 7);
-        action.setBounds (r.withLeft (r.getRight() - 96));
+        auto r = keysArea();
+        folderKey.setBounds (r.removeFromRight (keyWidth));
+        r.removeFromRight (keyGap);
+        takeKey.setBounds (r.removeFromRight (keyWidth));
+        r.removeFromRight (keyGap);
+        sendKey.setBounds (r.removeFromRight (keyWidth));
     }
 
 private:
+    static constexpr int keyWidth = 78, keyGap = 6;
+    juce::Rectangle<int> keysArea() const { return getLocalBounds().withTrimmedRight (3).withTrimmedBottom (3).reduced (6, 7); }
+
     const Stock& s;
     juce::String chip, name, stateText, moment;
-    juce::TextButton action;
+    juce::TextButton sendKey { "SEND >" }, takeKey { "< TAKE" }, folderKey { "FOLDER" };
 };
 } // namespace kit::bench

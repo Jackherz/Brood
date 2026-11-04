@@ -35,7 +35,7 @@ int main() {
     m.addEvent(juce::MidiMessage::controllerEvent(1, 75, 1), 0);
     m.addEvent(juce::MidiMessage::controllerEvent(1, 52, 127), 0);
     b.clear(); process(p, b, m);
-    CHECK(p.apvts.getRawParameterValue("rampHold")->load() == 1.f, "MIDI CC 52 holds the ramps");
+    CHECK(p.apvts.getRawParameterValue("mod1Hold")->load() == 1.f && p.apvts.getRawParameterValue("mod2Hold")->load() == 1.f, "MIDI CC 52 holds both sources");
     CHECK(std::fabs(p.apvts.getRawParameterValue("mix")->load() - 100.f / 127.f) < 0.001f, "MIDI CC 15 controls MIX");
     CHECK(p.ui.wetOn.load(), "MIDI CC 103 engages wet at value 1");
     CHECK(p.apvts.getRawParameterValue("trails")->load() == 1.f, "MIDI switches accept value 1");
@@ -189,13 +189,28 @@ int main() {
         CHECK(catcher.copyMoment(moment, momentRate) && moment.getNumChannels() == 2 && moment.getNumSamples() >= 1, "a caught loop can be sent");
         juce::TemporaryFile folderFile;
         const auto folder = folderFile.getFile();
-        CHECK(!kit::bench::latest(folder).has_value(), "an empty bench");
+        CHECK(!kit::bench::latest("I-01", folder).has_value(), "an empty bench");
         CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", folder), "send");
-        const auto got = kit::bench::latest(folder);
+        CHECK(!kit::bench::latest("E-01", folder).has_value(), "your own moment isn't offered back to you");
+        const auto got = kit::bench::latest("I-01", folder);
         CHECK(got.has_value() && got->fromChip == "E-01" && got->audio.existsAsFile()
               && std::fabs(got->seconds - moment.getNumSamples() / momentRate) < 1e-3, "the note matches the audio");
+        juce::Thread::sleep(1100);   // files are named to the second
         CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", folder), "send again");
-        CHECK(folder.findChildFiles(juce::File::findFiles, false, "moment-*.wav").size() == 1, "only the latest is kept");
+        CHECK(folder.findChildFiles(juce::File::findFiles, false, "*.wav").size() == 2, "everything sent stays, for the Finder");
+        // And the other way: a moment from an instrument becomes the loop.
+        juce::AudioBuffer<float> fromSilt(2, 44100);
+        for (int n = 0; n < fromSilt.getNumSamples(); ++n) for (int c = 0; c < 2; ++c) fromSilt.setSample(c, n, 0.25f * std::sin(static_cast<float>(n) * 0.03f));
+        CHECK(kit::bench::send(fromSilt, 44100.0, "I-01", "SILT", folder), "an instrument sends");
+        const auto incoming = kit::bench::latest("E-01", folder);
+        CHECK(incoming.has_value() && incoming->fromName == "SILT", "and the effect sees it");
+        if (incoming.has_value()) {
+            const double clock = catcher.ui.clockHz.load();
+            CHECK(catcher.takeMoment(incoming->audio), "take it");
+            run(4);
+            CHECK(std::fabs(catcher.ui.lsrc.load() / clock - 1.0) < 0.01, "one second of it, at the looper's clock");
+            CHECK(catcher.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "and it plays");
+        }
         folder.deleteRecursively();
     }
     // SEND's bars: the exact output, and nothing goes out early.

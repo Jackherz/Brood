@@ -83,6 +83,12 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 23: **two sources, routed by hand.** The modulation panel gives way to two sources
+  you drag onto any control, each with its own rate, shape and switches, and a depth per
+  route. BEFORE THE LOOP moved into the wet column and off is now fully clean, so a catch
+  no longer takes what's ringing. The Bench runs both ways and keeps everything in
+  ~/Music/Bench, with a FOLDER key. The loop has a GAIN. ENV's knobs say when they're
+  waiting for input.
 - Round 22: **wet before the loop.** A PRE switch runs input, wet, loop, so overdubs and
   later catches keep the wet sound and SEND carries it to Silt. Off is unchanged, so
   old sets and the parity scenarios sound as they did. SOFT, beside SYNC under LENGTH in

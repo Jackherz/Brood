@@ -68,13 +68,11 @@ const TONE_HZ = 2600;
 // ───── RAMPS ─────
 // Each channel has a function generator that can drive one control. The first
 // position is off; MODIFY means this channel's own MODIFY knob.
-const RAMP_TARGETS = ['OFF', 'TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'BALANCE'];
-const RAMP_KEYS = ['', 'time', 'mix', 'length', 'modWet', 'clock', 'balance'];
+// What a modulation source can move, in the order of Core::effective().
+const MOD_TARGETS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance'];
 const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
-const rampTargetIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_TARGETS.length - 1));
 const rampWaveIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_WAVES.length - 1));
 const rampHz = (k) => expMap(clamp(k, 0, 1), 0.05, 8);   // one cycle every 20 s … eight a second
-const RAMP_DEPTH = 0.5;
 
 const clockHz = (knob, smooth = false) => smooth
   ? expMap(clamp(knob, 0, 1), CLOCK_MIN_HZ, CLOCK_MAX_HZ)
@@ -399,12 +397,19 @@ class BroodCore {
       sync: 0, bpm: 120,
       loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-      rampWet: 0, rampLoop: 0, rampSpeed: 0.45, rampWave: 0, rampUni: 0, bounce: 0, sweep: 0, rampSync: 0, rampHold: 0, wetPre: 0, envSoft: 0,
+      wetPre: 0, envSoft: 0, loopDb: 0,
+      // The two modulation sources: each its own rate and shape, and a depth (-1..1,
+      // 0 is no route) for each control it can move.
+      ...Object.fromEntries([1, 2].flatMap((n) => [
+        [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Bounce`, 0],
+        [`mod${n}Sweep`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
+        ...MOD_TARGETS.map((t) => [`mod${n}_${t}`, 0]),
+      ])),
       envSync: 0,
     };
     // host-rate smoothed knobs
     this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5,
-      tone: 1, fade: 0, width: 0.5, rampSpeed: 0.45 };
+      tone: 1, fade: 0, width: 0.5, modRate: [0.45, 0.45] };
     // What the DSP actually reads: the smoothed knobs plus whatever a ramp is
     // moving. Rebuilt every host sample, so the ramps never disturb a knob.
     this.e = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5 };
@@ -431,6 +436,7 @@ class BroodCore {
     this.freeze = false;
     this.wetMomentary = false;
     this.dubGain = 0; this.dubPrev = 0; this.dubLast = -1;
+    this.loopDbSeen = 0; this.loopLevelTarget = 1; this.loopLevel = 1;
     this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
     this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
@@ -470,6 +476,8 @@ class BroodCore {
     ];
     this.rampRaw = [0, 0];      // per core tick
     this.rampVal = [0, 0];      // smoothed to audio rate
+    this.modGainS = [1, 1];     // ON, smoothed
+    this.modDepthS = [new Array(7).fill(0), new Array(7).fill(0)];   // depths, smoothed
 
     this.fsDown = { wet: null, loop: null };   // press state for footswitches
     this.engaged = 0;
@@ -609,9 +617,9 @@ class BroodCore {
   }
 
   // Value of the chosen shape at the current phase, 0..1.
-  rampShape(g, wave) {
+  rampShape(g, wave, sweep) {
     const ph = g.ph;
-    if (this.p.sweep) return ph;                      // SWEEP: it only ever climbs
+    if (sweep) return ph;                             // SWEEP: it only ever climbs
     if (wave === 1) return ph < 0.5 ? 1 : 0;          // square
     if (wave === 2) return 0.5 + 0.5 * Math.sin(TAU * ph);
     if (wave === 3) return g.next;                    // sample and hold
@@ -622,49 +630,45 @@ class BroodCore {
     return 1 - Math.abs(2 * ph - 1);                  // triangle
   }
 
-  // Advance both generators. This runs once per host sample, not per core tick:
-  // the ramp is a time function, so turning CLOCK down must not slow it down.
-  // BOUNCE ping-pongs the phase instead of letting it reset, so nothing snaps back.
+  // Advance both sources, once per host sample, not per core tick: a source is a time
+  // function, so turning CLOCK down must not slow it down. HOLD stops the phase, and a
+  // source with no routes still runs, so its chip shows what it would do.
   rampTick() {
-    // Free-running by default; synced, one cycle is a musical span instead.
-    const hz = this.p.rampSync ? 1 / rampCycleSeconds(this.p.bpm, this.s.rampSpeed) : rampHz(this.s.rampSpeed);
-    const rate = hz / this.fs;
-    const wave = rampWaveIndex(this.p.rampWave);
     for (let k = 0; k < 2; k++) {
-      const g = this.ramp[k];
-      if (rampTargetIndex(k === 0 ? this.p.rampWet : this.p.rampLoop) === 0) { this.rampRaw[k] = 0; continue; }
-      // HOLD stops the phase: the knob stays pushed wherever the tide had got to.
-      if (this.p.rampHold) { this.rampRaw[k] = this.rampShape(g, wave); continue; }
-      g.ph += rate * g.dir;
-      if (g.ph >= 1) {
-        if (this.p.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
-        g.prev = g.next; g.next = this.rampRand(g);
-      } else if (g.ph <= 0) {
-        if (this.p.bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
-        g.prev = g.next; g.next = this.rampRand(g);
+      const n = k + 1, p = this.p, g = this.ramp[k];
+      const bounce = p[`mod${n}Bounce`];
+      if (!p[`mod${n}Hold`]) {
+        // Free-running by default; synced, one cycle is a musical span instead.
+        const hz = p[`mod${n}Sync`] ? 1 / rampCycleSeconds(p.bpm, this.s.modRate[k]) : rampHz(this.s.modRate[k]);
+        g.ph += hz / this.fs * g.dir;
+        if (g.ph >= 1) {
+          if (bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
+          g.prev = g.next; g.next = this.rampRand(g);
+        } else if (g.ph <= 0) {
+          if (bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
+          g.prev = g.next; g.next = this.rampRand(g);
+        }
       }
-      this.rampRaw[k] = this.rampShape(g, wave);
+      this.rampRaw[k] = this.rampShape(g, rampWaveIndex(p[`mod${n}Wave`]), p[`mod${n}Sweep`]);
     }
   }
 
-  // Rebuild the effective controls from the smoothed knobs, then let the ramps
-  // push whichever control they are pointed at. Always starts from the knob, so
-  // turning a ramp off leaves the control exactly where the knob says.
+  // Rebuild the effective controls from the smoothed knobs, then let each source push
+  // what it's routed to, around where the knob sits.
   applyRamps(a) {
-    this.rampVal[0] += (this.rampRaw[0] - this.rampVal[0]) * a;
-    this.rampVal[1] += (this.rampRaw[1] - this.rampVal[1]) * a;
-    const e = this.e, sm = this.s;
-    e.time = sm.time; e.mix = sm.mix; e.length = sm.length; e.modWet = sm.modWet;
-    e.clock = sm.clock; e.modLoop = sm.modLoop; e.balance = sm.balance;
+    const e = this.e, s = this.s, p = this.p;
+    for (const key of MOD_TARGETS) e[key] = s[key];
     for (let k = 0; k < 2; k++) {
-      const idx = rampTargetIndex(k === 0 ? this.p.rampWet : this.p.rampLoop);
-      if (idx === 0) continue;
-      const v = this.rampVal[k];
-      const off = (this.p.rampUni ? v : v * 2 - 1) * RAMP_DEPTH;
-      let key = RAMP_KEYS[idx];
-      if (k === 1 && key === 'modWet') key = 'modLoop';   // MODIFY means this channel's own
-      e[key] = clamp(e[key] + off, 0, 1);
+      const n = k + 1;
+      this.rampVal[k] += (this.rampRaw[k] - this.rampVal[k]) * a;
+      this.modGainS[k] += ((p[`mod${n}On`] ? 1 : 0) - this.modGainS[k]) * a;
+      const swing = (p[`mod${n}Uni`] ? this.rampVal[k] : this.rampVal[k] * 2 - 1) * this.modGainS[k];
+      for (let t = 0; t < MOD_TARGETS.length; t++) {
+        this.modDepthS[k][t] += (p[`mod${n}_${MOD_TARGETS[t]}`] - this.modDepthS[k][t]) * a;
+        e[MOD_TARGETS[t]] += swing * this.modDepthS[k][t];
+      }
     }
+    for (const key of MOD_TARGETS) e[key] = clamp(e[key], 0, 1);
   }
 
   // One-pole coefficient for the TONE hi-cut. The amount of cut is the caller's;
@@ -853,7 +857,10 @@ class BroodCore {
       this.dubLast = q; this.dubPrev = rec;
     } else this.dubLast = -1;
     this.loopPos = ((pos % W) + W) % W;
-    return y * this.loopGain;
+    // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
+    if (this.p.loopDb !== this.loopDbSeen) { this.loopDbSeen = this.p.loopDb; this.loopLevelTarget = Math.pow(10, this.p.loopDb / 20); }
+    this.loopLevel += (this.loopLevelTarget - this.loopLevel) * 0.003;
+    return y * this.loopGain * this.loopLevel;
   }
 
   coreTick(x) {
@@ -943,7 +950,7 @@ class BroodCore {
     // dry input is recorded — feeding the loop back would be a feedback path —
     // and while listening the live wet channel is caught as well, as before.
     const listening = this.loopState === 'off';
-    this.hist[this.histW] = softClip(x + (listening || pre ? (wl + wr) * 0.5 : 0));
+    this.hist[this.histW] = softClip(x + (pre ? (wl + wr) * 0.5 : 0));
     if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
     if (this.histCount < this.hist.length) this.histCount++;
 
@@ -991,7 +998,8 @@ class BroodCore {
       s.tone += (p.tone - s.tone) * a;
       s.fade += (p.fade - s.fade) * a;
       s.width += (p.width - s.width) * a;
-      s.rampSpeed += (p.rampSpeed - s.rampSpeed) * a;
+      s.modRate[0] += (p.mod1Rate - s.modRate[0]) * a;
+      s.modRate[1] += (p.mod2Rate - s.modRate[1]) * a;
       this.rampTick();
       this.applyRamps(a);
 
@@ -1069,7 +1077,7 @@ class BroodCore {
     const win = this.lsrc > 0 ? this.loopWindow() : { W: 0, start: 0 };
     return {
       wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
-      lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
+      mods: this.rampRaw.slice(), lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
     };
   }
@@ -1170,5 +1178,5 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BroodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, RAMP_TARGETS, RAMP_WAVES, rampTargetIndex, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { BroodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }

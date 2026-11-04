@@ -36,6 +36,225 @@ constexpr int kKnobMode[6] = {0, 2, 1, 0, 2, 1};
 
 }  // namespace
 
+// ───────── modulation on a knob ─────────
+void BroodEditor::Look::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider& slider) {
+    kit::Look::drawRotarySlider(g, x, y, w, h, pos, a0, a1, slider);
+    auto* mod = dynamic_cast<ModSlider*>(&slider);
+    if (mod == nullptr || mod->target < 0 || mod->editor == nullptr) return;
+    const auto box = juce::Rectangle<int>(x, y, w, h).toFloat();
+    const auto c = box.getCentre();
+    const float r = kit::Look::knobOuterRadius(box);
+    const float from = juce::degreesToRadians(-135.f), span = juce::degreesToRadians(270.f);
+    bool any = false;
+    for (int k = 0; k < 2; ++k) {
+        const float d = mod->editor->depthParam(k, mod->target)->convertFrom0to1(mod->editor->depthParam(k, mod->target)->getValue());
+        if (std::fabs(d) < 0.005f) continue;
+        any = true;
+        const bool uni = proc.apvts.getRawParameterValue("mod" + juce::String(k + 1) + "Uni")->load() > 0.5f;
+        const float lo = juce::jlimit(0.f, 1.f, uni ? juce::jmin(pos, pos + d) : pos - std::fabs(d));
+        const float hi = juce::jlimit(0.f, 1.f, uni ? juce::jmax(pos, pos + d) : pos + std::fabs(d));
+        juce::Path arc;
+        const float radius = r - 1.5f + 4.f * static_cast<float>(k);
+        arc.addCentredArc(c.x, c.y, radius, radius, 0.f, from + span * lo, from + span * hi, true);
+        g.setColour(BroodEditor::modColour(k));
+        g.strokePath(arc, juce::PathStrokeType(2.5f));
+    }
+    if (any) {
+        const float now = juce::jlimit(0.f, 1.f, proc.ui.effective[static_cast<size_t>(mod->target)].load());
+        const auto at = c.getPointOnCircumference(r - 7.f, from + span * now);
+        g.setColour(stock().ink);
+        g.fillEllipse(juce::Rectangle<float>(5.f, 5.f).withCentre(at));
+    }
+}
+
+void BroodEditor::ModSlider::mouseDown(const juce::MouseEvent& e) {
+    menuPress = e.mods.isPopupMenu();
+    if (menuPress && target >= 0 && editor != nullptr) { editor->showRouteMenu(target); return; }
+    settingDepth = target >= 0 && editor != nullptr && e.mods.isAltDown();
+    if (settingDepth) {
+        auto* prm = editor->depthParam(editor->selectedSource(), target);
+        depthAtStart = prm->convertFrom0to1(prm->getValue());
+        prm->beginChangeGesture();
+        editor->showDepth(editor->selectedSource(), target);
+        return;
+    }
+    juce::Slider::mouseDown(e);
+}
+void BroodEditor::ModSlider::mouseDrag(const juce::MouseEvent& e) {
+    if (menuPress) return;
+    if (settingDepth) {
+        auto* prm = editor->depthParam(editor->selectedSource(), target);
+        prm->setValueNotifyingHost(prm->convertTo0to1(juce::jlimit(-1.f, 1.f, depthAtStart - static_cast<float>(e.getDistanceFromDragStartY()) / (e.mods.isShiftDown() ? 600.f : 150.f))));
+        editor->showDepth(editor->selectedSource(), target);
+        repaint();
+        return;
+    }
+    juce::Slider::mouseDrag(e);
+}
+void BroodEditor::ModSlider::mouseUp(const juce::MouseEvent& e) {
+    if (menuPress) { menuPress = false; return; }
+    if (settingDepth) { editor->depthParam(editor->selectedSource(), target)->endChangeGesture(); settingDepth = false; return; }
+    juce::Slider::mouseUp(e);
+}
+void BroodEditor::ModSlider::mouseDoubleClick(const juce::MouseEvent& e) {
+    // Alt-double-click takes the selected source off this control.
+    if (target >= 0 && editor != nullptr && e.mods.isAltDown()) {
+        auto* prm = editor->depthParam(editor->selectedSource(), target);
+        prm->setValueNotifyingHost(prm->convertTo0to1(0.f));
+        repaint();
+        return;
+    }
+    juce::Slider::mouseDoubleClick(e);
+}
+
+// ───────── modulation chip ─────────
+void BroodEditor::ModChip::paint(juce::Graphics& g) {
+    const auto r = getLocalBounds().withTrimmedRight(2).withTrimmedBottom(2);
+    const bool on = editor.proc.apvts.getRawParameterValue("mod" + juce::String(k + 1) + "On")->load() > 0.5f;
+    const bool selected = editor.selectedMod == k;
+    const auto colour = modColour(k);
+    g.setColour(kInk); g.fillRect(r.translated(2, 2));
+    g.setColour(kPaper); g.fillRect(r);
+    g.setColour(kInk); g.drawRect(r, selected ? 2 : 1);
+    const auto number = juce::Rectangle<int>(5, 4, 15, 15);
+    g.setColour(on ? colour : kLine); g.fillRect(number);
+    g.setColour(kPaper); g.setFont(font(15));
+    g.drawText(juce::String(k + 1), number, juce::Justification::centred);
+    int routes = 0;
+    for (int t = 0; t < brood::kModTargets; ++t)
+        if (std::fabs(editor.depthParam(k, t)->convertFrom0to1(editor.depthParam(k, t)->getValue())) >= 0.005f) ++routes;
+    g.setColour(kMuted); g.setFont(font(14));
+    g.drawText(juce::String(routes) + (routes == 1 ? " ROUTE" : " ROUTES"), 24, 3, getWidth() - 48, 16, juce::Justification::centredLeft);
+    // ON: lit like every other switch.
+    const auto box = onBox();
+    g.setColour(on ? stock().lit : kPaper); g.fillRect(box);
+    g.setColour(kInk); g.drawRect(box, 1);
+    // The last two seconds of what it's doing.
+    const auto plot = juce::Rectangle<float>(6.f, 22.f, static_cast<float>(r.getWidth() - 12), static_cast<float>(r.getHeight() - 26));
+    juce::Path path;
+    const size_t n = trace.size();
+    for (size_t i = 0; i < n; ++i) {
+        const float v = trace[(static_cast<size_t>(written) + i) % n];
+        const float px = plot.getX() + plot.getWidth() * static_cast<float>(i) / static_cast<float>(n - 1), py = plot.getBottom() - plot.getHeight() * v;
+        if (i == 0) path.startNewSubPath(px, py); else path.lineTo(px, py);
+    }
+    g.setColour(on ? colour : kLine);
+    g.strokePath(path, juce::PathStrokeType(1.5f));
+}
+void BroodEditor::ModChip::mouseDown(const juce::MouseEvent& e) {
+    dragging = false;
+    const auto id = "mod" + juce::String(k + 1) + "On";
+    if (e.mods.isPopupMenu()) {
+        juce::PopupMenu menu;
+        menu.addItem(1, "Clear this source's routes");
+        menu.showMenuAsync(juce::PopupMenu::Options(), [this](int chosen) {
+            if (chosen == 1) for (int t = 0; t < brood::kModTargets; ++t) { auto* prm = editor.depthParam(k, t); prm->setValueNotifyingHost(prm->convertTo0to1(0.f)); }
+        });
+        return;
+    }
+    if (onBox().expanded(3).contains(e.getPosition())) {
+        auto* prm = editor.proc.apvts.getParameter(id);
+        prm->beginChangeGesture(); prm->setValueNotifyingHost(prm->getValue() > 0.5f ? 0.f : 1.f); prm->endChangeGesture();
+        repaint();
+        return;
+    }
+    editor.selectSource(k);
+}
+void BroodEditor::ModChip::mouseDrag(const juce::MouseEvent& e) {
+    if (e.getDistanceFromDragStart() > 4) dragging = true;
+    if (dragging) editor.chipDragged(k, e.getScreenPosition());
+}
+void BroodEditor::ModChip::mouseUp(const juce::MouseEvent& e) {
+    if (dragging) editor.chipDropped(k, e.getScreenPosition());
+    dragging = false;
+}
+
+// ───────── the loop's gain ─────────
+BroodEditor::GainBox::GainBox(juce::RangedAudioParameter& p)
+    : attach(p, [this](float v) { db = v; repaint(); }), param(p) {
+    attach.sendInitialUpdate();
+    setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+    setTitle("Loop gain");
+}
+void BroodEditor::GainBox::paint(juce::Graphics& g) {
+    const auto r = getLocalBounds();
+    g.setColour(kPaper); g.fillRect(r);
+    g.setColour(kInk); g.drawRect(r, 1);
+    g.setFont(font(14));
+    const int rounded = juce::roundToInt(db * 2.f);
+    g.drawText("GAIN " + juce::String(rounded > 0 ? "+" : "") + juce::String(static_cast<float>(rounded) * 0.5f, 1) + " DB", r, juce::Justification::centred);
+}
+void BroodEditor::GainBox::mouseDown(const juce::MouseEvent&) { dbAtStart = db; attach.beginGesture(); }
+void BroodEditor::GainBox::mouseDrag(const juce::MouseEvent& e) {
+    attach.setValueAsPartOfGesture(juce::jlimit(-24.f, 12.f, dbAtStart - static_cast<float>(e.getDistanceFromDragStartY()) * (e.mods.isShiftDown() ? 0.02f : 0.12f)));
+}
+void BroodEditor::GainBox::mouseUp(const juce::MouseEvent&) { attach.endGesture(); }
+void BroodEditor::GainBox::mouseDoubleClick(const juce::MouseEvent&) { attach.setValueAsCompleteGesture(0.f); }
+
+// ───────── the route list ─────────
+BroodEditor::RouteList::RouteList(BroodEditor& e) : editor(e) {
+    close.onClick = [this] { setVisible(false); };
+    clear.onClick = [this] {
+        for (int k = 0; k < 2; ++k) for (int t = 0; t < brood::kModTargets; ++t) { auto* prm = editor.depthParam(k, t); prm->setValueNotifyingHost(prm->convertTo0to1(0.f)); }
+        rebuild();
+    };
+    addAndMakeVisible(close); addAndMakeVisible(clear);
+    setVisible(false);
+}
+void BroodEditor::RouteList::rebuild() {
+    rows.clear();
+    for (int k = 0; k < 2; ++k)
+        for (int t = 0; t < brood::kModTargets; ++t) {
+            auto* prm = editor.depthParam(k, t);
+            if (std::fabs(prm->convertFrom0to1(prm->getValue())) < 0.005f) continue;
+            Row row { k, t, std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox), nullptr, std::make_unique<juce::TextButton>("X") };
+            row.att = std::make_unique<juce::SliderParameterAttachment>(*prm, *row.depth);
+            row.depth->onValueChange = [this] { repaint(); };
+            row.remove->onClick = [this, prm] {
+                prm->setValueNotifyingHost(prm->convertTo0to1(0.f));
+                juce::MessageManager::callAsync([safe = juce::Component::SafePointer<RouteList>(this)] { if (safe != nullptr) safe->rebuild(); });
+            };
+            addAndMakeVisible(*row.depth); addAndMakeVisible(*row.remove);
+            rows.push_back(std::move(row));
+        }
+    resized();
+    repaint();
+}
+void BroodEditor::RouteList::resized() {
+    auto r = getLocalBounds().withTrimmedRight(3).withTrimmedBottom(3).withTrimmedTop(kit::panelHeadHeight).reduced(14, 10);
+    auto foot = r.removeFromBottom(32);
+    close.setBounds(foot.removeFromRight(90));
+    foot.removeFromRight(8);
+    clear.setBounds(foot.removeFromRight(110));
+    for (auto& row : rows) {
+        auto line = r.removeFromTop(32);
+        row.remove->setBounds(line.removeFromRight(34).reduced(0, 2));
+        line.removeFromRight(70);
+        row.depth->setBounds(line.withLeft(line.getX() + 230));
+    }
+}
+void BroodEditor::RouteList::paint(juce::Graphics& g) {
+    kit::drawPanel(g, getLocalBounds().withTrimmedRight(3).withTrimmedBottom(3), stock(), "M", "ROUTES", juce::String(static_cast<int>(rows.size())) + (rows.size() == 1 ? " ROUTE" : " ROUTES"));
+    auto r = getLocalBounds().withTrimmedRight(3).withTrimmedBottom(3).withTrimmedTop(kit::panelHeadHeight).reduced(14, 10);
+    if (rows.empty()) {
+        g.setColour(kMuted); g.setFont(font(19));
+        g.drawText("NO ROUTES YET. DRAG A SOURCE ONTO A KNOB.", r, juce::Justification::centred);
+        return;
+    }
+    for (auto& row : rows) {
+        auto line = r.removeFromTop(32);
+        const auto num = line.removeFromLeft(22).withSizeKeepingCentre(18, 18);
+        g.setColour(modColour(row.k)); g.fillRect(num);
+        g.setColour(kPaper); g.setFont(font(16));
+        g.drawText(juce::String(row.k + 1), num, juce::Justification::centred);
+        g.setColour(kInk); g.setFont(font(19));
+        g.drawText(brood::kModTargetNames[row.t], line.withWidth(200).withTrimmedLeft(8), juce::Justification::centredLeft);
+        const int depth = juce::roundToInt(row.depth->getValue() * 100.0);
+        g.setColour(kMuted);
+        g.drawText((depth > 0 ? "+" : "") + juce::String(depth) + "%", line.withLeft(line.getRight() - 100).withWidth(60), juce::Justification::centredRight);
+    }
+}
+
 // ───────── segmented selector ─────────
 BroodEditor::ThreeWay::ThreeWay(juce::RangedAudioParameter& p, juce::StringArray l, std::function<void()> onChange)
     : param(p), labels(std::move(l)), attach(p, [this](float v) { index = juce::roundToInt(v); repaint(); if (changed) changed(); }), changed(std::move(onChange)) {
@@ -76,7 +295,7 @@ BroodEditor::Stepper::Stepper(juce::RangedAudioParameter& p, juce::String captio
 }
 // A ramp cell is a button, so it is drawn like one: an ink frame with a hard
 // shadow, arrow blocks either side and the chosen value in an inverted display.
-// The arrows step; the rest of a cell with an OFF stop is its on/off.
+// The whole cell steps; the arrows are there to say that it can.
 void BroodEditor::Stepper::paint(juce::Graphics& g) {
     auto r = getLocalBounds();
     const bool hot = isMouseOver(true);
@@ -99,35 +318,19 @@ void BroodEditor::Stepper::paint(juce::Graphics& g) {
     g.setFont(labelFont()); g.setColour(kMuted);
     const int capW = juce::jmin(inner.getWidth() / 2, 44);
     g.drawFittedText(cap, inner.removeFromLeft(capW), juce::Justification::centredLeft, 1);
-    // OFF is drawn as an outline and ON as a solid block, so which one you are
-    // looking at needs no legend: a filled display means the tide is running.
     auto value = inner.withTrimmedLeft(2);
-    const bool on = index > 0;
-    const juce::String shown = index >= 0 && index < names.size() ? names[index] : juce::String();
-    if (on) {
-        g.setColour(stock().lit); g.fillRect(value);
-        g.setColour(kInk); g.drawRect(value, 1);
-        g.setFont(textFont());
-        g.drawFittedText(shown, value.reduced(2, 0), juce::Justification::centred, 1);
-    } else {
-        g.setColour(kPaper); g.fillRect(value);
-        g.setColour(kMuted); g.drawRect(value, 1);
-        g.setFont(textFont());
-        g.drawFittedText(shown, value.reduced(2, 0), juce::Justification::centred, 1);
-    }
+    g.setColour(kPaper); g.fillRect(value);
+    g.setColour(kInk); g.drawRect(value, 1);
+    g.setFont(textFont());
+    g.drawFittedText(index >= 0 && index < names.size() ? names[index] : juce::String(), value.reduced(2, 0), juce::Justification::centred, 1);
 }
 void BroodEditor::Stepper::step(int by) {
     const int next = ((index + by) % count() + count()) % count();
     attach.setValueAsCompleteGesture(static_cast<float>(brood::rampValueOfIndex(next, count())));
 }
 void BroodEditor::Stepper::mouseDown(const juce::MouseEvent& e) {
-    // The arrows step, and their hit zones are the arrows that are drawn. A cell with
-    // an OFF stop turns off from anywhere else in one click, and the next click brings
-    // back what it was doing. A cell without one just steps forward.
-    if (e.x < arrowWidth() + 2) { step(-1); return; }
-    if (e.x >= getWidth() - arrowWidth() - 4 || names[0] != "OFF") { step(1); return; }
-    if (index > 0) { lastOn = index; attach.setValueAsCompleteGesture(0.f); }
-    else attach.setValueAsCompleteGesture(static_cast<float>(brood::rampValueOfIndex(lastOn, count())));
+    // Anywhere on the cell steps forward; only the painted back-arrow steps back.
+    step(e.x < arrowWidth() + 2 ? -1 : 1);
 }
 
 // ───────── footswitch ─────────
@@ -294,13 +497,15 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
 
 // ───────── editor ─────────
 BroodEditor::BroodEditor(BroodProcessor& p)
-    : AudioProcessorEditor(p), proc(p), look(stock()), presets(p), presetBar(presets), presetBrowser(presets, stock()),
+    : AudioProcessorEditor(p), proc(p), look(stock(), p), presets(p), presetBar(presets), presetBrowser(presets, stock()),
       benchStrip(stock(), "E-01", "BROOD"), loopView(p) {
     setLookAndFeel(&look);
     const std::pair<const char*, const char*> defs[] = {
         {"time", "TIME"}, {"mix", "MIX"}, {"length", "LENGTH"}, {"modWet", "MODIFY"}, {"clock", "CLOCK"}, {"modLoop", "MODIFY"}};
     for (const auto& [id, label] : defs) {
-        Knob k { id, label, std::make_unique<juce::Slider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox), nullptr };
+        Knob k { id, label, std::make_unique<ModSlider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox), nullptr };
+        k.slider->editor = this;
+        for (int t = 0; t < brood::kModTargets; ++t) if (juce::String(id) == brood::kModTargetIds[t]) k.slider->target = t;
         k.slider->setRotaryParameters(juce::degreesToRadians(-135.f), juce::degreesToRadians(135.f), true);
         k.slider->setMouseDragSensitivity(220);
         k.slider->setDoubleClickReturnValue(true, static_cast<double>(proc.apvts.getParameter(id)->getDefaultValue()));
@@ -330,6 +535,8 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     fsLoop = std::make_unique<Footswitch>(*proc.apvts.getParameter("loopSwitch"), "LOOP", "L");
     addAndMakeVisible(*fsWet); addAndMakeVisible(*fsLoop);
     addAndMakeVisible(loopView);
+    gainBox = std::make_unique<GainBox>(*proc.apvts.getParameter("loopDb"));
+    addAndMakeVisible(*gainBox);
 
     sourceBox.addItem("Live input", 1);
     sourceBox.addItem("Demo guitar", 2);
@@ -358,6 +565,8 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     inputGain.setTitle("Input level");
     inputGain.onValueChange = [this] { proc.inputGain = static_cast<float>(inputGain.getValue()); showReadout("INPUT LEVEL", juce::String(juce::Decibels::gainToDecibels(inputGain.getValue(), -60.0), 1) + " dB"); };
     addAndMakeVisible(inputGain);
+    balance.editor = this;
+    balance.target = 6;
     balance.setSliderStyle(juce::Slider::LinearHorizontal);
     balance.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     balance.setTitle("Balance");
@@ -384,7 +593,6 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         {"smooth", "Smooth", "clock glides", "clock steps"},
         {"freeze", "Freeze", "held, ringing", "moving"},
         {"classic", "Classic", "mk I manners", "as built"},
-        {"wetPre", "Pre", "wet runs into the loop", "wet beside the loop"},
     };
     for (size_t i = 0; i < dips.size(); ++i) {
         const auto& def = dipDefs[i];
@@ -414,38 +622,51 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     envSoft.onClick = [this] { showReadout("SOFT / ENV", envSoft.getToggleState() ? "slices fade" : "slices cut"); };
     addChildComponent(envSoft);
     envSoftAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "envSoft", envSoft);
-    auto rampChanged = [this](const char* label, const char* id) {
-        return [this, label, id] {
-            auto* prm = proc.apvts.getParameter(id);
-            if (lastTouched.isNotEmpty() || isVisible()) showReadout(label, prm->getCurrentValueAsText().toLowerCase());
-        };
-    };
-    rampWet = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWet"), "WET", juce::StringArray{"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("MOD / WET", "rampWet"));
-    rampLoop = std::make_unique<Stepper>(*proc.apvts.getParameter("rampLoop"), "LOOP", juce::StringArray{"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"}, rampChanged("MOD / LOOP", "rampLoop"));
-    rampWave = std::make_unique<Stepper>(*proc.apvts.getParameter("rampWave"), "SHAPE", juce::StringArray{"TRI", "SQR", "SIN", "RND", "SMTH"}, rampChanged("MOD SHAPE", "rampWave"));
-    for (auto* st : {rampWet.get(), rampLoop.get(), rampWave.get()}) addAndMakeVisible(*st);
-    rampRate.setSliderStyle(juce::Slider::LinearHorizontal);
-    rampRate.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    rampRate.setTitle("Modulation rate");
-    rampRate.setDoubleClickReturnValue(true, static_cast<double>(proc.apvts.getParameter("rampSpeed")->getDefaultValue()));
-    rampRate.onValueChange = [this] { touch("rampSpeed"); };
-    addAndMakeVisible(rampRate);
-    rampRateAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "rampSpeed", rampRate);
-    // The two dips that bend the shape, the polarity that keeps it above the knob,
-    // and the switch that hands the rate to the tempo instead.
-    const std::pair<const char*, const char*> rampSwitchDefs[] = {{"rampUni", "UNI"}, {"bounce", "BOUNCE"}, {"sweep", "SWEEP"}, {"rampSync", "SYNC"}, {"rampHold", "HOLD"}};
-    for (size_t i = 0; i < rampSwitches.size(); ++i) {
-        auto& rs = rampSwitches[i];
-        const juce::String lab = rampSwitchDefs[i].second;
-        rs.button = std::make_unique<juce::ToggleButton>(lab);
-        rs.button->getProperties().set("compact", true);
-        rs.button->onClick = [this, lab, b = rs.button.get()] {
-            showReadout("MOD " + lab, b->getToggleState() ? "on" : "off");
-            repaintDesign(rampArea);   // the rate cell's caption changes with SYNC
-        };
-        addAndMakeVisible(*rs.button);
-        rs.att = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, rampSwitchDefs[i].first, *rs.button);
+    // PRE lives with the wet channel, under what it changes.
+    wetPre.setButtonText("BEFORE THE LOOP");
+    wetPre.onClick = [this] { showReadout("WET CHANNEL", wetPre.getToggleState() ? "before the loop: it gets recorded" : "after the loop: the loop stays clean"); };
+    addAndMakeVisible(wetPre);
+    wetPreAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "wetPre", wetPre);
+    // Modulation: two sources, the selected one's controls showing.
+    for (int k = 0; k < 2; ++k) {
+        const juce::String m = "mod" + juce::String(k + 1), who = "MOD " + juce::String(k + 1);
+        chips[k] = std::make_unique<ModChip>(*this, k);
+        addAndMakeVisible(*chips[k]);
+        auto& c = sources[static_cast<size_t>(k)];
+        c.wave = std::make_unique<Stepper>(*proc.apvts.getParameter(m + "Wave"), "SHAPE", juce::StringArray{"TRI", "SQR", "SIN", "RND", "SMTH"},
+            [this, who, m] { if (isVisible()) showReadout(who + " SHAPE", proc.apvts.getParameter(m + "Wave")->getCurrentValueAsText().toLowerCase()); });
+        addChildComponent(*c.wave);
+        c.rate.setSliderStyle(juce::Slider::LinearHorizontal);
+        c.rate.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        c.rate.setTitle(who + " rate");
+        c.rate.setDoubleClickReturnValue(true, static_cast<double>(proc.apvts.getParameter(m + "Rate")->getDefaultValue()));
+        c.rate.onValueChange = [this, m] { touch(m + "Rate"); };
+        addChildComponent(c.rate);
+        c.rateAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, m + "Rate", c.rate);
+        const std::pair<const char*, const char*> defs[] = {{"Uni", "UNI"}, {"Bounce", "BOUNCE"}, {"Sweep", "SWEEP"}, {"Sync", "SYNC"}, {"Hold", "HOLD"}};
+        for (size_t i = 0; i < c.switches.size(); ++i) {
+            const juce::String lab = defs[i].second;
+            auto button = std::make_unique<juce::ToggleButton>(lab);
+            button->getProperties().set("compact", true);
+            button->onClick = [this, lab, who, b = button.get()] {
+                showReadout(who + " " + lab, b->getToggleState() ? "on" : "off");
+                repaintDesign(rampArea);   // the rate cell's caption changes with SYNC
+            };
+            addChildComponent(*button);
+            c.switchAtts[i] = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, m + defs[i].first, *button);
+            c.switches[i] = std::move(button);
+        }
     }
+    routesButton.onClick = [this] {
+        if (routeList->isVisible()) { routeList->setVisible(false); return; }
+        routeList->rebuild();
+        routeList->setVisible(true);
+        routeList->toFront(false);
+    };
+    addAndMakeVisible(routesButton);
+    routeList = std::make_unique<RouteList>(*this);
+    addChildComponent(*routeList);
+    selectSource(0);
     addAndMakeVisible(presetBar);
     presetBar.onBrowse = [this] { presetBrowser.isVisible() ? presetBrowser.close(true) : presetBrowser.open(); };
     presetBar.onStepped = [this] { showReadout("PATCH", presets.currentName()); };
@@ -454,8 +675,9 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     // The Bench: what the loop is playing goes to the shared folder, for an instrument
     // in the range to take.
     addAndMakeVisible(benchStrip);
-    benchStrip.reservedRight = 128;
-    benchStrip.onAction = [this] { benchSend(); };
+    benchStrip.reservedRight = 132;
+    benchStrip.onSend = [this] { benchSend(); };
+    benchStrip.onTake = [this] { benchTake(); };
     benchSource.addItem("THE LOOP", 1);
     benchSource.addItem("4 BARS OUT", 4);
     benchSource.addItem("8 BARS OUT", 8);
@@ -500,7 +722,7 @@ void BroodEditor::touch(const juce::String& id) {
     // The readout's own names for the parameters, so it never shows a raw id.
     static const std::pair<const char*, const char*> names[] = {
         {"modWet", "MODIFY (WET)"}, {"modLoop", "MODIFY (LOOP)"}, {"loopEnd", "END"}, {"start", "START"},
-        {"balance", "WET / LOOP"}, {"rampSpeed", "MOD RATE"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"},
+        {"balance", "WET / LOOP"}, {"mod1Rate", "MOD 1 RATE"}, {"mod2Rate", "MOD 2 RATE"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"},
     };
     juce::String label = id.toUpperCase();
     for (const auto& [key, name] : names) if (id == key) label = name;
@@ -509,7 +731,7 @@ void BroodEditor::touch(const juce::String& id) {
     // The small readouts beside the trim and hood sliders are drawn by this
     // editor rather than by the control, so they need a repaint to follow it.
     if (id == "memory" || id == "start" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
-    if (id == "rampSpeed") repaintDesign(rampArea);
+    if (id == "mod1Rate" || id == "mod2Rate") repaintDesign(rampArea);
     if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv") repaintDesign(hoodArea);
 }
 
@@ -524,6 +746,119 @@ juce::Rectangle<int> BroodEditor::whisperRect(int knob) const {
     const auto kb = knobDesign[juce::jlimit(0, 5, knob)];
     // Row one leaves room for a SYNC switch between the knob and its line.
     return { kb.getCentreX() - 118, knob < 3 ? kb.getBottom() + 18 : kb.getBottom() + 2, 236, 34 };
+}
+
+juce::RangedAudioParameter* BroodEditor::depthParam(int k, int t) const {
+    return proc.apvts.getParameter("mod" + juce::String(k + 1) + "_" + brood::kModTargetIds[t]);
+}
+
+void BroodEditor::selectSource(int k) {
+    selectedMod = k;
+    for (int i = 0; i < 2; ++i) {
+        auto& c = sources[static_cast<size_t>(i)];
+        c.wave->setVisible(i == k);
+        c.rate.setVisible(i == k);
+        for (auto& b : c.switches) b->setVisible(i == k);
+        chips[i]->repaint();
+    }
+    repaintDesign(rampArea);
+    if (isVisible()) rebuildHoverHelp();
+}
+
+juce::Rectangle<int> BroodEditor::targetDesign(int t) const {
+    if (t == 6) return balanceDesign.expanded(4, 6);
+    static constexpr int knobOf[] = {0, 1, 2, 3, 4, 5};
+    return knobDesign[knobOf[t]];
+}
+
+int BroodEditor::targetAt(juce::Point<int> screen, juce::Point<float>& design) const {
+    const auto local = getLocalPoint(nullptr, screen).toFloat();
+    float x = local.x, y = local.y;
+    view.inverted().transformPoint(x, y);
+    design = {x, y};
+    // Knobs in this order hold what kModTargetIds lists, so look each one up by id.
+    for (int t = 0; t < brood::kModTargets; ++t) {
+        juce::Rectangle<int> rect = t == 6 ? balanceDesign.expanded(4, 6) : juce::Rectangle<int>();
+        if (t < 6) for (size_t i = 0; i < knobs.size(); ++i) if (knobs[i].id == brood::kModTargetIds[t]) rect = knobDesign[i];
+        if (rect.toFloat().contains(design)) return t;
+    }
+    return -1;
+}
+
+void BroodEditor::chipDragged(int k, juce::Point<int> screen) {
+    dragSource = k;
+    dropTarget = targetAt(screen, dragAt);
+    repaint();
+}
+
+void BroodEditor::chipDropped(int k, juce::Point<int> screen) {
+    juce::Point<float> at;
+    const int t = targetAt(screen, at);
+    dragSource = dropTarget = -1;
+    repaint();
+    if (t < 0) return;
+    auto* prm = depthParam(k, t);
+    if (std::fabs(prm->convertFrom0to1(prm->getValue())) < 0.005f) {
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost(prm->convertTo0to1(0.5f));
+        prm->endChangeGesture();
+    }
+    selectSource(k);
+    showDepth(k, t);
+    if (routeList->isVisible()) routeList->rebuild();
+}
+
+void BroodEditor::showDepth(int k, int t) {
+    auto* prm = depthParam(k, t);
+    const int depth = juce::roundToInt(prm->convertFrom0to1(prm->getValue()) * 100.f);
+    showReadout("MOD " + juce::String(k + 1) + " > " + brood::kModTargetNames[t], (depth > 0 ? "+" : "") + juce::String(depth) + "%");
+}
+
+void BroodEditor::showRouteMenu(int target) {
+    juce::PopupMenu menu;
+    menu.addSectionHeader(brood::kModTargetNames[target]);
+    bool any = false;
+    for (int k = 0; k < 2; ++k) {
+        auto* prm = depthParam(k, target);
+        const float d = prm->convertFrom0to1(prm->getValue());
+        if (std::fabs(d) < 0.005f) continue;
+        any = true;
+        menu.addItem(1 + k, "Remove MOD " + juce::String(k + 1) + " (" + juce::String(juce::roundToInt(d * 100.f)) + "%)");
+    }
+    if (!any) menu.addItem(9, "No routes. Drag a source onto this control.", false);
+    menu.showMenuAsync(juce::PopupMenu::Options(), [this, target](int chosen) {
+        if (chosen < 1 || chosen > 2) return;
+        auto* prm = depthParam(chosen - 1, target);
+        prm->setValueNotifyingHost(prm->convertTo0to1(0.f));
+        repaint();
+    });
+}
+
+int BroodEditor::routeMask() const {
+    int mask = 0;
+    for (int k = 0; k < 2; ++k)
+        for (int t = 0; t < brood::kModTargets; ++t)
+            if (std::fabs(depthParam(k, t)->convertFrom0to1(depthParam(k, t)->getValue())) >= 0.005f) mask |= 1 << (k * brood::kModTargets + t);
+    return mask;
+}
+
+// While a chip is being dragged: the control it would land on, and a tag at the mouse.
+void BroodEditor::paintOverChildren(juce::Graphics& g) {
+    if (dragSource < 0) return;
+    g.addTransform(view);
+    const auto colour = modColour(dragSource);
+    if (dropTarget >= 0) {
+        g.setColour(colour);
+        g.drawRect(dropTarget == 6 ? balanceDesign.expanded(4, 6) : [&] {
+            juce::Rectangle<int> rect;
+            for (size_t i = 0; i < knobs.size(); ++i) if (knobs[i].id == brood::kModTargetIds[dropTarget]) rect = knobDesign[i];
+            return rect;
+        }(), 2);
+    }
+    const auto tag = juce::Rectangle<float>(58.f, 20.f).withCentre(dragAt.translated(0.f, -16.f));
+    g.setColour(colour); g.fillRect(tag);
+    g.setColour(kPaper); g.setFont(font(16));
+    g.drawText("MOD " + juce::String(dragSource + 1), tag, juce::Justification::centred);
 }
 
 void BroodEditor::benchSend() {
@@ -541,7 +876,14 @@ void BroodEditor::benchSend() {
     double rate = 0;
     const bool sent = proc.copyMoment(moment, rate) && kit::bench::send(moment, rate, "E-01", "BROOD");
     showReadout("THE BENCH", sent ? "moment sent" : "could not send it");
-    if (sent) if (const auto m = kit::bench::latest()) momentSent = m->stamp;
+    if (sent) momentSent = juce::Time::currentTimeMillis();
+}
+
+void BroodEditor::benchTake() {
+    if (!waiting.has_value()) return;
+    const bool taken = proc.takeMoment(waiting->audio);
+    showReadout("THE BENCH", taken ? "it's the loop now" : "could not read it");
+    if (taken) { momentTaken = waiting->stamp; benchCheckedAt = 0; }
 }
 
 void BroodEditor::updateBench() {
@@ -552,23 +894,19 @@ void BroodEditor::updateBench() {
         double rate = 0;
         const bool sent = proc.takeOutputCapture(moment, rate) && kit::bench::send(moment, rate, "E-01", "BROOD");
         showReadout("THE BENCH", sent ? "bars sent" : "could not send them");
-        if (sent) if (const auto m = kit::bench::latest()) momentSent = m->stamp;
+        if (sent) momentSent = juce::Time::currentTimeMillis();
     }
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    if (now - benchCheckedAt >= 1000.0) { benchCheckedAt = now; waiting = kit::bench::latest("E-01"); }
+    const bool fresh = waiting.has_value() && waiting->stamp != momentTaken;
     const int caught = proc.ui.lsrc.load() >= 64 ? 1 : 0;
     const juce::String state = caught == 1 ? juce::String(proc.ui.winLen.load() / proc.ui.clockHz.load(), 2) + " S CAUGHT" : juce::String("LISTENING");
     const auto capture = proc.outputCaptureState();
     const bool bars = benchSource.getSelectedId() > 1;
-    if (capture == Capture::waiting) {
-        benchStrip.set(state, "WAITING FOR THE NEXT BAR", "STOP", true);
-    } else if (capture == Capture::recording) {
-        benchStrip.set(state, "RECORDING THE OUTPUT " + juce::String(juce::roundToInt(proc.outputCaptureProgress() * 100.f)) + "%", "STOP", true);
-    } else {
-        const auto m = kit::bench::latest();
-        const bool sent = m.has_value() && m->stamp == momentSent;
-        benchStrip.set(state, sent ? "ON THE BENCH: AN INSTRUMENT CAN TAKE IT" : bars ? "RECORD WHAT YOU HEAR AND SEND IT" : caught == 1 ? "SEND IT TO AN INSTRUMENT" : "CATCH A LOOP TO SEND IT",
-                       "SEND >", bars || caught == 1);
-    }
-    benchWasCaught = caught;
+    const juce::String fromThere = fresh ? "FROM " + waiting->fromChip + " " + waiting->fromName + " / " + juce::String(waiting->seconds, 2) + " S" : juce::String();
+    if (capture == Capture::waiting) benchStrip.set(state, "WAITING FOR THE NEXT BAR", "STOP", true, fresh);
+    else if (capture == Capture::recording) benchStrip.set(state, "RECORDING " + juce::String(juce::roundToInt(proc.outputCaptureProgress() * 100.f)) + "%", "STOP", true, fresh);
+    else benchStrip.set(state, fresh ? fromThere : momentSent != 0 ? "SENT: AN INSTRUMENT CAN TAKE IT" : "NOTHING WAITING", "SEND >", bars || caught == 1, fresh);
 }
 
 void BroodEditor::updateModeControls() {
@@ -610,8 +948,12 @@ void BroodEditor::resized() {
     pedalArea = {24, 108, 828, 548};
     place(presetBrowser, pedalArea.withTrimmedRight(-3).withTrimmedBottom(-3));
     place(benchStrip, {24, 748, 1155, 50});
-    benchSourceDesign = {24 + 1146 - 96 - 8 - 124, 755, 124, 33};
+    {
+        const auto area = benchStrip.reservedArea();
+        benchSourceDesign = area.translated(24, 748);
+    }
     place(benchSource, benchSourceDesign);
+    place(*routeList, pedalArea.withTrimmedRight(-3).withTrimmedBottom(-3));
 
     // ── the three columns ──
     const int cx[3] = {pedalArea.getX() + 138, pedalArea.getX() + 414, pedalArea.getX() + 690};
@@ -637,6 +979,8 @@ void BroodEditor::resized() {
     fsWetDesign = juce::Rectangle<int>(248, 62).withCentre({cx[0], 610});
     fsLoopDesign = juce::Rectangle<int>(248, 62).withCentre({cx[2], 610});
     place(*fsWet, fsWetDesign);
+    wetPreDesign = juce::Rectangle<int>(170, 24).withCentre({cx[0], 562});
+    place(wetPre, wetPreDesign);
     place(*fsLoop, fsLoopDesign);
 
     // ── the side column ──
@@ -646,9 +990,9 @@ void BroodEditor::resized() {
     auto side = juce::Rectangle<int>(864, 108, 312, 627);
     lcdArea = side.removeFromTop(84);
     side.removeFromTop(10);
-    loopArea = side.removeFromTop(206);
+    loopArea = side.removeFromTop(196);
     side.removeFromTop(10);
-    rampArea = side.removeFromTop(140);
+    rampArea = side.removeFromTop(150);
     side.removeFromTop(10);
     dipArea = side.removeFromTop(62);
     side.removeFromTop(10);
@@ -658,8 +1002,10 @@ void BroodEditor::resized() {
     // label / slider / figure on the same three columns so the figures line up.
     constexpr int labelW = 74, figureW = 44;
     auto inner = loopArea.withTrimmedTop(kit::panelHeadHeight).reduced(12, 6);
-    loopViewDesign = inner.removeFromTop(110);
+    loopViewDesign = inner.removeFromTop(100);
     place(loopView, loopViewDesign);
+    gainDesign = juce::Rectangle<int>(84, 17).withPosition(loopViewDesign.getRight() - 85, loopViewDesign.getY() + 1);
+    place(*gainBox, gainDesign);
     inner.removeFromTop(kSp2);
     auto trimRow = [&](juce::Rectangle<int>& out, juce::Slider& sl) {
         out = inner.removeFromTop(21).withTrimmedLeft(labelW).withTrimmedRight(figureW);
@@ -668,36 +1014,42 @@ void BroodEditor::resized() {
     trimRow(memoryDesign, memory);
     trimRow(balanceDesign, balance);
 
-    // 02 MODULATION: destinations on top, then shape and rate, then the switches.
+    // 02 MODULATION: the two sources and the route list, then the selected source's
+    // shape, rate and switches.
     auto ramp = rampArea.withTrimmedTop(kit::panelHeadHeight).reduced(10, 7);
-    auto rampRow = ramp.removeFromTop(28);
-    const int half = (rampRow.getWidth() - kSp2) / 2;
-    rampWetDesign = rampRow.removeFromLeft(half);
-    rampRow.removeFromLeft(kSp2);
-    rampLoopDesign = rampRow;
-    place(*rampWet, rampWetDesign);
-    place(*rampLoop, rampLoopDesign);
+    auto rampRow = ramp.removeFromTop(46);
+    routesDesign = rampRow.removeFromRight(60);
+    rampRow.removeFromRight(6);
+    const int chipW = (rampRow.getWidth() - 6) / 2;
+    chipDesign[0] = rampRow.removeFromLeft(chipW);
+    rampRow.removeFromLeft(6);
+    chipDesign[1] = rampRow;
+    place(*chips[0], chipDesign[0]);
+    place(*chips[1], chipDesign[1]);
+    place(routesButton, routesDesign);
     ramp.removeFromTop(5);
     rampRow = ramp.removeFromTop(28);
+    const int half = (rampRow.getWidth() - kSp2) / 2;
     rampWaveDesign = rampRow.removeFromLeft(half);
-    place(*rampWave, rampWaveDesign);
     rampRow.removeFromLeft(kSp2);
     rampRateDesign = rampRow;                    // "RATE" and its figure are painted at the ends
-    place(rampRate, rampRateDesign.withTrimmedLeft(36).withTrimmedRight(40).reduced(0, 3));
     ramp.removeFromTop(5);
     rampRow = ramp.removeFromTop(26);
     // Five cells, sized to their words: BOUNCE needs more room than UNI.
     const int swWeights[] = {50, 72, 66, 54, 55};
     const int swTotal = rampRow.getWidth();
-    for (size_t i = 0; i < rampSwitches.size(); ++i) {
-        rampSwitchDesign[i] = i + 1 == rampSwitches.size() ? rampRow : rampRow.removeFromLeft(swTotal * swWeights[i] / 297);
-        place(*rampSwitches[i].button, rampSwitchDesign[i]);
+    for (size_t i = 0; i < 5; ++i)
+        rampSwitchDesign[i] = i + 1 == 5 ? rampRow : rampRow.removeFromLeft(swTotal * swWeights[i] / 297);
+    for (auto& c : sources) {
+        place(*c.wave, rampWaveDesign);
+        place(c.rate, rampRateDesign.withTrimmedLeft(36).withTrimmedRight(40).reduced(0, 3));
+        for (size_t i = 0; i < c.switches.size(); ++i) place(*c.switches[i], rampSwitchDesign[i]);
     }
 
-    // 03 SWITCHES: five cells, sized to their words.
+    // 03 SWITCHES: four cells, sized to their words.
     auto dipRow = dipArea.withTrimmedTop(kit::panelHeadHeight).reduced(10, 0).withSizeKeepingCentre(dipArea.getWidth() - 20, 26);
     dipRow.setY(dipArea.getY() + kit::panelHeadHeight + 5);
-    const int dipWeights[] = {60, 62, 60, 70, 45};
+    const int dipWeights[] = {72, 74, 72, 79};
     const int dipTotal = dipRow.getWidth();
     for (size_t i = 0; i < dips.size(); ++i) {
         dipCellDesign[i] = i + 1 == dips.size() ? dipRow : dipRow.removeFromLeft(dipTotal * dipWeights[i] / 297);
@@ -745,9 +1097,8 @@ void BroodEditor::rebuildHoverHelp() {
         "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
         "the hold gesture without the holding: the wet side comes up frozen and rings on its own.",
         "the MK I in the room: a noisy clock, a loop that never sits still, a longer reverb.",
-        "the wet side runs into the looper: overdubs and every later catch keep it, and SEND carries it. it hears only the input, so ROUTING stands aside.",
     };
-    static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE", "CLASSIC", "PRE"};
+    static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE", "CLASSIC"};
     for (size_t i = 0; i < dips.size(); ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
     // These two are only in the table while their mode is on, so help never explains
     // a control that is not on the panel.
@@ -758,21 +1109,24 @@ void BroodEditor::rebuildHoverHelp() {
     if (envSoft.isVisible())
         add(envSoftDesign.expanded(4), "SOFT / ENV", "the slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. a rounder, less percussive stutter.");
 
-    add(rampWetDesign, "MOD / WET", "the arrows step what the first tide moves: time, mix, length, modify, clock, balance. click the cell to turn it off, and again to bring it back.");
-    add(rampLoopDesign, "MOD / LOOP", "the arrows step what the second tide moves; its modify is the loop's own. click the cell to turn it off, and again to bring it back.");
+    add(chipDesign[0], "MOD 1", "click to show its controls. drag it onto any knob or WET/LOOP to route it. the square turns it on or off.");
+    add(chipDesign[1], "MOD 2", "click to show its controls. drag it onto any knob or WET/LOOP to route it. the square turns it on or off.");
+    add(routesDesign, "ROUTES", "every route in one list, with its depth.");
     add(rampWaveDesign, "MOD SHAPE", "click to step the shape: triangle, square, sine, random, smooth random.");
-    add(rampRateDesign, "MOD RATE", "how slowly the tide turns. both sides share it. with SYNC on it becomes a span of the beat.");
+    add(rampRateDesign, "MOD RATE", "how slowly this source turns. with SYNC on it becomes a span of the beat.");
     static const char* rampSwitchText[] = {
         "the swing sits above the knob instead of either side of it.",
         "the swing reflects instead of snapping back, so nothing jumps.",
         "the shape is ignored and the knob just climbs, again and again.",
         "the rate becomes a division of the beat: eight bars down to a sixteenth.",
-        "both tides stop where they are and the knobs stay pushed there. CC 52 does the same.",
+        "this source stops where it is and its knobs stay pushed there. CC 52 holds both.",
     };
     static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP", "MOD SYNC", "MOD HOLD"};
     for (int i = 0; i < 5; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
+    add(wetPreDesign, "BEFORE THE LOOP", "on: the wet side runs into the looper, so catches and overdubs keep it and SEND carries it. off: the loop stays clean and the wet side plays over it.");
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left is the pedal's own buffer, which shrinks as CLOCK drops.");
+    add(gainDesign, "LOOP GAIN", "the loop's own level. drag up or down, shift for fine, double-click for 0 dB.");
     add(loopViewDesign, "START / END", "drag a marker to trim what plays; START keeps the end where it is. double-click opens the whole take. moves crossfade, so they do not click.");
     add(balanceDesign.expanded(0, 2), "WET / LOOP", "the loop keeps its level across the whole travel and the wet side is added on top; hard right is the loop alone.");
 
@@ -825,7 +1179,7 @@ void BroodEditor::paint(juce::Graphics& g) {
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
     for (size_t i = 0; i < knobs.size(); ++i) {
         const auto kb = knobDesign[i];
-        const auto nameRow = kb.withY(kb.getY() - 16).withHeight(20);
+        const auto nameRow = kb.withY(kb.getY() - 20).withHeight(20);
         g.setColour(kInk); g.setFont(font(20));
         g.drawText(knobs[i].label, nameRow, juce::Justification::centred);
         // The cell carries its own number, tied to the name, so six knobs read as six
@@ -856,7 +1210,7 @@ void BroodEditor::paint(juce::Graphics& g) {
     const juce::String loopTail = memV <= 0.001f ? juce::String("PEDAL MEMORY")
                                                  : juce::String(brood::expMap(memV, 1.0, 30.0), 1) + " S MEMORY";
     kit::drawPanel(g, loopArea, stock(), "01", "LOOP", loopTail);
-    kit::drawPanel(g, rampArea, stock(), "02", "MODULATION", "2 GEN / 1 RATE");
+    kit::drawPanel(g, rampArea, stock(), "02", "MODULATION", "MOD " + juce::String(selectedMod + 1) + " SELECTED");
     kit::drawPanel(g, dipArea, stock(), "03", "SWITCHES", juce::String(static_cast<int>(dips.size())) + " FITTED");
     kit::drawPanel(g, srcArea, stock(), "04", "INPUT", srcTail);
 
@@ -870,7 +1224,8 @@ void BroodEditor::paint(juce::Graphics& g) {
     rowLabel("LEVEL", inputGainDesign, 44);
     // RATE sits inside the rate cell, so it costs no extra row. With SYNC on it is
     // no longer a rate at all, so the caption says what the readout now means.
-    const auto* rampSyncValue = proc.apvts.getRawParameterValue("rampSync");
+    const juce::String modId = "mod" + juce::String(selectedMod + 1);
+    const auto* rampSyncValue = proc.apvts.getRawParameterValue(modId + "Sync");
     const bool spanMode = rampSyncValue != nullptr && rampSyncValue->load() > 0.5f;
     g.setFont(labelFont()); g.setColour(kMuted);
     g.drawText(spanMode ? "SPAN" : "RATE", rampRateDesign.getX(), rampRateDesign.getY(), 34, rampRateDesign.getHeight(), juce::Justification::centredLeft);
@@ -889,7 +1244,7 @@ void BroodEditor::paint(juce::Graphics& g) {
     figure("memory", memoryDesign, false);
     figure("balance", balanceDesign, true);   // loop side, %
     // The rate's figure: a period, or with SYNC the span of the beat it turns over.
-    if (const auto* rv = proc.apvts.getRawParameterValue("rampSpeed")) {
+    if (const auto* rv = proc.apvts.getRawParameterValue(modId + "Rate")) {
         const double secs = 1.0 / brood::rampHertz(rv->load());
         const juce::String rate = spanMode ? juce::String(brood::rampDivLabel(rv->load()))
                                 : secs < 1 ? juce::String(juce::roundToInt(secs * 1000)) + "ms"
@@ -988,7 +1343,12 @@ void BroodEditor::timerCallback() {
     {
         int act = -1;
         for (size_t i = 0; i < knobs.size(); ++i) if (knobs[i].slider->isMouseOverOrDragging()) act = static_cast<int>(i);
-        const juce::String txt = act >= 0 ? proc.describe(knobs[static_cast<size_t>(act)].id) : juce::String();
+        juce::String txt = act >= 0 ? proc.describe(knobs[static_cast<size_t>(act)].id) : juce::String();
+        // ENV's two knobs act on the slices the input makes, so with the loop playing
+        // and nothing coming in they have nothing to move yet. Say so where you're looking.
+        if (act == 2 || act == 5)
+            if (lastModeLoop == 0 && ui.loopLed.load() == 1 && !ui.envGate.load())
+                txt = "PLAY SOMETHING: ENV SLICES WHEN IT HEARS YOU";
         if (act != activeKnob || txt != activeKnobText) {
             if (activeKnob >= 0) repaintDesign(whisperRect(activeKnob));
             activeKnob = act; activeKnobText = txt;
@@ -1006,6 +1366,19 @@ void BroodEditor::timerCallback() {
     const int led = ui.loopLed.load();   // 0 off, 1 play, 2 rec, 3 dub
     const bool wetOn = ui.wetOn.load() && !(ui.freeze.load() && !blink);
     const bool loopOn = led == 1 || ((led == 2 || led == 3) && blink) || (led == 0 && now < flashUntil);
+    // The chips' moving traces, the knobs' rings, and the route list keeping up.
+    for (int k = 0; k < 2; ++k) {
+        auto& chip = *chips[k];
+        chip.trace[static_cast<size_t>(chip.written)] = ui.modValue[static_cast<size_t>(k)].load();
+        chip.written = (chip.written + 1) % static_cast<int>(chip.trace.size());
+        chip.repaint();
+    }
+    const int mask = routeMask();
+    if (mask != routeMaskSeen) {
+        routeMaskSeen = mask;
+        if (routeList->isVisible()) routeList->rebuild();
+    }
+    if (mask != 0) for (auto& knob : knobs) if (knob.slider->isShowing()) knob.slider->repaint();
     fsWet->setLit(wetOn);
     fsLoop->setLit(loopOn);
     if (led != lastLoopLed) {

@@ -55,9 +55,11 @@ inline int divMap(double knob) {
 // Each channel has a function generator that can drive one control. The first
 // position is off; MODIFY means this channel's own MODIFY knob. Mirrors the
 // RAMP_* helpers in src/brood-worklet.js.
-constexpr int kRampTargetCount = 7;
+// What a modulation source can move, in the order of Core::effective().
+constexpr int kModTargets = 7;
+inline const char* const kModTargetIds[kModTargets] = {"time", "mix", "length", "modWet", "clock", "modLoop", "balance"};
+inline const char* const kModTargetNames[kModTargets] = {"TIME", "MIX", "LENGTH", "MODIFY / WET", "CLOCK", "MODIFY / LOOP", "WET / LOOP"};
 constexpr int kRampWaveCount = 5;
-inline const char* const kRampTargets[kRampTargetCount] = {"OFF", "TIME", "MIX", "LENGTH", "MODIFY", "CLOCK", "BALANCE"};
 inline const char* const kRampWaves[kRampWaveCount] = {"TRI", "SQR", "SIN", "RND", "SMTH"};
 // Index ↔ normalised value. The parameters are plain 0..1 floats with `count`
 // stops, and this is the only place that conversion lives: the engine, the
@@ -71,10 +73,8 @@ inline double rampValueOfIndex(int i, int count) {
     if (count < 2) return 0.0;
     return clampd(i, 0, count - 1) / static_cast<double>(count - 1);
 }
-inline int rampTargetIndex(double k) { return rampIndexOfValue(k, kRampTargetCount); }
 inline int rampWaveIndex(double k) { return rampIndexOfValue(k, kRampWaveCount); }
 inline double rampHertz(double k) { return expMap(clampd(k, 0, 1), 0.05, 8); }   // one cycle every 20 s … eight a second
-constexpr double kRampDepth = 0.5;
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles
 
 // Tempo sync for time-based effects. The knob becomes a musical division
@@ -426,13 +426,17 @@ struct Params {
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
     double freezeLatch = 0;                          // the FREEZE switch: wet up, held
-    double rampWet = 0, rampLoop = 0;                // RAMPS destination per channel
-    double rampSpeed = 0.45, rampWave = 0;           // rate and shape
-    bool rampUni = false, bounce = false, sweep = false;
+    // The two modulation sources. Each can move any of the seven controls below by its
+    // own depth (-1..1, 0 is no route), and runs at its own rate and shape.
+    struct ModSource {
+        bool on = true, uni = false, bounce = false, sweep = false, sync = false, hold = false;
+        double rate = 0.45, wave = 0;
+        double depth[kModTargets] = {0, 0, 0, 0, 0, 0, 0};
+    };
+    ModSource mods[2];
     bool envSync = false;                           // ENV slice follows the tempo
-    bool rampSync = false;                          // modulation rate follows the tempo
-    bool rampHold = false;                          // both generators stop where they are
     bool envSoft = false;                           // ENV's slices fade in and out instead of cutting
+    double loopDb = 0;                              // GAIN on the loop, -24..+12 dB
     bool wetPre = false;                            // the wet side runs into the looper instead of beside it
 };
 
@@ -448,7 +452,7 @@ public:
 
     void prepare(double sampleRate) {
         fs = sampleRate;
-        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width, p.rampSpeed};
+        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width, {p.mods[0].rate, p.mods[1].rate}};
         e = Eff{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance};
         hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1; filterClassic = -1;
         aa = reconL = reconR = LowPassN{};
@@ -539,7 +543,7 @@ public:
             s.modLoop += (p.modLoop - s.modLoop) * a;
             s.balance += (p.balance - s.balance) * a;
             s.clock += (p.clock - s.clock) * aClock;
-            s.rampSpeed += (p.rampSpeed - s.rampSpeed) * a;
+            for (int k = 0; k < 2; ++k) s.modRate[k] += (p.mods[k].rate - s.modRate[k]) * a;
             rampTick();
             applyRamps(a);
             s.tone += (p.tone - s.tone) * a;
@@ -695,7 +699,7 @@ public:
 
 
 private:
-    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width, rampSpeed; };
+    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width, modRate[2]; };
     // What the DSP reads: the smoothed knobs plus whatever a ramp is moving.
     struct Eff { double time, mix, length, modWet, clock, modLoop, balance; };
     struct Ramp { double ph = 0, dir = 1, prev = 0.5, next = 0.5; uint32_t rng = 0; };
@@ -728,6 +732,7 @@ private:
     LoopState loopState = LoopState::Off;
     bool overdub = false;
     double dubGain = 0, dubPrev = 0;
+    double loopDbSeen = 0, loopLevelTarget = 1, loopLevel = 1;
     int dubLast = -1;
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
     // Moving START moves the read head, and a jump is a click. These three carry a
@@ -750,6 +755,8 @@ private:
     Ramp ramp[2] = {{0, 1, 0.5, 0.5, 0x9e3779b9u}, {0.5, 1, 0.5, 0.5, 0x5bd1e995u}};
     double rampRaw[2] = {0, 0};     // per host sample
     double rampVal[2] = {0, 0};     // smoothed to audio rate
+    double modGainS[2] = {1, 1};    // ON, smoothed
+    double modDepthS[2][kModTargets] = {{0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0}};   // depths, smoothed
 
     double rand01() { rng = rng * 1103515245u + 12345u; return rng / 4294967296.0; }
 
@@ -761,9 +768,9 @@ private:
     }
 
     // Value of the chosen shape at the current phase, 0..1.
-    double rampShape(const Ramp& g, int wave) const {
+    static double rampShape(const Ramp& g, int wave, bool sweep) {
         const double ph = g.ph;
-        if (p.sweep) return ph;                                   // SWEEP: it only ever climbs
+        if (sweep) return ph;                                     // SWEEP: it only ever climbs
         if (wave == 1) return ph < 0.5 ? 1.0 : 0.0;               // square
         if (wave == 2) return 0.5 + 0.5 * std::sin(kTau * ph);
         if (wave == 3) return g.next;                             // sample and hold
@@ -774,47 +781,49 @@ private:
         return 1 - std::fabs(2 * ph - 1);                         // triangle
     }
 
-    // Advance both generators. Once per host sample, not per core tick: the ramp is
-    // a time function, so turning CLOCK down must not slow it down. BOUNCE
-    // ping-pongs the phase instead of letting it reset. HOLD stops the phase, so the
-    // knob stays pushed wherever the tide had got to and picks up from there.
+    // Advance both sources. Once per host sample, not per core tick: a source is a time
+    // function, so turning CLOCK down must not slow it down. BOUNCE ping-pongs the phase
+    // instead of letting it reset. HOLD stops the phase, so the knobs stay pushed
+    // wherever it had got to and it picks up from there. A source with no routes still
+    // runs, so its chip shows what it would do.
     void rampTick() {
-        // Free-running by default; synced, one cycle is a musical span instead.
-        const double hz = p.rampSync ? 1.0 / rampCycleSeconds(p.bpm, s.rampSpeed) : rampHertz(s.rampSpeed);
-        const double rate = hz / fs;
-        const int wave = rampWaveIndex(p.rampWave);
         for (int k = 0; k < 2; ++k) {
+            const Params::ModSource& m = p.mods[k];
             Ramp& g = ramp[k];
-            if (rampTargetIndex(k == 0 ? p.rampWet : p.rampLoop) == 0) { rampRaw[k] = 0; continue; }
-            if (p.rampHold) { rampRaw[k] = rampShape(g, wave); continue; }
-            g.ph += rate * g.dir;
-            if (g.ph >= 1) {
-                if (p.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
-                g.prev = g.next; g.next = rampRand(g);
-            } else if (g.ph <= 0) {
-                if (p.bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
-                g.prev = g.next; g.next = rampRand(g);
+            const int wave = rampWaveIndex(m.wave);
+            if (!m.hold) {
+                // Free-running by default; synced, one cycle is a musical span instead.
+                const double hz = m.sync ? 1.0 / rampCycleSeconds(p.bpm, s.modRate[k]) : rampHertz(s.modRate[k]);
+                g.ph += hz / fs * g.dir;
+                if (g.ph >= 1) {
+                    if (m.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
+                    g.prev = g.next; g.next = rampRand(g);
+                } else if (g.ph <= 0) {
+                    if (m.bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
+                    g.prev = g.next; g.next = rampRand(g);
+                }
             }
-            rampRaw[k] = rampShape(g, wave);
+            rampRaw[k] = rampShape(g, wave, m.sweep);
         }
     }
 
-    // Rebuild the effective controls from the smoothed knobs, then let the ramps
-    // push whichever control they are pointed at.
+    // Rebuild the effective controls from the smoothed knobs, then let each source push
+    // what it's routed to, around where the knob sits.
     void applyRamps(double a) {
-        rampVal[0] += (rampRaw[0] - rampVal[0]) * a;
-        rampVal[1] += (rampRaw[1] - rampVal[1]) * a;
         e.time = s.time; e.mix = s.mix; e.length = s.length; e.modWet = s.modWet;
         e.clock = s.clock; e.modLoop = s.modLoop; e.balance = s.balance;
+        double* field[kModTargets] = {&e.time, &e.mix, &e.length, &e.modWet, &e.clock, &e.modLoop, &e.balance};
         for (int k = 0; k < 2; ++k) {
-            const int idx = rampTargetIndex(k == 0 ? p.rampWet : p.rampLoop);
-            if (idx == 0) continue;
-            const double v = rampVal[k];
-            const double off = (p.rampUni ? v : v * 2 - 1) * kRampDepth;
-            double* field = idx == 1 ? &e.time : idx == 2 ? &e.mix : idx == 3 ? &e.length
-                            : idx == 4 ? (k == 1 ? &e.modLoop : &e.modWet) : idx == 5 ? &e.clock : &e.balance;
-            *field = clampd(*field + off, 0, 1);
+            const Params::ModSource& m = p.mods[k];
+            rampVal[k] += (rampRaw[k] - rampVal[k]) * a;
+            modGainS[k] += ((m.on ? 1.0 : 0.0) - modGainS[k]) * a;
+            const double swing = (m.uni ? rampVal[k] : rampVal[k] * 2 - 1) * modGainS[k];
+            for (int t = 0; t < kModTargets; ++t) {
+                modDepthS[k][t] += (m.depth[t] - modDepthS[k][t]) * a;
+                *field[t] += swing * modDepthS[k][t];
+            }
         }
+        for (auto* f : field) *f = clampd(*f, 0, 1);
     }
 
     // One-pole coefficient for the TONE hi-cut; the blend amount is the caller's.
@@ -1056,7 +1065,10 @@ private:
             dubLast = q; dubPrev = rec;
         } else dubLast = -1;
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);
-        return y * loopGain;
+        // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
+        if (p.loopDb != loopDbSeen) { loopDbSeen = p.loopDb; loopLevelTarget = std::pow(10.0, p.loopDb / 20.0); }
+        loopLevel += (loopLevelTarget - loopLevel) * 0.003;
+        return y * loopGain * loopLevel;
     }
 
     void coreTick(double x) {
@@ -1137,11 +1149,9 @@ private:
 
         // The history always advances, whether or not a loop is playing: pausing it
         // left a splice in the buffer and every extra tap stitched in another one,
-        // which is what put clicks inside the next loop. While a loop plays only the
-        // dry input is recorded (feeding the loop back would be a feedback path);
-        // while listening the live wet channel is caught too, as before.
-        const bool listening = loopState == LoopState::Off;
-        hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (listening || pre ? (wl + wr) * 0.5 : 0)));
+        // which is what put clicks inside the next loop. It's clean unless PRE puts the
+        // wet side ahead of the looper.
+        hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (pre ? (wl + wr) * 0.5 : 0)));
         if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
         if (histCount < static_cast<int>(hist.size())) ++histCount;
 

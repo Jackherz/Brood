@@ -109,6 +109,15 @@ let browser;
  await page.locator('.loop-wave canvas').dblclick();
  await page.waitForFunction(()=>/END TO THE END/.test(document.querySelector('.loop-wave').getAttribute('aria-label')));
  console.log('waveform END marker drag and reset passed');
+ // Modulation: drag source 1 onto TIME, and a route and a ring appear.
+ const chip = await page.getByRole('button',{name:'Modulation source 1'}).boundingBox();
+ const timeBox = await time.boundingBox();
+ await page.mouse.move(chip.x+30,chip.y+8); await page.mouse.down();
+ await page.mouse.move(timeBox.x+timeBox.width/2,timeBox.y+timeBox.height/2,{steps:6}); await page.mouse.up();
+ assert(await page.getByRole('slider',{name:'Source 1 depth on TIME'}).isVisible());
+ assert.equal(await time.locator('path').count(),1);
+ await page.getByRole('button',{name:'Remove source 1 from TIME'}).click();
+ console.log('modulation route by drag passed');
  await page.reload();
  assert.equal(await time.getAttribute('aria-valuenow'),saved);
  await page.getByRole('button',{name:/Browse presets/}).click();

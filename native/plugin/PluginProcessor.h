@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <array>
+#include <optional>
 #include "dsp/brood.h"
 
 // The pedal as an AudioProcessor. Every control (knobs, toggles, dips, and both
@@ -50,6 +51,8 @@ public:
     juce::String presetName { "A Little Daydream" };
     // What the loop is playing, for the Bench. Message thread; false with nothing caught.
     bool copyMoment(juce::AudioBuffer<float>& out, double& sampleRate) const;
+    // A moment from the Bench becomes the loop, at the clock it's running at. Message thread.
+    bool takeMoment(const juce::File& file);
     // Or the exact output, for a number of bars from the next bar line (at once if the
     // host is stopped). The message thread arms it and collects it; the audio thread
     // only writes into what was allocated first.
@@ -63,7 +66,9 @@ public:
 
     // ---- UI snapshot (written by the audio thread, read by the editor) ----
     struct Ui {
-        std::atomic<bool> wetOn { false }, freeze { false };
+        std::atomic<bool> wetOn { false }, freeze { false }, envGate { false };
+        std::array<std::atomic<float>, brood::kModTargets> effective {};   // each control as the sound has it now
+        std::array<std::atomic<float>, 2> modValue {};                     // each source now, 0..1
         std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 }, winSpan { 0 };
         std::atomic<float> pos { 0 }, clockHz { 48000 }, peakIn { 0 }, peakOut { 0 }, load { 0 };
         std::atomic<float> bpm { 120.f };

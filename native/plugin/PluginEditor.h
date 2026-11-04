@@ -9,6 +9,75 @@
 // the UI thread on high-DPI screens.
 class BroodEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
+    // The look, plus each knob's modulation: a ring in each source's colour showing the
+    // swing, and a dot where the sound has the knob now.
+    struct Look final : kit::Look {
+        Look(const kit::Stock& s, BroodProcessor& p) : kit::Look(s), proc(p) {}
+        void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
+        BroodProcessor& proc;
+    };
+    // A control modulation can reach. Alt-drag sets the selected source's depth on it,
+    // right-click lists its routes.
+    struct ModSlider final : juce::Slider {
+        using juce::Slider::Slider;
+        BroodEditor* editor = nullptr;
+        int target = -1;
+        void mouseDown(const juce::MouseEvent&) override;
+        void mouseDrag(const juce::MouseEvent&) override;
+        void mouseUp(const juce::MouseEvent&) override;
+        void mouseDoubleClick(const juce::MouseEvent&) override;
+        float depthAtStart = 0;
+        bool settingDepth = false, menuPress = false;
+    };
+    // One source: its colour and number, its shape moving live, its route count and ON.
+    // Click selects it, drag it onto a control to route it, right-click to clear it.
+    struct ModChip final : juce::Component {
+        ModChip(BroodEditor& e, int source) : editor(e), k(source) { setMouseCursor(juce::MouseCursor::PointingHandCursor); }
+        void paint(juce::Graphics&) override;
+        void mouseDown(const juce::MouseEvent&) override;
+        void mouseDrag(const juce::MouseEvent&) override;
+        void mouseUp(const juce::MouseEvent&) override;
+        juce::Rectangle<int> onBox() const { return { getWidth() - 21, 4, 15, 15 }; }
+        BroodEditor& editor;
+        const int k;
+        std::array<float, 64> trace {};
+        int written = 0;
+        bool dragging = false;
+    };
+    // The loop's GAIN, on the waveform as Silt has it: drag up or down, Shift for fine,
+    // double-click for 0 dB.
+    struct GainBox final : juce::Component {
+        explicit GainBox(juce::RangedAudioParameter& p);
+        void paint(juce::Graphics&) override;
+        void mouseDown(const juce::MouseEvent&) override;
+        void mouseDrag(const juce::MouseEvent&) override;
+        void mouseUp(const juce::MouseEvent&) override;
+        void mouseDoubleClick(const juce::MouseEvent&) override;
+        juce::ParameterAttachment attach;
+        juce::RangedAudioParameter& param;
+        float db = 0, dbAtStart = 0;
+    };
+    // Every route in one list, over the main sheet, each with its depth.
+    struct RouteList final : juce::Component {
+        explicit RouteList(BroodEditor&);
+        void paint(juce::Graphics&) override;
+        void resized() override;
+        void rebuild();
+        struct Row { int k, t; std::unique_ptr<juce::Slider> depth; std::unique_ptr<juce::SliderParameterAttachment> att; std::unique_ptr<juce::TextButton> remove; };
+        BroodEditor& editor;
+        std::vector<Row> rows;
+        juce::TextButton close { "CLOSE" }, clear { "CLEAR ALL" };
+    };
+    static juce::Colour modColour(int k) { return k == 0 ? juce::Colour(0xffb4452a) : juce::Colour(0xff2f6f8f); }
+    juce::RangedAudioParameter* depthParam(int k, int t) const;
+    void selectSource(int k);
+    int selectedSource() const { return selectedMod; }
+    void chipDragged(int k, juce::Point<int> screen);
+    void chipDropped(int k, juce::Point<int> screen);
+    void showRouteMenu(int target);
+    void showDepth(int k, int t);
+    void paintOverChildren(juce::Graphics&) override;
+
     explicit BroodEditor(BroodProcessor&);
     ~BroodEditor() override;
     void paint(juce::Graphics&) override;
@@ -28,20 +97,17 @@ public:
         int index = 0;
         std::function<void()> changed;
     };
-    // One ramp destination as a click-cycling cell: the arrows either side step
-    // through the list, so it stays a big target instead of a tiny menu.
+    // A short list as a click-cycling cell: the arrows either side step through it, so
+    // it stays a big target instead of a tiny menu.
     struct Stepper : juce::Component {
         Stepper(juce::RangedAudioParameter& p, juce::String caption, juce::StringArray names, std::function<void()> onChange);
         void paint(juce::Graphics&) override;
         void mouseDown(const juce::MouseEvent&) override;
         // The parameter is a normalised 0..1 float with `names.size()` stops, so
-        // index in and index out both have to go through the same conversion. Using
-        // the index as the value was the bug that left only OFF and the first entry
-        // reachable, and pointed the engine at the wrong knob.
+        // index in and index out both have to go through the same conversion.
         int count() const { return juce::jmax(2, names.size()); }
         int arrowWidth() const { return juce::jlimit(12, 20, juce::jmax(1, getWidth() - 6) / 6); }
         void step(int by);
-        int lastOn = 1;   // what a click on an OFF cell goes back to
         juce::RangedAudioParameter& param;
         juce::String cap;
         juce::StringArray names;
@@ -94,42 +160,62 @@ private:
     void updateModeControls();
 
     BroodProcessor& proc;
-    kit::Look look;
+    Look look;
     BroodPresets presets;
     kit::PresetBar presetBar;
     kit::PresetBrowser presetBrowser;
     kit::bench::Strip benchStrip;
     juce::ComboBox benchSource;   // what SEND sends: the loop, or bars of the output
-    juce::int64 momentSent = 0;
+    juce::int64 momentSent = 0, momentTaken = 0;
+    double benchCheckedAt = 0;
+    std::optional<kit::bench::Moment> waiting;
     void benchSend();
-    int benchWasCaught = -1;
+    void benchTake();
     void updateBench();
 
-    struct Knob { juce::String id, label; std::unique_ptr<juce::Slider> slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
+    struct Knob { juce::String id, label; std::unique_ptr<ModSlider> slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
     std::vector<Knob> knobs;
     std::unique_ptr<ThreeWay> wetMode, routing, loopMode;
     std::unique_ptr<Footswitch> fsWet, fsLoop;
     LoopView loopView;
+    std::unique_ptr<GainBox> gainBox;
+    juce::Rectangle<int> gainDesign;
 
     juce::ComboBox sourceBox;
     juce::TextButton loadButton { "LOAD FILE" };
     juce::Slider inputGain;
-    juce::Slider balance;
+    ModSlider balance;
     // Loop edit: the capture ceiling. START and END are the markers on the waveform.
     juce::Slider memory;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<Dip, 5> dips;
+    std::array<Dip, 4> dips;
     std::unique_ptr<juce::FileChooser> chooser;
-    // The ramp engine: two destinations, a shape, a rate and a polarity, plus the
-    // BOUNCE and SWEEP dips that bend the shape.
-    std::unique_ptr<Stepper> rampWet, rampLoop, rampWave;
-    juce::Slider rampRate;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rampRateAtt;
-    struct RampSwitch { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<RampSwitch, 5> rampSwitches;   // UNI, BOUNCE, SWEEP, SYNC, HOLD
+    // Modulation: a chip per source, and the selected source's controls under them.
+    struct SourceControls {
+        std::unique_ptr<Stepper> wave;
+        juce::Slider rate;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rateAtt;
+        std::array<std::unique_ptr<juce::ToggleButton>, 5> switches;   // UNI, BOUNCE, SWEEP, SYNC, HOLD
+        std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 5> switchAtts;
+    };
+    std::array<SourceControls, 2> sources;
+    std::unique_ptr<ModChip> chips[2];
+    juce::TextButton routesButton { "ROUTES" };
+    std::unique_ptr<RouteList> routeList;
+    int selectedMod = 0, routeMaskSeen = -1;
+    int dropTarget = -1;                    // a chip is over this control
+    int dragSource = -1;
+    juce::Point<float> dragAt;              // design coordinates
+    int routeMask() const;
+    int targetAt(juce::Point<int> screen, juce::Point<float>& design) const;
+    juce::Rectangle<int> targetDesign(int t) const;
+    // PRE: the wet side runs into the looper. It belongs to the wet column.
+    juce::ToggleButton wetPre;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetPreAtt;
+    juce::Rectangle<int> wetPreDesign;
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
     juce::ToggleButton wetSync, envSync, envSoft;
@@ -151,7 +237,7 @@ private:
     juce::Rectangle<int> whisperRect(int knob) const;
     int activeKnob = -1;
     juce::String activeKnobText;
-    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[4];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains
@@ -163,8 +249,8 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign;
-    juce::Rectangle<int> rampWetDesign, rampLoopDesign, rampWaveDesign, sourceBoxDesign, loadButtonDesign;
+    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
+    juce::Rectangle<int> rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.
     float viewScale = 1.f;

@@ -26,13 +26,16 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     else if (n == "wetDiv") p.wetDiv = v; else if (n == "loopDiv") p.loopDiv = v;
     else if (n == "classic") p.classic = v != 0;
     else if (n == "freeze") p.freezeLatch = v;
-    else if (n == "rampWet") p.rampWet = v; else if (n == "rampLoop") p.rampLoop = v;
-    else if (n == "rampSpeed") p.rampSpeed = v; else if (n == "rampWave") p.rampWave = v;
-    else if (n == "rampUni") p.rampUni = v != 0; else if (n == "bounce") p.bounce = v != 0;
-    else if (n == "sweep") p.sweep = v != 0;
-    else if (n == "rampSync") p.rampSync = v != 0;
-    else if (n == "rampHold") p.rampHold = v != 0;
+    else if (n.rfind("mod1", 0) == 0 || n.rfind("mod2", 0) == 0) {
+        auto& m = p.mods[n[3] - '1'];
+        const std::string f = n.substr(4);
+        if (f == "On") m.on = v != 0; else if (f == "Rate") m.rate = v; else if (f == "Wave") m.wave = v;
+        else if (f == "Uni") m.uni = v != 0; else if (f == "Bounce") m.bounce = v != 0; else if (f == "Sweep") m.sweep = v != 0;
+        else if (f == "Sync") m.sync = v != 0; else if (f == "Hold") m.hold = v != 0;
+        else for (int t = 0; t < brood::kModTargets; ++t) if (f == std::string("_") + brood::kModTargetIds[t]) m.depth[t] = v;
+    }
     else if (n == "wetPre") p.wetPre = v != 0;
+    else if (n == "loopDb") p.loopDb = v;
     else if (n == "envSoft") p.envSoft = v != 0;
     else if (n == "envSync") p.envSync = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }

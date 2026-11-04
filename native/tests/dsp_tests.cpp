@@ -341,7 +341,7 @@ int main() {
     {   // with every ramp off, the audio is exactly what it was before the engine
         auto run = [](bool withRamps) {
             brood::Core c; c.p.wetMode = 0; c.p.mix = 0.8; c.p.time = 0.5;
-            if (withRamps) { c.p.rampWet = 0; c.p.rampLoop = 0; c.p.rampSpeed = 1; }
+            if (withRamps) { c.p.mods[0].rate = 1; c.p.mods[1].rate = 1; }
             c.prepare(FS); tap(c, 0);
             return render(c, 1, tone(220, 1));
         };
@@ -353,7 +353,7 @@ int main() {
     {   // a TIME ramp moves the echo
         auto echoPair = [] {
             brood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.55;
-            c.p.time = 0.4; c.p.rampWet = 0.2; c.p.rampSpeed = 0.35;
+            c.p.time = 0.4; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].rate = 0.35;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 5, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
             auto peakBetween = [&](double s0, double s1) {
@@ -369,7 +369,7 @@ int main() {
     }
     {   // shapes: square sits on the ends, triangle and sine pass through the middle
         auto collect = [](double wave) {
-            brood::Core c; c.p.rampWet = 0.2; c.p.rampWave = wave; c.p.time = 0.5; c.p.rampSpeed = 0.5;
+            brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].wave = wave; c.p.time = 0.5; c.p.mods[0].rate = 0.5;
             c.prepare(FS);
             std::vector<double> v;
             render(c, 6, [](double) { return 0.0; }, [&](brood::Core& cc, long) { v.push_back(cc.rampValue(0)); });
@@ -389,7 +389,7 @@ int main() {
     }
     {   // SWEEP climbs and restarts; BOUNCE takes the snap out
         auto collect = [](bool bouncy) {
-            brood::Core c; c.p.rampWet = 0.2; c.p.sweep = true; c.p.bounce = bouncy; c.p.rampSpeed = 0.5;
+            brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].sweep = true; c.p.mods[0].bounce = bouncy; c.p.mods[0].rate = 0.5;
             c.prepare(FS);
             std::vector<double> v;
             render(c, 8, [](double) { return 0.0; }, [&](brood::Core& cc, long) { v.push_back(cc.rampValue(0)); });
@@ -404,19 +404,19 @@ int main() {
         CHECK(rising(bouncy) > 0.3 && rising(bouncy) < 0.7, "and turns it into a tide (%.2f)", rising(bouncy));
     }
     {   // HOLD: the generator stops where it is, then carries on from the same place
-        brood::Core c; c.p.rampWet = 0.2; c.p.rampSpeed = 0.5; c.prepare(FS);
+        brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].rate = 0.5; c.prepare(FS);
         render(c, 0.7, [](double) { return 0.0; });
         const double before = c.rampValue(0);
-        c.p.rampHold = true;
+        c.p.mods[0].hold = true;
         render(c, 0.7, [](double) { return 0.0; });
         CHECK(c.rampValue(0) == before, "HOLD stops the ramp (%.4f, %.4f)", before, c.rampValue(0));
-        c.p.rampHold = false;
+        c.p.mods[0].hold = false;
         render(c, 0.1, [](double) { return 0.0; });
         CHECK(c.rampValue(0) != before, "and it runs again when released");
     }
     {   // POLARITY: unipolar never dips under the knob
         auto range = [](bool uni) {
-            brood::Core c; c.p.rampWet = 0.2; c.p.rampUni = uni; c.p.time = 0.5; c.p.rampSpeed = 0.5;
+            brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].uni = uni; c.p.time = 0.5; c.p.mods[0].rate = 0.5;
             c.prepare(FS);
             double lo = 2, hi = -1;
             render(c, 6, [](double) { return 0.0; }, [&](brood::Core& cc, long) { const double v = cc.effective(0); lo = std::min(lo, v); hi = std::max(hi, v); });
@@ -708,7 +708,7 @@ int main() {
         // index straight into a 0..1 parameter, so only "off" and the first entry
         // were reachable and the engine was pointed at the last knob instead. Every
         // stop must survive the round trip, and the values must run 0..1 in order.
-        for (int count : {brood::kRampTargetCount, brood::kRampWaveCount}) {
+        for (int count : {brood::kRampWaveCount}) {
             for (int i = 0; i < count; ++i) {
                 const double v = brood::rampValueOfIndex(i, count);
                 CHECK(brood::rampIndexOfValue(v, count) == i, "count %d: index %d survives the round trip (v=%.3f)", count, i, v);
@@ -723,10 +723,7 @@ int main() {
             CHECK(brood::rampIndexOfValue(9.0, count) == count - 1, "count %d: above 1 clamps to the last stop", count);
         }
         CHECK(brood::rampValueOfIndex(6, 1) == 0.0, "a single-entry list has one value");
-        CHECK(std::string(brood::kRampTargets[0]) == "OFF", "the first ramp target is off");
-        CHECK(brood::rampIndexOfValue(brood::rampValueOfIndex(6, brood::kRampTargetCount), brood::kRampTargetCount) == 6, "BALANCE is reachable");
         CHECK(brood::rampIndexOfValue(brood::rampValueOfIndex(4, brood::kRampWaveCount), brood::kRampWaveCount) == 4, "all five shapes are reachable");
-        CHECK(brood::rampTargetIndex(1.0) == 6, "a full ramp knob reads as BALANCE");
     }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;

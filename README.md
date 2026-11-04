@@ -310,9 +310,10 @@ every project and every instance shares them. The four user slots from round 18 
 presets called User 1 to User 4 the first time this version opens. A preset never
 engages a channel.
 
-**The Bench** along the bottom passes a moment between plug-ins: SEND writes what the
-loop is playing to `~/Library/Application Support/Bench/`, and an instrument in the
-range (Silt) shows it and takes it as its sample. The menu beside SEND can send the
+**The Bench** along the bottom passes a moment between plug-ins, either way: SEND writes
+what the loop is playing to `~/Music/Bench/`, an instrument in the range (Silt) shows it
+and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens the
+folder in the Finder, and everything sent stays there. The menu beside SEND can send the
 exact output instead: 4, 8 or 16 bars from the next bar line (at once if the host is
 stopped). Silt keeps the first 30 seconds of anything longer.
 
@@ -327,8 +328,8 @@ the effect. Changes are applied at audio-block boundaries:
 | CC | Control |
 | --- | --- |
 | 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
-| 20 | Ramp speed (the pedal's own automation target) |
-| 52 | Hold the ramps: both stop where they are (`0` running, `1–127` held) |
+| 20 | Rate of both modulation sources |
+| 52 | Hold both modulation sources (`0` running, `1–127` held) |
 | 66, 67 | Bounce, Sweep (`0` off, `1–127` on) |
 | 53, 54 | Wet and loop clock division |
 | 71 | Classic mode (`0` off, `1–127` on) |
@@ -339,14 +340,11 @@ the effect. Changes are applied at audio-block boundaries:
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware controller set up for the pedal
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
-by automating the `wetMode` parameter (value 3) instead. CC 20 is ramp speed and
-66/67 are the two ramp dips, as on the pedal. CC 73, 74 and 76 used to carry
+by automating the `wetMode` parameter (value 3) instead. CC 20 is the sources' rate and
+66/67 are BOUNCE and SWEEP, on both sources. CC 73, 74 and 76 used to carry
 SPREAD, DRY KILL and LATCH; those controls are gone (WIDTH does the first, MIX the
 second, the FREEZE switch the third), so the pedal's controllers for them do
-nothing now. The ramp destinations (RAMPS wet and
-loop), the shape and polarity have no CC in the pedal's map — they live in the hidden
-menu there — so automate the `rampWet`, `rampLoop`, `rampWave` and `rampUni`
-parameters instead. Loop memory and END are host-only parameters too.
+nothing now. Routes and depths have no CC: automate the `mod1_time`-style depth parameters instead. Loop memory and END are host-only parameters too.
 
 Tempo sync has no CC in the pedal's map; automate the `sync` parameter, or switch
 it on in the editor.
@@ -484,12 +482,20 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   head, and a moving LENGTH glides, so nothing clicks. It's a rounder, less percussive
   stutter; off is the sharp cut the pedal makes. Both cores agree
   (`tests/parity/scenarios/env_soft.txt`).
-- **PRE** puts the wet side before the looper: input, then wet, then loop. Overdubs
-  and every later catch keep the wet sound, and the Bench's SEND carries it to Silt. The
-  wet side hears only the input then, so ROUTING stands aside. With PRE off, a catch
-  still takes whatever is ringing while the looper is listening, as the pedal does;
-  after that the wet side stays out of the loop. Both cores agree
-  (`tests/parity/scenarios/wet_pre.txt`).
+- **BEFORE THE LOOP**, in the wet column, puts the wet side ahead of the looper: input,
+  then wet, then loop. Catches and overdubs keep the wet sound, and the Bench's SEND
+  carries it. It hears only the input then, so ROUTING stands aside. Off, the loop stays
+  clean and the wet side plays over it (`tests/parity/scenarios/wet_pre.txt`).
+- **GAIN** on the waveform is the loop's own level, -24 to +12 dB: drag up or down, Shift
+  for fine, double-click for 0 dB. SEND sends the loop at this level.
+- **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,
+  SYNC and HOLD. Drag a source onto any knob or WET/LOOP to route it, Alt-drag a knob for
+  the selected source's depth (negative inverts), right-click a knob to remove a route,
+  and ROUTES lists them all. CC 20, 52, 66 and 67 act on both sources
+  (`tests/parity/scenarios/mod_routes.txt`).
+- **ENV** slices when it hears the input: LENGTH and MODIFY act on those slices, so with
+  the loop playing and nothing coming in above MODIFY's threshold, they have nothing to
+  move. The knob says so while you touch it.
 - **WET / LOOP** blends two complete worlds rather than fading one into the
   other: the loop keeps its own level across the whole knob and the wet side adds
   on top, so the middle hears both. It used to duck the direct loop against the
