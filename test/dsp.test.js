@@ -1383,3 +1383,17 @@ test('STRETCH does not click as MODIFY passes through the middle', () => {
   const moving = worstCorner(0.5);
   assert.ok(moving < 0.05, `worst corner ${moving.toFixed(4)}, still ${worstCorner(0).toFixed(4)}`);
 });
+
+test('SLIP does not click when MODIFY swings its speed', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ wetMode: 2, mix: 1, modWet: 0.5, mod1_modWet: 0.5, mod1Rate: 0.6, mod1Wave: 0.5 })) core.setParam(k, v);
+  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
+  let t = 0, worst = 0, a = 0, b = 0, seen = 0;
+  for (let n = 0; n < Math.ceil((5.5 * FS) / BLOCK); n++) {
+    for (let i = 0; i < BLOCK; i++, t++) inp[i] = 0.4 * Math.sin(2 * Math.PI * 110 * t / FS);
+    core.process(inp, L, R);
+    if (t > 1.5 * FS) for (let i = 0; i < BLOCK; i++) { if (seen++ >= 2) worst = Math.max(worst, Math.abs(L[i] - 2 * a + b)); b = a; a = L[i]; }
+  }
+  assert.ok(worst < 0.05, `worst corner ${worst.toFixed(4)}`);
+});

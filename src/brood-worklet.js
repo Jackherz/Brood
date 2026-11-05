@@ -304,7 +304,7 @@ class Slip {
     this.fs = fs;
     this.buf = new Float32Array(Math.ceil(SLIP_BUF_SEC * fs));
     this.w = 0;
-    this.heads = [{ pos: 0, g: 0, dir: 0 }, { pos: 0, g: 0, dir: 0 }];
+    this.heads = [{ pos: 0, g: 0, dir: 0, level: 1, dying: false }, { pos: 0, g: 0, dir: 0, level: 1, dying: false }];
     this.cur = 0;
     this.count = 1e9;
     this.lastStart = 0;
@@ -331,7 +331,7 @@ class Slip {
       }
       this.cur ^= 1;
       const h = this.heads[this.cur];
-      h.pos = start; h.g = 0; h.dir = 1;
+      h.pos = start; h.g = 0; h.dir = 1; h.level = 1; h.dying = false;
       this.heads[this.cur ^ 1].dir = -1;
     }
     const step = 1 / xf;
@@ -341,7 +341,13 @@ class Slip {
       if (h.dir > 0) h.g = Math.min(1, h.g + step);
       else if (h.dir < 0) h.g = Math.max(0, h.g - step);
       if (h.g > 0) {
-        out += readFrac(this.buf, h.pos) * Math.sin(h.g * Math.PI * 0.5);
+        // A head that speeds up can catch the write point, where this moment's audio meets
+        // the oldest, and that seam is a click. So it bows out before it gets there: once
+        // it's close it fades for good, until the next slice replaces it.
+        let ahead = (this.w - h.pos) % n; if (ahead < 0) ahead += n;
+        if (ahead < 64) h.dying = true;
+        if (h.dying) h.level = Math.max(0, h.level - 1 / 48);
+        out += readFrac(this.buf, h.pos) * Math.sin(h.g * Math.PI * 0.5) * h.level;
         h.pos += s;
       }
     }

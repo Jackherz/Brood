@@ -351,7 +351,7 @@ struct Delay {
 
 // ───────────────────────── Wet channel: SLIP ──────────────────────────
 struct Slip {
-    struct Head { double pos = 0, g = 0; int dir = 0; };
+    struct Head { double pos = 0, g = 0, level = 1; int dir = 0; bool dying = false; };
     std::vector<float> buf; int w = 0;
     Head heads[2]; int cur = 0;
     double fs = 48000, count = 1e9, lastStart = 0, speed = 1;
@@ -373,7 +373,7 @@ struct Slip {
             if (freeze) start = lastStart;
             else { start = w - (margin + std::max(0.0, s - 1) * (sliceLen + xf)); lastStart = start; }
             cur ^= 1;
-            heads[cur].pos = start; heads[cur].g = 0; heads[cur].dir = 1;
+            heads[cur].pos = start; heads[cur].g = 0; heads[cur].dir = 1; heads[cur].level = 1; heads[cur].dying = false;
             heads[cur ^ 1].dir = -1;
         }
         const double step = 1 / xf;
@@ -381,7 +381,16 @@ struct Slip {
         for (auto& h : heads) {
             if (h.dir > 0) h.g = std::min(1.0, h.g + step);
             else if (h.dir < 0) h.g = std::max(0.0, h.g - step);
-            if (h.g > 0) { out += readFrac(buf, h.pos) * std::sin(h.g * kPi * 0.5); h.pos += s; }
+            if (h.g > 0) {
+                // A head that speeds up can catch the write point, where this moment's audio
+                // meets the oldest, and that seam is a click. So it bows out before it gets
+                // there: once it's close it fades for good, until the next slice replaces it.
+                double ahead = jsMod(w - h.pos, static_cast<double>(n)); if (ahead < 0) ahead += n;
+                if (ahead < 64) h.dying = true;
+                if (h.dying) h.level = std::max(0.0, h.level - 1.0 / 48);
+                out += readFrac(buf, h.pos) * std::sin(h.g * kPi * 0.5) * h.level;
+                h.pos += s;
+            }
         }
         return out;
     }
