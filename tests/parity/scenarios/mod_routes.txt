@@ -29,3 +29,5 @@ seconds 10
 2300 param mod1Hold 1
 2600 param mod1Hold 0
 3000 param mod2_clock 0
+3200 fs loop down
+3700 fs loop up

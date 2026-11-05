@@ -731,7 +731,8 @@ private:
     uint32_t histCycles = 0;
     LoopState loopState = LoopState::Off;
     bool overdub = false;
-    double dubGain = 0, dubPrev = 0;
+    double dubGain = 0, dubPrev = 0, dubPos = 0;
+    int dubW = 64, dubStart = 0;
     double loopDbSeen = 0, loopLevelTarget = 1, loopLevel = 1;
     int dubLast = -1;
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
@@ -862,7 +863,9 @@ private:
     // take), END decides how much of that window sounds before it wraps, and START
     // decides where the window sits inside the capture — 0 is where each mode has
     // always begun. Mirrors loopWindow() in src/brood-worklet.js.
-    Window loopWindow() const {
+    Window loopWindow() const { return loopWindowAt(e.length); }
+    // The window for a given LENGTH. Overdub asks for the knob's own, ignoring modulation.
+    Window loopWindowAt(double lengthNow) const {
         const int len = std::max(64, lsrc);
         const double trim = clampd(p.loopEnd, 0.02, 1);
         const double where = clampd(p.start, 0, 1);
@@ -885,7 +888,7 @@ private:
         // and the start of a long recording is actually reachable; the exponential
         // curve spent 95% of the knob's travel on the last few seconds.
         // Rounded, not floored: at 1 the window is exactly the whole take.
-        const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * clampd(e.length, 0, 1)))));
+        const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * clampd(lengthNow, 0, 1)))));
         // TAPE takes its window from the newest audio, so START reaches back into
         // the take; zero is the tail, as before.
         const int room = std::max(0, len - W0);
@@ -913,6 +916,7 @@ private:
         const double ldivd = divMap(p.loopDiv);
         const double lstep = 1 / ldivd;
         double pos = jsMod(loopPos, Wd); if (pos < 0) pos += Wd;
+        const double posAtStart = pos;
 
         // START moves the read head, and a jump in the read head is a click. So a
         // change of START is a crossfade from where the loop was playing to where it
@@ -1039,28 +1043,41 @@ private:
         }
 
         // Overdub fades in and out over about 8 ms, because a hard start or stop is a step
-        // recorded into the take, there on every pass from then on. It also writes every
-        // cell the head crosses, once: at any speed but 1x a single write per tick left
-        // gaps or stacked layers, and those were clicks too.
+        // recorded into the take, there on every pass from then on. Its write head keeps
+        // its own place in the window it started in, moving at the read head's speed, so a
+        // modulated LENGTH or START can't throw it around the take and leave seams: what's
+        // laid down stays continuous, and the read head finds it as it comes round. It
+        // writes every cell it crosses, once, and fades at that window's edges.
         dubGain += ((overdub ? 1.0 : 0.0) - dubGain) * 0.002;
         if (dubGain > 1e-4) {
+            const bool starting = dubLast < 0;
+            if (starting) {
+                // The knob's window, not the modulated one, lined up with where the read
+                // head is so an unmodulated loop layers exactly where you hear it.
+                const Window base = loopWindowAt(s.length);
+                dubW = base.W; dubStart = base.start;
+                dubPos = startB + (mode == 1 ? loopPos : pos) - dubStart;
+            }
+            else dubPos += pos - posAtStart;
+            dubPos = jsMod(dubPos, dubW); if (dubPos < 0) dubPos += dubW;
+            const int q = std::min(dubW - 1, static_cast<int>(std::floor(dubPos)));
             // FADE: how much of the old loop survives each overdub pass. 0 keeps
             // the pedal's slow decay; 1 lets the new layer replace it completely.
-            const double keep = 1 - (1 - 0.97 * (1 - clampd(s.fade, 0, 1))) * dubGain;
-            int q = static_cast<int>(jsMod(std::floor(mode == 1 ? loopPos : pos), Wd)); if (q < 0) q += W;
+            const double loss = 1 - 0.97 * (1 - clampd(s.fade, 0, 1));
+            const double dubF = std::min(0.004 * kCoreFs, dubW / 4.0);
             auto write = [&](int cellQ, double v) {
-                // Overdubs land in the window as it is headed for, not as it was.
-                const int wi = std::min(len - 1, std::max(0, startB + cellQ));
+                const double amount = dubGain * std::min({1.0, cellQ / dubF, (dubW - cellQ) / dubF});
+                const int wi = std::min(len - 1, std::max(0, dubStart + cellQ));
                 float& cell = loopBuf[static_cast<size_t>(wi)];
-                cell = static_cast<float>(cell * keep + v * dubGain);
+                cell = static_cast<float>(cell * (1 - loss * amount) + v * amount);
             };
-            if (dubLast < 0) write(q, rec);
+            if (starting) write(q, rec);
             else {
                 int d = q - dubLast;
-                if (d * 2 > W) d -= W; else if (d * 2 < -W) d += W;
+                if (d * 2 > dubW) d -= dubW; else if (d * 2 < -dubW) d += dubW;
                 const int count = std::min(std::abs(d), 16), dir = d > 0 ? 1 : -1;
                 for (int k = 1; k <= count; ++k)
-                    write(((dubLast + dir * k) % W + W) % W, dubPrev + (rec - dubPrev) * k / count);
+                    write(((dubLast + dir * k) % dubW + dubW) % dubW, dubPrev + (rec - dubPrev) * k / count);
             }
             dubLast = q; dubPrev = rec;
         } else dubLast = -1;

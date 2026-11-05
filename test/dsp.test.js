@@ -1318,3 +1318,28 @@ test('GAIN sets the loop level in dB and leaves the dry side alone', () => {
   assert.ok(Math.abs(level(-6) / flat - 0.501) < 0.03, '-6 dB is half');
   assert.ok(level(-24) < flat * 0.1, '-24 dB nearly gone');
 });
+
+test('overdub leaves no seams in the take while LENGTH is modulated', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ loopMode: 1, length: 0.7, modLoop: 0.66, mod1_length: 0.4, mod1Rate: 0.55, mod1Wave: 0.5 })) core.setParam(k, v);
+  const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
+  let t = 0;
+  const run = (seconds) => {
+    for (let n = 0; n < Math.ceil((seconds * FS) / BLOCK); n++) {
+      for (let i = 0; i < BLOCK; i++, t++) inp[i] = 0.3 * Math.sin(2 * Math.PI * 110 * t / FS);
+      core.process(inp, oL, oR);
+    }
+  };
+  run(1.5);
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  run(0.5);
+  core.footswitch('loop', 'down');
+  run(3);
+  assert.strictEqual(core.state().loop, 'dub');
+  core.footswitch('loop', 'up');
+  run(0.1);
+  // Layers of a steady tone add up, so a seam is a step that's large for the level.
+  let worst = 0, peak = 0;
+  for (let i = 1; i < core.lsrc; i++) { worst = Math.max(worst, Math.abs(core.loopBuf[i] - core.loopBuf[i - 1])); peak = Math.max(peak, Math.abs(core.loopBuf[i])); }
+  assert.ok(worst / peak < 0.03, `worst step ${worst.toFixed(4)} against a peak of ${peak.toFixed(3)}`);
+});

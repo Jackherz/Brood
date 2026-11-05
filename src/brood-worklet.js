@@ -435,7 +435,7 @@ class BroodCore {
     this.wetOn = false;
     this.freeze = false;
     this.wetMomentary = false;
-    this.dubGain = 0; this.dubPrev = 0; this.dubLast = -1;
+    this.dubGain = 0; this.dubPrev = 0; this.dubLast = -1; this.dubPos = 0; this.dubW = 64; this.dubStart = 0;
     this.loopDbSeen = 0; this.loopLevelTarget = 1; this.loopLevel = 1;
     this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
@@ -567,7 +567,10 @@ class BroodCore {
   // from the newest part of the capture, ENV and STRETCH from the whole take), END
   // decides how much of that window sounds before it wraps, and START decides where
   // the window sits inside the capture — 0 is where each mode has always begun.
-  loopWindow() {
+  loopWindow() { return this.loopWindowAt(this.e.length); }
+
+  // The window for a given LENGTH. Overdub asks for the knob's own, ignoring modulation.
+  loopWindowAt(lengthNow) {
     const len = Math.max(64, this.lsrc);
     const trim = clamp(this.p.loopEnd, 0.02, 1);
     const where = clamp(this.p.start, 0, 1);
@@ -591,7 +594,7 @@ class BroodCore {
     // curve spent 95% of the knob's travel on the last few seconds.
     // Rounded, not floored: at 1 the window is exactly the whole take, so the
     // start is sample 0 rather than one sample late.
-    const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(this.e.length))));
+    const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(lengthNow))));
     // TAPE takes its window from the newest audio, so START reaches back into
     // the take; zero is the tail, as before.
     const room = Math.max(0, len - W0);
@@ -701,6 +704,7 @@ class BroodCore {
     const ldiv = divMap(this.p.loopDiv);
     const lstep = 1 / ldiv;
     let pos = this.loopPos % W; if (pos < 0) pos += W;
+    const posAtStart = pos;
 
     // START moves the read head, and a jump in the read head is a click. So a
     // change of START is a crossfade from where the loop was playing to where it
@@ -834,25 +838,40 @@ class BroodCore {
     }
 
     // Overdub fades in and out over about 8 ms, because a hard start or stop is a step
-    // recorded into the take, there on every pass from then on. It also writes every
-    // cell the head crosses, once: at any speed but 1x a single write per tick left
-    // gaps or stacked layers, and those were clicks too.
+    // recorded into the take, there on every pass from then on. Its write head keeps its
+    // own place in the window it started in, moving at the read head's speed, so a
+    // modulated LENGTH or START can't throw it around the take and leave seams: what's
+    // laid down stays continuous, and the read head finds it as it comes round. It writes
+    // every cell it crosses, once, and fades at that window's edges.
     this.dubGain += ((this.overdub ? 1 : 0) - this.dubGain) * 0.002;
     if (this.dubGain > 1e-4) {
+      const starting = this.dubLast < 0;
+      if (starting) {
+        // The knob's window, not the modulated one, lined up with where the read head is
+        // so an unmodulated loop layers exactly where you hear it.
+        const base = this.loopWindowAt(this.s.length);
+        this.dubW = base.W; this.dubStart = base.start;
+        this.dubPos = Math.round(this.startB) + (mode === 1 ? this.loopPos : pos) - this.dubStart;
+      }
+      else this.dubPos += pos - posAtStart;
+      this.dubPos %= this.dubW; if (this.dubPos < 0) this.dubPos += this.dubW;
+      const dubW = this.dubW;
+      const q = Math.min(dubW - 1, Math.floor(this.dubPos));
       // FADE: how much of the old loop survives each overdub pass. 0 keeps the
       // pedal's slow decay; 1 lets the new layer replace it completely.
-      const keep = 1 - (1 - 0.97 * (1 - clamp(this.s.fade))) * this.dubGain;
-      let q = Math.floor(mode === 1 ? this.loopPos : pos) % W; if (q < 0) q += W;
+      const loss = 1 - 0.97 * (1 - clamp(this.s.fade, 0, 1));
+      const dubF = Math.min(0.004 * fs, dubW / 4);
       const write = (cellQ, v) => {
-        const wi = Math.min(len - 1, Math.max(0, Math.round(this.startB) + cellQ));
-        buf[wi] = buf[wi] * keep + v * this.dubGain;
+        const amount = this.dubGain * Math.min(1, cellQ / dubF, (dubW - cellQ) / dubF);
+        const wi = Math.min(len - 1, Math.max(0, this.dubStart + cellQ));
+        buf[wi] = buf[wi] * (1 - loss * amount) + v * amount;
       };
-      if (this.dubLast < 0) write(q, rec);
+      if (starting) write(q, rec);
       else {
         let d = q - this.dubLast;
-        if (d * 2 > W) d -= W; else if (d * 2 < -W) d += W;
+        if (d * 2 > dubW) d -= dubW; else if (d * 2 < -dubW) d += dubW;
         const count = Math.min(Math.abs(d), 16), dir = d > 0 ? 1 : -1;
-        for (let k = 1; k <= count; k++) write(((this.dubLast + dir * k) % W + W) % W, this.dubPrev + (rec - this.dubPrev) * k / count);
+        for (let k = 1; k <= count; k++) write(((this.dubLast + dir * k) % dubW + dubW) % dubW, this.dubPrev + (rec - this.dubPrev) * k / count);
       }
       this.dubLast = q; this.dubPrev = rec;
     } else this.dubLast = -1;

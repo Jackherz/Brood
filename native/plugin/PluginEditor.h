@@ -26,7 +26,13 @@ public:
         void mouseDrag(const juce::MouseEvent&) override;
         void mouseUp(const juce::MouseEvent&) override;
         void mouseDoubleClick(const juce::MouseEvent&) override;
+        void mouseMove(const juce::MouseEvent&) override;
+        void mouseExit(const juce::MouseEvent&) override;
+        // The rings are handles, as in Silt: a press around the knob drags that source's
+        // depth, and where there's no ring yet it makes one for the selected source.
+        int sourceAtRing(juce::Point<float>) const;
         float depthAtStart = 0;
+        int depthSource = -1, hoverSource = -1;
         bool settingDepth = false, menuPress = false;
     };
     // One source: its colour and number, its shape moving live, its route count and ON.
@@ -62,7 +68,9 @@ public:
         explicit RouteList(BroodEditor&);
         void paint(juce::Graphics&) override;
         void resized() override;
-        void rebuild();
+        // A row stays while the list is open, even at 0%, so a depth can pass through
+        // zero: only its X, CLEAR ALL or closing the list takes a row at 0 away.
+        void rebuild(bool dropZeroes);
         struct Row { int k, t; std::unique_ptr<juce::Slider> depth; std::unique_ptr<juce::SliderParameterAttachment> att; std::unique_ptr<juce::TextButton> remove; };
         BroodEditor& editor;
         std::vector<Row> rows;

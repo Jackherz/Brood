@@ -311,9 +311,11 @@ presets called User 1 to User 4 the first time this version opens. A preset neve
 engages a channel.
 
 **The Bench** along the bottom passes a moment between plug-ins, either way: SEND writes
-what the loop is playing to `~/Music/Bench/`, an instrument in the range (Silt) shows it
-and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens the
-folder in the Finder, and everything sent stays there. The menu beside SEND can send the
+what the loop is playing to a folder of your choosing (`~/Music/Bench/` until you choose), an instrument in the range (Silt) shows it
+and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens it in
+the Finder, chooses another folder, or picks a category, which is a folder inside it (make a
+Guitar one, and what you send goes there until you change it). Every plug-in shares the
+choice, and everything sent stays there. The menu beside SEND can send the
 exact output instead: 4, 8 or 16 bars from the next bar line (at once if the host is
 stopped). Silt keeps the first 30 seconds of anything longer.
 
@@ -487,10 +489,11 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   carries it. It hears only the input then, so ROUTING stands aside. Off, the loop stays
   clean and the wet side plays over it (`tests/parity/scenarios/wet_pre.txt`).
 - **GAIN** on the waveform is the loop's own level, -24 to +12 dB: drag up or down, Shift
-  for fine, double-click for 0 dB. SEND sends the loop at this level.
+  for fine, double-click for 0 dB. The waveform grows and shrinks with it, and SEND sends the loop at this level.
 - **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,
-  SYNC and HOLD. Drag a source onto any knob or WET/LOOP to route it, Alt-drag a knob for
-  the selected source's depth (negative inverts), right-click a knob to remove a route,
+  SYNC and HOLD. Drag a source onto any knob or WET/LOOP to route it. Around a knob, the rings are
+  handles as in Silt: drag up or down to set that source's depth (negative inverts), and
+  where there's no ring yet it makes one for the selected source. Alt-drag does the same, right-click a knob to remove a route,
   and ROUTES lists them all. CC 20, 52, 66 and 67 act on both sources
   (`tests/parity/scenarios/mod_routes.txt`).
 - **ENV** slices when it hears the input: LENGTH and MODIFY act on those slices, so with

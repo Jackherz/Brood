@@ -189,20 +189,30 @@ int main() {
         CHECK(catcher.copyMoment(moment, momentRate) && moment.getNumChannels() == 2 && moment.getNumSamples() >= 1, "a caught loop can be sent");
         juce::TemporaryFile folderFile;
         const auto folder = folderFile.getFile();
-        CHECK(!kit::bench::latest("I-01", folder).has_value(), "an empty bench");
-        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", folder), "send");
-        CHECK(!kit::bench::latest("E-01", folder).has_value(), "your own moment isn't offered back to you");
-        const auto got = kit::bench::latest("I-01", folder);
+        kit::bench::folderForTests = folder;
+        CHECK(!kit::bench::latest("I-01").has_value(), "an empty bench");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD"), "send");
+        CHECK(!kit::bench::latest("E-01").has_value(), "your own moment isn't offered back to you");
+        const auto got = kit::bench::latest("I-01");
         CHECK(got.has_value() && got->fromChip == "E-01" && got->audio.existsAsFile()
               && std::fabs(got->seconds - moment.getNumSamples() / momentRate) < 1e-3, "the note matches the audio");
         juce::Thread::sleep(1100);   // files are named to the second
-        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", folder), "send again");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD"), "send again");
         CHECK(folder.findChildFiles(juce::File::findFiles, false, "*.wav").size() == 2, "everything sent stays, for the Finder");
+        // A folder of your own, and a category inside it.
+        const auto mine = folder.getChildFile("my samples");
+        mine.createDirectory();
+        kit::bench::setSetting("folder", mine.getFullPathName());
+        mine.getChildFile("Guitar").createDirectory();
+        kit::bench::setSetting("category", "Guitar");
+        CHECK(kit::bench::categories().contains("Guitar"), "a category is a folder");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD"), "send into it");
+        CHECK(mine.getChildFile("Guitar").findChildFiles(juce::File::findFiles, false, "*.wav").size() == 1, "it lands in the category");
         // And the other way: a moment from an instrument becomes the loop.
         juce::AudioBuffer<float> fromSilt(2, 44100);
         for (int n = 0; n < fromSilt.getNumSamples(); ++n) for (int c = 0; c < 2; ++c) fromSilt.setSample(c, n, 0.25f * std::sin(static_cast<float>(n) * 0.03f));
-        CHECK(kit::bench::send(fromSilt, 44100.0, "I-01", "SILT", folder), "an instrument sends");
-        const auto incoming = kit::bench::latest("E-01", folder);
+        CHECK(kit::bench::send(fromSilt, 44100.0, "I-01", "SILT"), "an instrument sends");
+        const auto incoming = kit::bench::latest("E-01");
         CHECK(incoming.has_value() && incoming->fromName == "SILT", "and the effect sees it");
         if (incoming.has_value()) {
             const double clock = catcher.ui.clockHz.load();
@@ -211,6 +221,7 @@ int main() {
             CHECK(std::fabs(catcher.ui.lsrc.load() / clock - 1.0) < 0.01, "one second of it, at the looper's clock");
             CHECK(catcher.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "and it plays");
         }
+        kit::bench::folderForTests = juce::File();
         folder.deleteRecursively();
     }
     // SEND's bars: the exact output, and nothing goes out early.

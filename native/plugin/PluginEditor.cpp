@@ -59,6 +59,11 @@ void BroodEditor::Look::drawRotarySlider(juce::Graphics& g, int x, int y, int w,
         g.setColour(BroodEditor::modColour(k));
         g.strokePath(arc, juce::PathStrokeType(2.5f));
     }
+    // Hovering the handle zone: where the selected source's ring would go.
+    if (mod->hoverSource >= 0 && std::fabs(mod->editor->depthParam(mod->hoverSource, mod->target)->convertFrom0to1(mod->editor->depthParam(mod->hoverSource, mod->target)->getValue())) < 0.005f) {
+        g.setColour(BroodEditor::modColour(mod->hoverSource).withAlpha(0.45f));
+        g.drawEllipse(juce::Rectangle<float>(r * 2.f - 3.f, r * 2.f - 3.f).withCentre(c).expanded(4.f * static_cast<float>(mod->hoverSource)), 1.f);
+    }
     if (any) {
         const float now = juce::jlimit(0.f, 1.f, proc.ui.effective[static_cast<size_t>(mod->target)].load());
         const auto at = c.getPointOnCircumference(r - 7.f, from + span * now);
@@ -67,15 +72,43 @@ void BroodEditor::Look::drawRotarySlider(juce::Graphics& g, int x, int y, int w,
     }
 }
 
+int BroodEditor::ModSlider::sourceAtRing(juce::Point<float> p) const {
+    if (target < 0 || editor == nullptr || getSliderStyle() != juce::Slider::RotaryHorizontalVerticalDrag) return -1;
+    const auto box = getLocalBounds().toFloat();
+    const float r = kit::Look::knobOuterRadius(box);
+    const float face = juce::jmin(box.getWidth(), box.getHeight()) * 0.5f - 15.f * juce::jmin(box.getWidth(), box.getHeight()) / 104.f;
+    const float d = p.getDistanceFrom(box.getCentre());
+    if (d < face + 1.f || d > r + 7.f) return -1;
+    auto routed = [&](int k) { return std::fabs(editor->depthParam(k, target)->convertFrom0to1(editor->depthParam(k, target)->getValue())) >= 0.005f; };
+    if (routed(0) && routed(1)) return d >= r + 0.5f ? 1 : 0;   // each to its own ring
+    if (routed(0) != routed(1) && editor->selectedSource() != (routed(0) ? 0 : 1)) return editor->selectedSource();
+    return routed(0) ? 0 : routed(1) ? 1 : editor->selectedSource();
+}
+void BroodEditor::ModSlider::mouseMove(const juce::MouseEvent& e) {
+    const int at = sourceAtRing(e.position);
+    if (at != hoverSource) {
+        hoverSource = at;
+        setMouseCursor(at >= 0 ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+    juce::Slider::mouseMove(e);
+}
+void BroodEditor::ModSlider::mouseExit(const juce::MouseEvent& e) {
+    if (hoverSource != -1) { hoverSource = -1; setMouseCursor(juce::MouseCursor::NormalCursor); repaint(); }
+    juce::Slider::mouseExit(e);
+}
 void BroodEditor::ModSlider::mouseDown(const juce::MouseEvent& e) {
     menuPress = e.mods.isPopupMenu();
     if (menuPress && target >= 0 && editor != nullptr) { editor->showRouteMenu(target); return; }
-    settingDepth = target >= 0 && editor != nullptr && e.mods.isAltDown();
+    const int ring = sourceAtRing(e.position);
+    settingDepth = target >= 0 && editor != nullptr && (ring >= 0 || e.mods.isAltDown());
     if (settingDepth) {
-        auto* prm = editor->depthParam(editor->selectedSource(), target);
+        depthSource = ring >= 0 ? ring : editor->selectedSource();
+        auto* prm = editor->depthParam(depthSource, target);
         depthAtStart = prm->convertFrom0to1(prm->getValue());
         prm->beginChangeGesture();
-        editor->showDepth(editor->selectedSource(), target);
+        editor->selectSource(depthSource);
+        editor->showDepth(depthSource, target);
         return;
     }
     juce::Slider::mouseDown(e);
@@ -83,9 +116,9 @@ void BroodEditor::ModSlider::mouseDown(const juce::MouseEvent& e) {
 void BroodEditor::ModSlider::mouseDrag(const juce::MouseEvent& e) {
     if (menuPress) return;
     if (settingDepth) {
-        auto* prm = editor->depthParam(editor->selectedSource(), target);
+        auto* prm = editor->depthParam(depthSource, target);
         prm->setValueNotifyingHost(prm->convertTo0to1(juce::jlimit(-1.f, 1.f, depthAtStart - static_cast<float>(e.getDistanceFromDragStartY()) / (e.mods.isShiftDown() ? 600.f : 150.f))));
-        editor->showDepth(editor->selectedSource(), target);
+        editor->showDepth(depthSource, target);
         repaint();
         return;
     }
@@ -93,7 +126,7 @@ void BroodEditor::ModSlider::mouseDrag(const juce::MouseEvent& e) {
 }
 void BroodEditor::ModSlider::mouseUp(const juce::MouseEvent& e) {
     if (menuPress) { menuPress = false; return; }
-    if (settingDepth) { editor->depthParam(editor->selectedSource(), target)->endChangeGesture(); settingDepth = false; return; }
+    if (settingDepth) { editor->depthParam(depthSource, target)->endChangeGesture(); settingDepth = false; return; }
     juce::Slider::mouseUp(e);
 }
 void BroodEditor::ModSlider::mouseDoubleClick(const juce::MouseEvent& e) {
@@ -196,23 +229,26 @@ BroodEditor::RouteList::RouteList(BroodEditor& e) : editor(e) {
     close.onClick = [this] { setVisible(false); };
     clear.onClick = [this] {
         for (int k = 0; k < 2; ++k) for (int t = 0; t < brood::kModTargets; ++t) { auto* prm = editor.depthParam(k, t); prm->setValueNotifyingHost(prm->convertTo0to1(0.f)); }
-        rebuild();
+        rebuild(true);
     };
     addAndMakeVisible(close); addAndMakeVisible(clear);
     setVisible(false);
 }
-void BroodEditor::RouteList::rebuild() {
+void BroodEditor::RouteList::rebuild(bool dropZeroes) {
+    std::vector<std::pair<int, int>> keep;
+    if (!dropZeroes) for (const auto& row : rows) keep.emplace_back(row.k, row.t);
     rows.clear();
     for (int k = 0; k < 2; ++k)
         for (int t = 0; t < brood::kModTargets; ++t) {
             auto* prm = editor.depthParam(k, t);
-            if (std::fabs(prm->convertFrom0to1(prm->getValue())) < 0.005f) continue;
+            const bool kept = std::find(keep.begin(), keep.end(), std::make_pair(k, t)) != keep.end();
+            if (!kept && std::fabs(prm->convertFrom0to1(prm->getValue())) < 0.005f) continue;
             Row row { k, t, std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox), nullptr, std::make_unique<juce::TextButton>("X") };
             row.att = std::make_unique<juce::SliderParameterAttachment>(*prm, *row.depth);
             row.depth->onValueChange = [this] { repaint(); };
             row.remove->onClick = [this, prm] {
                 prm->setValueNotifyingHost(prm->convertTo0to1(0.f));
-                juce::MessageManager::callAsync([safe = juce::Component::SafePointer<RouteList>(this)] { if (safe != nullptr) safe->rebuild(); });
+                juce::MessageManager::callAsync([safe = juce::Component::SafePointer<RouteList>(this)] { if (safe != nullptr) safe->rebuild(true); });
             };
             addAndMakeVisible(*row.depth); addAndMakeVisible(*row.remove);
             rows.push_back(std::move(row));
@@ -467,8 +503,9 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
     g.fillRect(b.withLeft(xe));
     const int n = BroodProcessor::kWaveBins;
     const float bw = b.getWidth() / n, mid = b.getCentreY();
+    const float gain = juce::Decibels::decibelsToGain(proc.apvts.getRawParameterValue("loopDb")->load());   // what you see is the level you hear
     for (int i = 0; i < n; ++i) {
-        const float a = std::min(1.f, wave[static_cast<size_t>(i)] * 1.6f) * (b.getHeight() / 2 - 14);
+        const float a = std::min(1.f, wave[static_cast<size_t>(i)] * 1.6f * gain) * (b.getHeight() / 2 - 14);
         const float x = i * bw;
         g.setColour(x >= xs && x < xe ? kInk : kLine);
         g.fillRect(x, mid - a, std::max(1.f, bw - 0.4f), 2 * a + 1);
@@ -659,7 +696,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     }
     routesButton.onClick = [this] {
         if (routeList->isVisible()) { routeList->setVisible(false); return; }
-        routeList->rebuild();
+        routeList->rebuild(true);
         routeList->setVisible(true);
         routeList->toFront(false);
     };
@@ -805,7 +842,7 @@ void BroodEditor::chipDropped(int k, juce::Point<int> screen) {
     }
     selectSource(k);
     showDepth(k, t);
-    if (routeList->isVisible()) routeList->rebuild();
+    if (routeList->isVisible()) routeList->rebuild(false);
 }
 
 void BroodEditor::showDepth(int k, int t) {
@@ -1109,8 +1146,8 @@ void BroodEditor::rebuildHoverHelp() {
     if (envSoft.isVisible())
         add(envSoftDesign.expanded(4), "SOFT / ENV", "the slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. a rounder, less percussive stutter.");
 
-    add(chipDesign[0], "MOD 1", "click to show its controls. drag it onto any knob or WET/LOOP to route it. the square turns it on or off.");
-    add(chipDesign[1], "MOD 2", "click to show its controls. drag it onto any knob or WET/LOOP to route it. the square turns it on or off.");
+    add(chipDesign[0], "MOD 1", "click to show its controls. drag it onto any knob or WET/LOOP, or drag up or down around a knob, to route it. the square turns it on or off.");
+    add(chipDesign[1], "MOD 2", "click to show its controls. drag it onto any knob or WET/LOOP, or drag up or down around a knob, to route it. the square turns it on or off.");
     add(routesDesign, "ROUTES", "every route in one list, with its depth.");
     add(rampWaveDesign, "MOD SHAPE", "click to step the shape: triangle, square, sine, random, smooth random.");
     add(rampRateDesign, "MOD RATE", "how slowly this source turns. with SYNC on it becomes a span of the beat.");
@@ -1376,7 +1413,7 @@ void BroodEditor::timerCallback() {
     const int mask = routeMask();
     if (mask != routeMaskSeen) {
         routeMaskSeen = mask;
-        if (routeList->isVisible()) routeList->rebuild();
+        if (routeList->isVisible()) routeList->rebuild(false);
     }
     if (mask != 0) for (auto& knob : knobs) if (knob.slider->isShowing()) knob.slider->repaint();
     fsWet->setLit(wetOn);

@@ -83,6 +83,10 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 24: **overdub with its own head.** The write head keeps its place in the window it
+  started in, so modulating LENGTH or START no longer leaves seams in the take. Route rows
+  survive passing through 0%, the rings around a knob are depth handles as in Silt, the
+  waveform follows GAIN, and you choose where sent audio goes, with categories as folders.
 - Round 23: **two sources, routed by hand.** The modulation panel gives way to two sources
   you drag onto any control, each with its own rate, shape and switches, and a depth per
   route. BEFORE THE LOOP moved into the wet column and off is now fully clean, so a catch

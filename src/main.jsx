@@ -206,16 +206,28 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, 
     el.addEventListener('wheel', wheel, { passive: false });
     return () => el.removeEventListener('wheel', wheel);
   }, [id, onTouch]);
+  const [hoverRing, setHoverRing] = useState(-1);
+  const ringAt = (event) => {
+    const box = element.current.getBoundingClientRect();
+    const d = Math.hypot(event.clientX - (box.left + box.width / 2), event.clientY - (box.top + box.height / 2)) * 120 / box.width;
+    if (d < 43 || d > 63) return -1;
+    const on = [0, 1].map((k) => Math.abs(params[`mod${k + 1}_${id}`] || 0) >= 0.005);
+    if (on[0] && on[1]) return d >= 57 ? 1 : 0;
+    return on[0] && modSource !== 1 ? 0 : on[1] && modSource !== 0 ? 1 : modSource;
+  };
   const down = (event) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    const depthKey = `mod${modSource + 1}_${id}`;
-    drag.current = event.altKey ? { y: event.clientY, x: event.clientX, depthKey, value: params[depthKey] } : { y: event.clientY, x: event.clientX, value };
+    // The rings are handles, as in the plug-in: a press around the knob drags that
+    // source's depth, and where there's no ring yet it makes one for the selected source.
+    const ring = ringAt(event);
+    const depthKey = `mod${(ring >= 0 ? ring : modSource) + 1}_${id}`;
+    drag.current = ring >= 0 || event.altKey ? { y: event.clientY, x: event.clientX, depthKey, value: params[depthKey] } : { y: event.clientY, x: event.clientX, value };
     onTouch(id);
     event.currentTarget.focus();
   };
   const move = (event) => {
-    if (!drag.current) return;
+    if (!drag.current) { const r = ringAt(event); if (r !== hoverRing) setHoverRing(r); return; }
     if (drag.current.depthKey) { onChange(drag.current.depthKey, clamp(drag.current.value + (drag.current.y - event.clientY) / 150, -1, 1)); return; }
     const delta = (drag.current.y - event.clientY) + (event.clientX - drag.current.x) * 0.25;
     onChange(id, clamp(drag.current.value + delta / (event.shiftKey ? 700 : 180)));
@@ -242,13 +254,14 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, 
   });
   return <div className="knob-block">
     <div className="knob-heading"><span>{title}</span><span className="knob-index">{id === 'time' ? '01' : id === 'mix' ? '02' : id === 'length' ? '03' : id === 'modWet' ? '04' : id === 'clock' ? '05' : '06'}</span></div>
-    <div ref={element} data-mod-target={id} className={`knob ${dark ? 'knob-dark' : ''}`} role="slider" tabIndex="0"
+    <div ref={element} data-mod-target={id} style={hoverRing >= 0 ? { cursor: 'ns-resize' } : undefined} onPointerLeave={() => setHoverRing(-1)} className={`knob ${dark ? 'knob-dark' : ''}`} role="slider" tabIndex="0"
       aria-label={`${title}${id === 'modWet' ? ' wet' : id === 'modLoop' ? ' loop' : ''}`}
       aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value * 100)} aria-valuetext={describe(id, params)}
       onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
       onKeyDown={key} onFocus={() => onTouch(id)} onDoubleClick={() => onChange(id, KNOB_DEFAULTS[id])}>
       <svg viewBox="0 0 120 120" aria-hidden="true">
         <g className="knob-ticks">{ticks}</g>
+        {hoverRing >= 0 && Math.abs(params[`mod${hoverRing + 1}_${id}`] || 0) < 0.005 && <circle cx="60" cy="60" r={55 + hoverRing * 3.5} fill="none" stroke={MOD_COLOURS[hoverRing]} strokeOpacity=".45"/>}
         {[0, 1].map((k) => {
           // Each source's swing, as a ring in its colour.
           const d = params[`mod${k + 1}_${id}`] || 0;
@@ -388,12 +401,13 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
     if (wave?.peaks && m) {
       const peaks = wave.peaks;
       const start = m.s / m.len, end = m.e / m.len;
+      const levelGain = Math.pow(10, params.loopDb / 20);   // what you see is the level you hear
       // Trimmed-away audio stays visible but recedes.
       g.fillStyle = '#e6e5dd';
       g.fillRect(0, 0, start * w, h);
       g.fillRect(end * w, 0, w - end * w, h);
       for (let i = 0; i < peaks.length; i++) {
-        const x = Math.floor(i / peaks.length * w), amplitude = Math.max(1, Math.min(1, peaks[i] * 2) * (h / 2 - 14));
+        const x = Math.floor(i / peaks.length * w), amplitude = Math.max(1, Math.min(1, peaks[i] * 2 * levelGain) * (h / 2 - 14));
         const inside = i / peaks.length >= start && i / peaks.length < end;
         g.fillStyle = inside ? '#151512' : '#b3b3ab';
         g.fillRect(x, Math.floor(h / 2 - amplitude), 2, Math.max(2, Math.floor(amplitude * 2)));
@@ -422,7 +436,7 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
       g.fillStyle = '#9a9a92';
       for (let x = 6; x < w; x += 12) g.fillRect(x, h / 2, 2, 2);
     }
-  }, [wave, state, hot]);
+  }, [wave, state, hot, params.loopDb]);
 
   const sampleAt = (event) => {
     const r = canvas.current.getBoundingClientRect();
@@ -558,7 +572,11 @@ function ModPanel({ params, onChange, help, source, setSource, state }) {
   const [dragging, setDragging] = useState(-1);
   const n = source + 1;
   const synced = !!params[`mod${n}Sync`];
-  const routes = [0, 1].flatMap((k) => MOD_TARGETS.filter((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005).map((t) => ({ k, t })));
+  // A row stays once it's there, even at 0%, so a depth can pass through zero: only its
+  // × takes it away.
+  const shownRoutes = useRef(new Set());
+  [0, 1].forEach((k) => MOD_TARGETS.forEach((t) => { if (Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005) shownRoutes.current.add(`${k}${t}`); }));
+  const routes = [0, 1].flatMap((k) => MOD_TARGETS.filter((t) => shownRoutes.current.has(`${k}${t}`)).map((t) => ({ k, t })));
   const drop = (k, event) => {
     setDragging(-1);
     const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-mod-target]');
@@ -574,7 +592,7 @@ function ModPanel({ params, onChange, help, source, setSource, state }) {
         onClick={() => setSource(k)} onPointerDown={(event) => { if (event.button === 0 && !event.target.closest('button')) { event.currentTarget.setPointerCapture(event.pointerId); setDragging(k); } }}
         onPointerUp={(event) => { if (dragging === k) drop(k, event); }} {...help(`MOD ${k + 1}`, 'click to show its controls. drag it onto any knob or WET / LOOP to route it. alt-drag a knob to set the selected source\u2019s depth.')}>
         <span className="mod-num" style={{ background: MOD_COLOURS[k] }}>{k + 1}</span>
-        <span className="mod-count">{routes.filter((r) => r.k === k).length} ROUTES</span>
+        <span className="mod-count">{MOD_TARGETS.filter((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005).length} ROUTES</span>
         <button type="button" className={`mod-on ${params[`mod${k + 1}On`] ? 'on' : ''}`} role="switch" aria-checked={!!params[`mod${k + 1}On`]} aria-label={`Source ${k + 1} on`} onClick={(event) => { event.stopPropagation(); onChange(`mod${k + 1}On`, params[`mod${k + 1}On`] ? 0 : 1); }}/>
         <i className="mod-meter"><i style={{ width: `${(state?.mods?.[k] ?? 0) * 100}%`, background: MOD_COLOURS[k] }}/></i>
       </div>)}
@@ -600,7 +618,7 @@ function ModPanel({ params, onChange, help, source, setSource, state }) {
         <span>{MOD_TARGET_NAMES[t]}</span>
         <input type="range" aria-label={`Source ${k + 1} depth on ${MOD_TARGET_NAMES[t]}`} min="-1" max="1" step="0.01" value={params[`mod${k + 1}_${t}`]} onChange={(event) => onChange(`mod${k + 1}_${t}`, Number(event.target.value))}/>
         <b>{Math.round(params[`mod${k + 1}_${t}`] * 100)}%</b>
-        <button type="button" aria-label={`Remove source ${k + 1} from ${MOD_TARGET_NAMES[t]}`} onClick={() => onChange(`mod${k + 1}_${t}`, 0)}>×</button>
+        <button type="button" aria-label={`Remove source ${k + 1} from ${MOD_TARGET_NAMES[t]}`} onClick={() => { shownRoutes.current.delete(`${k}${t}`); onChange(`mod${k + 1}_${t}`, 0); }}>×</button>
       </li>)}
     </ul>}
   </div>;

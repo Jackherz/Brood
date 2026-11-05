@@ -6,9 +6,10 @@
 #include <optional>
 
 // The Bench: what passes between plug-ins, either way. A plug-in sends a moment and
-// another takes it. A moment is a WAV and a note in a folder in Music, so it works
-// whichever process or host each plug-in lives in, neither needs the other open, and
-// everything sent stays there to use in the Finder.
+// another takes it. A moment is a WAV in a folder you choose (with a category folder
+// inside it, if you like) and a note in Application Support, so it works whichever process
+// or host each plug-in lives in, neither needs the other open, and everything sent stays
+// there to use in the Finder.
 namespace kit::bench
 {
 struct Moment
@@ -21,15 +22,59 @@ struct Moment
 
 inline juce::File folderForTests;   // tests keep away from the real Bench
 
-inline juce::File defaultFolder()
+// Where the notes and the settings live. They stay put when the audio folder moves.
+inline juce::File configFolder()
 {
+    if (folderForTests != juce::File())
+        return folderForTests;
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Bench");
+}
+
+inline juce::String setting (const juce::String& name)
+{
+    const auto xml = juce::XmlDocument::parse (configFolder().getChildFile ("settings.xml"));
+    return xml != nullptr ? xml->getStringAttribute (name) : juce::String();
+}
+
+inline void setSetting (const juce::String& name, const juce::String& value)
+{
+    const auto file = configFolder().getChildFile ("settings.xml");
+    auto xml = juce::XmlDocument::parse (file);
+    if (xml == nullptr)
+        xml = std::make_unique<juce::XmlElement> ("BENCH");
+    xml->setAttribute (name, value);
+    configFolder().createDirectory();
+    xml->writeTo (file);
+}
+
+// The folder you chose, shared by every plug-in, or Music/Bench until you choose one.
+inline juce::File audioRoot()
+{
+    if (const auto chosen = setting ("folder"); chosen.isNotEmpty())
+        return juce::File (chosen);
     if (folderForTests != juce::File())
         return folderForTests;
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("Bench");
 }
 
+// A category is a folder inside it: what you send goes there until you change it.
+inline juce::StringArray categories()
+{
+    juce::StringArray names;
+    for (const auto& dir : audioRoot().findChildFiles (juce::File::findDirectories, false))
+        names.add (dir.getFileName());
+    names.sort (true);
+    return names;
+}
+
+inline juce::File audioFolder()
+{
+    const auto category = setting ("category");
+    return category.isNotEmpty() ? audioRoot().getChildFile (category) : audioRoot();
+}
+
 // Where a new moment's audio goes: named for who sent it and when, so it reads in the Finder.
-inline juce::File newAudioFile (const juce::String& name, const juce::File& folder = defaultFolder())
+inline juce::File newAudioFile (const juce::String& name, const juce::File& folder = audioFolder())
 {
     folder.createDirectory();
     const auto when = juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S");
@@ -39,23 +84,23 @@ inline juce::File newAudioFile (const juce::String& name, const juce::File& fold
 // A finished WAV goes on the Bench. The note is written last, so a reader never finds
 // half a moment. Each sender keeps one note: its latest.
 inline bool publish (const juce::File& audio, double seconds, const juce::String& chip, const juce::String& name,
-                     const juce::File& folder = defaultFolder())
+                     const juce::File& notes = configFolder())
 {
+    notes.createDirectory();
     juce::XmlElement note ("MOMENT");
-    note.setAttribute ("file", audio.getFileName());
+    note.setAttribute ("file", audio.getFullPathName());
     note.setAttribute ("chip", chip);
     note.setAttribute ("name", name);
     note.setAttribute ("seconds", seconds);
     note.setAttribute ("stamp", juce::String (juce::Time::currentTimeMillis()));
-    return note.writeTo (folder.getChildFile ("." + juce::File::createLegalFileName (chip) + ".moment"));
+    return note.writeTo (notes.getChildFile ("." + juce::File::createLegalFileName (chip) + ".moment"));
 }
 
-inline bool send (const juce::AudioBuffer<float>& audio, double sampleRate, const juce::String& chip, const juce::String& name,
-                  const juce::File& folder = defaultFolder())
+inline bool send (const juce::AudioBuffer<float>& audio, double sampleRate, const juce::String& chip, const juce::String& name)
 {
-    if (audio.getNumSamples() == 0 || sampleRate <= 0.0 || ! folder.createDirectory())
+    if (audio.getNumSamples() == 0 || sampleRate <= 0.0 || ! audioFolder().createDirectory())
         return false;
-    const auto file = newAudioFile (name, folder);
+    const auto file = newAudioFile (name);
     {
         juce::WavAudioFormat wav;
         std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
@@ -70,19 +115,19 @@ inline bool send (const juce::AudioBuffer<float>& audio, double sampleRate, cons
         if (! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()))
             return false;
     }
-    return publish (file, (double) audio.getNumSamples() / sampleRate, chip, name, folder);
+    return publish (file, (double) audio.getNumSamples() / sampleRate, chip, name);
 }
 
 // The newest moment from anyone but `myChip`.
-inline std::optional<Moment> latest (const juce::String& myChip, const juce::File& folder = defaultFolder())
+inline std::optional<Moment> latest (const juce::String& myChip)
 {
     std::optional<Moment> best;
-    for (const auto& noteFile : folder.findChildFiles (juce::File::findFiles, false, ".*.moment"))
+    for (const auto& noteFile : configFolder().findChildFiles (juce::File::findFiles, false, ".*.moment"))
     {
         const auto xml = juce::XmlDocument::parse (noteFile);
         if (xml == nullptr || ! xml->hasTagName ("MOMENT") || xml->getStringAttribute ("chip") == myChip)
             continue;
-        Moment m { folder.getChildFile (xml->getStringAttribute ("file")), xml->getStringAttribute ("chip"), xml->getStringAttribute ("name"),
+        Moment m { juce::File (xml->getStringAttribute ("file")), xml->getStringAttribute ("chip"), xml->getStringAttribute ("name"),
                    xml->getDoubleAttribute ("seconds"), xml->getStringAttribute ("stamp").getLargeIntValue() };
         if (m.audio.existsAsFile() && (! best.has_value() || m.stamp > best->stamp))
             best = m;
@@ -99,12 +144,8 @@ public:
     {
         sendKey.onClick = [this] { if (onSend) onSend(); };
         takeKey.onClick = [this] { if (onTake) onTake(); };
-        folderKey.onClick = []
-        {
-            defaultFolder().createDirectory();
-            defaultFolder().revealToUser();
-        };
-        folderKey.setTooltip ("Everything sent is kept here, to use in the Finder");
+        folderKey.onClick = [this] { showFolderMenu(); };
+        refreshFolderKey();
         addAndMakeVisible (sendKey);
         addAndMakeVisible (takeKey);
         addAndMakeVisible (folderKey);
@@ -176,6 +217,80 @@ public:
     }
 
 private:
+    void refreshFolderKey()
+    {
+        const auto category = setting ("category");
+        folderKey.setButtonText (category.isNotEmpty() ? category.toUpperCase() : juce::String ("FOLDER"));
+        folderKey.setTooltip ("Sending to " + audioFolder().getFullPathName());
+    }
+
+    // Where sent audio goes: open it, choose another folder, or send into a category.
+    void showFolderMenu()
+    {
+        juce::PopupMenu menu;
+        const auto names = categories();
+        const auto current = setting ("category");
+        menu.addSectionHeader (audioFolder().getFullPathName());
+        menu.addItem (1, "Show in Finder");
+        menu.addItem (2, "Choose a folder...");
+        menu.addSectionHeader ("SEND INTO");
+        menu.addItem (3, "No category", true, current.isEmpty());
+        for (int i = 0; i < names.size(); ++i)
+            menu.addItem (100 + i, names[i], true, names[i] == current);
+        menu.addItem (4, "New category...");
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&folderKey), [this, names] (int chosen)
+        {
+            if (chosen == 1)
+            {
+                audioFolder().createDirectory();
+                audioFolder().revealToUser();
+            }
+            else if (chosen == 2)
+            {
+                chooser = std::make_unique<juce::FileChooser> ("Choose where sent audio is kept", audioRoot());
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc)
+                {
+                    if (fc.getResult() != juce::File())
+                    {
+                        setSetting ("folder", fc.getResult().getFullPathName());
+                        setSetting ("category", {});
+                        refreshFolderKey();
+                    }
+                });
+            }
+            else if (chosen == 3)
+            {
+                setSetting ("category", {});
+                refreshFolderKey();
+            }
+            else if (chosen == 4)
+            {
+                asking = std::make_unique<juce::AlertWindow> ("New category", "A name, such as Guitar. It becomes a folder inside the one you send to.", juce::MessageBoxIconType::NoIcon, this);
+                asking->addTextEditor ("name", {});
+                asking->addButton ("Create", 1, juce::KeyPress (juce::KeyPress::returnKey));
+                asking->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+                asking->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result)
+                {
+                    const auto name = juce::File::createLegalFileName (asking->getTextEditorContents ("name").trim());
+                    if (result == 1 && name.isNotEmpty())
+                    {
+                        audioRoot().getChildFile (name).createDirectory();
+                        setSetting ("category", name);
+                        refreshFolderKey();
+                    }
+                    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<Strip> (this)] { if (safe != nullptr) safe->asking = nullptr; });
+                }));
+            }
+            else if (chosen >= 100)
+            {
+                setSetting ("category", names[chosen - 100]);
+                refreshFolderKey();
+            }
+        });
+    }
+
+    std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<juce::AlertWindow> asking;
     static constexpr int keyWidth = 78, keyGap = 6;
     juce::Rectangle<int> keysArea() const { return getLocalBounds().withTrimmedRight (3).withTrimmedBottom (3).reduced (6, 7); }
 
