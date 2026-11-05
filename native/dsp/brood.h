@@ -36,11 +36,18 @@ constexpr double kWeavePitch[] = {0, 7, -5, 12, -12, 4, -17, 19};   // root-symp
 
 inline double clampd(double x, double a, double b) { return x < a ? a : x > b ? b : x; }
 inline double expMap(double t, double a, double b) { return a * std::pow(b / a, t); }
+// Stepped, CLOCK lands on these. SMOOTH travels through the same rates, so the two agree at
+// every step and switching SMOOTH doesn't change the sound.
 inline double clockHz(double knob, bool smooth = false) {
     knob = clampd(knob, 0, 1);
     static constexpr double steps[] = {2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000};
-    return smooth ? expMap(knob, kClockMinHz, kClockMaxHz)
-                  : steps[static_cast<int>(std::floor(knob * 10 + 0.5))];
+    if (!smooth) return steps[static_cast<int>(std::floor(knob * 10 + 0.5))];
+    const int below = std::min(9, static_cast<int>(std::floor(knob * 10)));
+    return expMap(knob * 10 - below, steps[below], steps[below + 1]);
+}
+// Where stepped CLOCK settles: on the step itself, so SMOOTH picks up from there.
+inline double clockTarget(double knob, bool smooth) {
+    return smooth ? knob : std::floor(clampd(knob, 0, 1) * 10 + 0.5) / 10;
 }
 inline double sgn(double x) { return x > 0 ? 1.0 : x < 0 ? -1.0 : 0.0; }
 inline double jsRound(double x) { return std::floor(x + 0.5); }
@@ -653,7 +660,7 @@ public:
             s.modWet += (p.modWet - s.modWet) * a;
             s.modLoop += (p.modLoop - s.modLoop) * a;
             s.balance += (p.balance - s.balance) * a;
-            s.clock += (p.clock - s.clock) * aClock;
+            s.clock += (clockTarget(p.clock, p.smooth) - s.clock) * aClock;
             for (int k = 0; k < 2; ++k) s.modRate[k] += (p.mods[k].rate - s.modRate[k]) * a;
             rampTick();
             applyRamps(a);

@@ -62,15 +62,17 @@ public:
     // The loop's GAIN, beside the waveform as Silt has it: drag up or down, Shift for fine,
     // double-click for 0 dB.
     struct GainBox final : juce::Component {
-        explicit GainBox(juce::RangedAudioParameter& p);
+        GainBox(juce::RangedAudioParameter& p, std::function<float()> normalising);
         void paint(juce::Graphics&) override;
         void mouseDown(const juce::MouseEvent&) override;
         void mouseDrag(const juce::MouseEvent&) override;
         void mouseUp(const juce::MouseEvent&) override;
         void mouseDoubleClick(const juce::MouseEvent&) override;
+        void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
         juce::ParameterAttachment attach;
-        juce::RangedAudioParameter& param;
-        float db = 0, dbAtStart = 0;
+        std::function<float()> normalise;
+        float db = 0, dbRunning = 0, lastY = 0;
+        bool dragging = false;
     };
     // Every route in one list, over the main sheet, each with its depth.
     struct RouteList final : juce::Component {
@@ -105,14 +107,16 @@ public:
     // ---- small components (public so the .cpp can define them) ----
     // Segmented selector for 2..N choices; the wet channel now has four modes.
     struct ThreeWay : juce::Component {
-        ThreeWay(juce::RangedAudioParameter& p, juce::StringArray labels, std::function<void()> onChange);
+        // flipped: the labels read against the parameter's order, for a switch whose "on" belongs on the left.
+        ThreeWay(juce::RangedAudioParameter& p, juce::StringArray labels, std::function<void()> onChange, bool flipped = false);
         void paint(juce::Graphics&) override;
         void mouseDown(const juce::MouseEvent&) override;
         juce::RangedAudioParameter& param;
         juce::StringArray labels;
+        bool flip;
         juce::ParameterAttachment attach;
         int index = 0;
-        std::function<void()> changed;
+        std::function<void()> changed, clicked;
     };
     // A short list as a click-cycling cell: the arrows either side step through it, so
     // it stays a big target instead of a tiny menu.
@@ -240,8 +244,7 @@ private:
     int targetAt(juce::Point<int> screen, juce::Point<float>& design) const;
     juce::Rectangle<int> targetDesign(int t) const;
     // PRE: the wet side runs into the looper. It belongs to the wet column.
-    juce::ToggleButton wetPre;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetPreAtt;
+    std::unique_ptr<ThreeWay> wetPre;
     juce::Rectangle<int> wetPreDesign;
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
@@ -260,10 +263,12 @@ private:
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopViewDesign;
-    // Under each knob, while it's touched: its value.
+    // Under each knob: its value, in ink while it's touched.
     juce::Rectangle<int> valueRect(int knob) const;
     int activeKnob = -1;
     juce::String activeKnobText;
+    std::array<juce::String, 6> knobValues;
+    void updateKnobValues();
     juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
 
     // Hover help. The readout at the top of the side column used to hold whatever
@@ -276,7 +281,7 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> characterDesign, srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
+    juce::Rectangle<int> characterDesign, srcArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
     juce::Rectangle<int> rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

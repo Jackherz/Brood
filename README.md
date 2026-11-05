@@ -271,8 +271,9 @@ pedal this follows has none. It reads in three tiers:
    footswitches.
 2. **The side column** — the readout, then four numbered panels in the order you
    reach for them while playing: `01 LOOP` (the waveform with its START and END
-   markers, MEMORY, WET/LOOP), `02 MODULATION`, `03 SWITCHES` (TRAILS, SMOOTH,
-   FREEZE, CLASSIC) and `04 INPUT`, which is set once per session.
+   markers, MEMORY, WET/LOOP), `02 MODULATION` and `03 INPUT`, which is set once per session.
+   FREEZE and TRAILS sit under the wet column (TRAILS leaves in SLIP, which has no
+   tail to keep), SMOOTH under CLOCK, and WEAR between the two footswitches.
 3. **Under the hood** — the five sliders along the bottom.
 
 **START and END are markers on the waveform.** Grab one and drag it, all the way to
@@ -462,7 +463,8 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   milliseconds (a whole note at 120 BPM is 2 s, which the 2.1 s delay buffer clamps
   to 1.995 s).
 - CLOCK selects 2–64 kHz steps, changing pitch, timing, bandwidth and loop
-  capacity together. **SMOOTH** makes the clock continuous. The fixed 64,000
+  capacity together. **SMOOTH** lets it rest between those steps and glide
+  through them, without changing the rate of any step. The fixed 64,000
   sample history holds approximately 1–32 seconds depending on clock rate.
 - **LOOP MEMORY** and **END** are our addition. On the pedal the capture window is
   whatever the 64,000-sample buffer holds at the current clock; MEMORY lifts that
@@ -495,9 +497,9 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   head, and a moving LENGTH glides, so nothing clicks. It's a rounder, less percussive
   stutter; off is the sharp cut the pedal makes. Both cores agree
   (`tests/parity/scenarios/env_soft.txt`).
-- **BEFORE THE LOOP**, in the wet column, puts the wet side ahead of the looper: input,
+- **PRE-LOOP / POST-LOOP**, in the wet column (BEFORE THE LOOP in the browser version): PRE-LOOP puts the wet side ahead of the looper: input,
   then wet, then loop. Catches and overdubs keep the wet sound, and the Bench's SEND
-  carries it. It hears only the input then, so ROUTING stands aside. Off, the loop stays
+  carries it. It hears only the input then, so ROUTING stands aside. POST-LOOP, the loop stays
   clean and the wet side plays over it (`tests/parity/scenarios/wet_pre.txt`).
 - **HI-Q**, in the switches, uses longer filters for the crossings into and out of CLOCK: far
   fewer artifacts and a fuller top at low clocks. The wet side and the loop run a little later
@@ -523,9 +525,8 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   knob was nearly at LOOP. The duck is gone; both cores agree bit for bit
   (`tests/parity/scenarios/balance.txt`) and the level is pinned by tests in both
   implementations.
-- **The switches** are TRAILS, SMOOTH, FREEZE and CLASSIC, one row in the
-  `03 SWITCHES` panel; FREEZE and CLASSIC came up from under the hood, which is now
-  sliders only. SYNC left the panel in round 16 to sit with the knob it governs,
+- **The switches** sit with what they act on: FREEZE and TRAILS under the wet column,
+  SMOOTH under CLOCK, WEAR between the footswitches. Under the hood is sliders only. SYNC left the panel in round 16 to sit with the knob it governs,
   so it can disappear in the modes that have no use for the beat. LATCH went
   because the FREEZE switch does the same job without having to hold anything (the
   one thing it does that nothing else now can: latching the loop's overdub hold,

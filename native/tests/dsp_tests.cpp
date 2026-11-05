@@ -772,6 +772,31 @@ int main() {
         CHECK(brood::rampValueOfIndex(6, 1) == 0.0, "a single-entry list has one value");
         CHECK(brood::rampIndexOfValue(brood::rampValueOfIndex(4, brood::kRampWaveCount), brood::kRampWaveCount) == 4, "all five shapes are reachable");
     }
+    // SMOOTH runs through the same rates as the steps, so switching it doesn't move the clock.
+    {
+        for (int k = 0; k <= 10; ++k)
+            CHECK(std::fabs(brood::clockHz(k / 10.0, true) - brood::clockHz(k / 10.0, false)) < 1e-6, "step %d is the same rate with SMOOTH", k);
+        for (double a = 0; a < 1; a += 0.01)
+            CHECK(brood::clockHz(a + 0.01, true) > brood::clockHz(a, true), "SMOOTH only ever rises, at %f", a);
+        const auto after = [](double knob, double secondsAfter) {
+            static brood::Core c;
+            c.prepare(48000);
+            c.p.smooth = false;
+            c.p.clock = knob;
+            std::vector<float> in(256, 0.f), l(256), r(256);
+            const auto run = [&](double s) { for (int b = 0; b < static_cast<int>(s * 48000 / 256); ++b) c.process(in.data(), l.data(), r.data(), 256); };
+            run(1.0);
+            const double before = c.state().clockHz;
+            c.p.smooth = true;
+            c.p.clock = brood::clockTarget(knob, false);   // what the panel does on the click
+            run(secondsAfter);
+            return c.state().clockHz / before;
+        };
+        for (const double knob : {0.9, 0.87, 0.5, 0.13}) {
+            CHECK(std::fabs(after(knob, 0.02) - 1) < 1e-3, "SMOOTH on leaves the clock alone at once (knob %f)", knob);
+            CHECK(std::fabs(after(knob, 3.0) - 1) < 1e-3, "and it stays there (knob %f)", knob);
+        }
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

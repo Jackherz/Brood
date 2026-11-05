@@ -377,6 +377,21 @@ int main() {
             juce::Image image(juce::Image::ARGB, editor->getWidth(), editor->getHeight(), true);
             juce::Graphics graphics(image);
             editor->paintEntireComponent(graphics, true);
+            // TRAILS is shown wherever it does something, which is everywhere but SLIP.
+            const auto trailsShown = [&](float mode) {
+                auto* wetMode = restored.apvts.getParameter("wetMode");
+                wetMode->setValueNotifyingHost(wetMode->convertTo0to1(mode));
+                std::unique_ptr<juce::AudioProcessorEditor> window(restored.createEditor());
+                for (auto* child : window->getChildren())
+                    if (auto* button = dynamic_cast<juce::Button*>(child); button != nullptr && button->getButtonText() == "TRAILS") return button->isVisible();
+                return false;
+            };
+            CHECK(trailsShown(0.f) && trailsShown(1.f) && trailsShown(3.f), "TRAILS in REVERB, DELAY and WEAVE");
+            CHECK(!trailsShown(2.f), "and not in SLIP");
+            restored.apvts.getParameter("wetMode")->setValueNotifyingHost(0.f);
+            bool wetPosition = false;
+            for (auto* child : editor->getChildren()) wetPosition = wetPosition || child->getTitle() == "Wet position";
+            CHECK(wetPosition, "the wet side's position is on the panel, by name");
             if (const char* path = std::getenv("BROOD_TEST_SCREENSHOT")) {
                 juce::FileOutputStream output { juce::File(juce::String::fromUTF8(path)) };
                 juce::PNGImageFormat png;

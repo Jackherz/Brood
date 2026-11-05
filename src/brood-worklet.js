@@ -76,9 +76,16 @@ const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
 const rampWaveIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_WAVES.length - 1));
 const rampHz = (k) => expMap(clamp(k, 0, 1), 0.05, 8);   // one cycle every 20 s … eight a second
 
-const clockHz = (knob, smooth = false) => smooth
-  ? expMap(clamp(knob, 0, 1), CLOCK_MIN_HZ, CLOCK_MAX_HZ)
-  : CLOCK_STEPS[Math.round(clamp(knob, 0, 1) * (CLOCK_STEPS.length - 1))];
+// Stepped, CLOCK lands on these. SMOOTH travels through the same rates, so the two agree at
+// every step and switching SMOOTH doesn't change the sound.
+const clockHz = (knob, smooth = false) => {
+  const k = clamp(knob, 0, 1);
+  if (!smooth) return CLOCK_STEPS[Math.floor(k * 10 + 0.5)];
+  const below = Math.min(9, Math.floor(k * 10));
+  return expMap(k * 10 - below, CLOCK_STEPS[below], CLOCK_STEPS[below + 1]);
+};
+// Where stepped CLOCK settles: on the step itself, so SMOOTH picks up from there.
+const clockTarget = (knob, smooth) => (smooth ? knob : Math.floor(clamp(knob, 0, 1) * 10 + 0.5) / 10);
 
 // MKII tape: octave steps, with reverse on the left and forward on the right.
 function speedMap(m) {
@@ -1112,7 +1119,7 @@ class BroodCore {
       s.modWet += (p.modWet - s.modWet) * a;
       s.modLoop += (p.modLoop - s.modLoop) * a;
       s.balance += (p.balance - s.balance) * a;
-      s.clock += (p.clock - s.clock) * aClock;
+      s.clock += (clockTarget(p.clock, p.smooth) - s.clock) * aClock;
       s.tone += (p.tone - s.tone) * a;
       s.fade += (p.fade - s.fade) * a;
       s.width += (p.width - s.width) * a;
