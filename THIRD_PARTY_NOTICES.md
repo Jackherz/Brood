@@ -15,7 +15,10 @@ terms in addition to the GPL terms of the project code. JUCE includes the VST3
 SDK and other third-party components; its licence file lists them. See also
 `licenses/VST3-SDK-LICENSE.txt` for the VST3 SDK's licensing options.
 
-The bundled VT323 (Peter Hull), Press Start 2P (CodeMan38), and Space Mono
+The plug-ins' VT323 and Glyph Grotesque (Terminal Grotesque by Raphael Bastide,
+renamed) are also under that licence; their texts are in `kit/fonts/`.
+
+The browser version's bundled VT323 (Peter Hull), Press Start 2P (CodeMan38), and Space Mono
 (Colophon Foundry) fonts are licensed under the SIL Open Font License 1.1.
 Their licence texts are in `assets/fonts/`. The font binaries themselves are not
 committed: `scripts/fetch-fonts.sh` downloads them from

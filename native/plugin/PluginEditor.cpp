@@ -14,8 +14,8 @@ constexpr int kSp1 = 4, kSp2 = 8;
 constexpr int W = 1200, H = 820;
 
 // One whispered sentence per knob per mode: enough to know which way to turn,
-// never quite enough to stop wondering. The exact value appears in the display
-// when you touch the knob.
+// never quite enough to stop wondering. It lives in hover help; the exact value
+// appears under the knob when you touch it.
 const char* kWhisper[6][4] = {
     {"how long the room keeps breathing", "how far back the echo remembers",
      "how wide a slice of time is borrowed", "how far back the threads reach"},
@@ -167,9 +167,9 @@ void BroodEditor::ModChip::paint(juce::Graphics& g) {
     const bool on = editor.proc.apvts.getRawParameterValue("mod" + juce::String(k + 1) + "On")->load() > 0.5f;
     const bool selected = editor.selectedMod == k;
     const auto colour = modColour(k);
-    g.setColour(kInk); g.fillRect(r.translated(2, 2));
+    if (selected) { g.setColour(kInk); g.fillRect(r.translated(2, 2)); }
     g.setColour(kPaper); g.fillRect(r);
-    g.setColour(kInk); g.drawRect(r, selected ? 2 : 1);
+    g.setColour(selected || isMouseOver(true) ? kInk : kLine); g.drawRect(r, selected ? 2 : 1);
     const auto number = juce::Rectangle<int>(5, 4, 15, 15);
     g.setColour(on ? colour : kLine); g.fillRect(number);
     g.setColour(kPaper); g.setFont(font(15));
@@ -357,17 +357,16 @@ void BroodEditor::Stepper::paint(juce::Graphics& g) {
     auto r = getLocalBounds();
     const bool hot = isMouseOver(true);
     auto body = r.reduced(2).withTrimmedRight(2).withTrimmedBottom(2);
-    g.setColour(kInk); g.fillRect(body.translated(3, 3));                 // the hard shadow
     g.setColour(hot ? juce::Colour(0xfff1efe6) : kPaper); g.fillRect(body);
-    g.setColour(kInk); g.drawRect(body, 2);
+    g.setColour(hot ? kInk : kLine); g.drawRect(body, 1);
     auto inner = body.reduced(2, 2);
     const int arrow = arrowWidth();
     auto tri = [&](juce::Rectangle<int> zone, bool right) {
-        g.setColour(hot ? kInk : juce::Colour(0xff8b8b80)); g.fillRect(zone);
+        if (hot) { g.setColour(kInk); g.fillRect(zone); }
         juce::Path t;
         const float w = 4.f, h = 7.f, cx = zone.getCentreX(), cy = zone.getCentreY();
         t.addTriangle(cx + (right ? -w / 2 : w / 2), cy - h / 2, cx + (right ? -w / 2 : w / 2), cy + h / 2, cx + (right ? w / 2 : -w / 2), cy);
-        g.setColour(kPaper); g.fillPath(t);
+        g.setColour(hot ? kPaper : kMuted); g.fillPath(t);
     };
     tri(inner.removeFromLeft(arrow), false);
     tri(inner.removeFromRight(arrow), true);
@@ -376,9 +375,7 @@ void BroodEditor::Stepper::paint(juce::Graphics& g) {
     const int capW = juce::jmin(inner.getWidth() / 2, 44);
     g.drawFittedText(cap, inner.removeFromLeft(capW), juce::Justification::centredLeft, 1);
     auto value = inner.withTrimmedLeft(2);
-    g.setColour(kPaper); g.fillRect(value);
-    g.setColour(kInk); g.drawRect(value, 1);
-    g.setFont(textFont());
+    g.setColour(kInk); g.setFont(textFont());
     g.drawFittedText(index >= 0 && index < names.size() ? names[index] : juce::String(), value.reduced(2, 0), juce::Justification::centred, 1);
 }
 void BroodEditor::Stepper::step(int by) {
@@ -508,7 +505,7 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
     if (ver != version && proc.copyWave(wave)) version = ver;
     const auto b = getLocalBounds().toFloat();
     g.setColour(kPaper); g.fillRect(b);
-    g.setColour(kInk); g.drawRect(b, 1);
+    g.setColour(kLine); g.drawRect(b, 1);
     const int lsrc = proc.ui.lsrc.load();
     if (lsrc <= 0) {
         g.setColour(kMuted); g.setFont(font(15));
@@ -779,7 +776,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     presetBar.refresh();
     updateModeControls();
     updateBench();
-    startTimerHz(30);
+    startTimerHz(60);
 }
 
 BroodEditor::~BroodEditor() {
@@ -828,9 +825,9 @@ void BroodEditor::showReadout(const juce::String& label, const juce::String& val
     repaintDesign(lcdArea);
 }
 
-juce::Rectangle<int> BroodEditor::whisperRect(int knob) const {
+juce::Rectangle<int> BroodEditor::valueRect(int knob) const {
     const auto kb = knobDesign[juce::jlimit(0, 5, knob)];
-    // Row one leaves room for a SYNC switch between the knob and its line.
+    // Row one leaves room for a SYNC switch between the knob and its value.
     return { kb.getCentreX() - 118, knob < 3 ? kb.getBottom() + 18 : kb.getBottom() + 2, 236, 34 };
 }
 
@@ -1078,7 +1075,7 @@ void BroodEditor::resized() {
         place(*knobs[static_cast<size_t>(i)].slider, knobDesign[i]);
     }
     // Each tempo switch sits directly under the knob it governs, between the knob
-    // and its whisper, so it cannot be read as belonging to a neighbour.
+    // and its value, so it cannot be read as belonging to a neighbour.
     wetSyncDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[0].getCentreX(), knobDesign[0].getBottom() + 6});
     envSyncDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[2].getCentreX() - 29, knobDesign[2].getBottom() + 6});
     envSoftDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[2].getCentreX() + 29, knobDesign[2].getBottom() + 6});
@@ -1162,10 +1159,10 @@ void BroodEditor::resized() {
         for (size_t i = 0; i < c.switches.size(); ++i) place(*c.switches[i], rampSwitchDesign[i]);
     }
 
-    // 03 SWITCHES: five cells, sized to their words.
+    // 03 SWITCHES: three cells, sized to their words, with WEAR in the heading as GAIN is in LOOP's.
     auto dipRow = dipArea.withTrimmedTop(kit::panelHeadHeight).reduced(10, 0).withSizeKeepingCentre(dipArea.getWidth() - 20, 26);
     dipRow.setY(dipArea.getY() + kit::panelHeadHeight + 5);
-    characterDesign = dipRow.removeFromRight(120).withSizeKeepingCentre(120, 26);
+    characterDesign = juce::Rectangle<int>(130, 24).withPosition(dipArea.getRight() - 136, dipArea.getY() + 2);
     place(*character, characterDesign);
     const int dipWeights[] = {59, 62, 59};
     const int dipTotal = dipRow.getWidth();
@@ -1208,10 +1205,8 @@ void BroodEditor::resized() {
 }
 
 
-// Everything that has no explanation of its own: the switches, the steppers, the
-// sliders whose label is only a label, the source row, the footswitches. The six
-// knobs are left out on purpose — they already whisper, and two explanations of
-// the same control in two different voices is worse than one.
+// Everything worth explaining: the switches, the steppers, the sliders whose label
+// is only a label, the source row, the footswitches, and the six knobs in their whispers.
 void BroodEditor::rebuildHoverHelp() {
     hoverHelp.clear();
     auto add = [this](juce::Rectangle<int> r, const char* label, const char* text) {
@@ -1278,6 +1273,17 @@ void BroodEditor::rebuildHoverHelp() {
     };
     static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV"};
     for (int i = 0; i < 5; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
+
+    // The knobs say what they do in the current mode, on hover and to a screen reader.
+    // Last in the table, so a switch beside a knob explains itself first.
+    const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
+    const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
+    for (size_t i = 0; i < knobs.size(); ++i) {
+        const int mode = kKnobMode[i] == 0 ? wm : kKnobMode[i] == 1 ? lm : 0;
+        const juce::String text = juce::String(kWhisper[i][juce::jlimit(0, 3, mode)]) + ".";
+        hoverHelp.push_back({knobDesign[i], knobName(i), text});
+        knobs[i].slider->setDescription(text);
+    }
 }
 
 void BroodEditor::paint(juce::Graphics& g) {
@@ -1296,12 +1302,10 @@ void BroodEditor::paint(juce::Graphics& g) {
             if (c > 0) { g.setColour(kLine); g.drawVerticalLine(col.getX(), static_cast<float>(col.getY() + 1), static_cast<float>(col.getBottom() - 1)); }
             g.setColour(kMuted); g.setFont(font(15));
             g.drawText(columns[c], col.getX(), col.getY() + 6, col.getWidth(), 16, juce::Justification::centred);
-            g.setColour(kInk);
+            g.setColour(kLine);
             g.drawHorizontalLine(col.getY() + 24, static_cast<float>(col.getX() + 14), static_cast<float>(col.getRight() - 14));
         }
     }
-    const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
-    const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
     for (size_t i = 0; i < knobs.size(); ++i) {
         const auto kb = knobDesign[i];
         const auto nameRow = kb.withY(kb.getY() - 20).withHeight(20);
@@ -1314,29 +1318,21 @@ void BroodEditor::paint(juce::Graphics& g) {
         g.drawText(juce::String(i + 1).paddedLeft('0', 2),
                    juce::Rectangle<int>(kb.getCentreX() + nameW / 2 + 5, nameRow.getY() + 1, 18, 14),
                    juce::Justification::centredLeft);
-        const int mode = kKnobMode[i] == 0 ? wm : kKnobMode[i] == 1 ? lm : 0;
-        // While the knob is touched the whisper gives way to the value, in ink, right
-        // where you are looking.
-        const bool showValue = static_cast<int>(i) == activeKnob && activeKnobText.isNotEmpty();
-        g.setColour(showValue ? kInk : kMuted);
-        g.setFont(showValue ? font(20) : font(16));
-        g.drawFittedText(showValue ? activeKnobText.toUpperCase() : juce::String(kWhisper[i][juce::jlimit(0, 3, mode)]),
-                         whisperRect(static_cast<int>(i)), juce::Justification::centredTop, 2, 1.f);
+        // While the knob is touched its value shows, in ink, right where you are looking.
+        if (static_cast<int>(i) == activeKnob && activeKnobText.isNotEmpty()) {
+            g.setColour(kInk); g.setFont(font(20));
+            g.drawFittedText(activeKnobText.toUpperCase(), valueRect(static_cast<int>(i)), juce::Justification::centredTop, 2, 1.f);
+        }
     }
     g.setColour(kMuted); g.setFont(font(15));
     g.drawText("ONE CLOCK. TWO WORLDS.", pedalArea.getX() + pedalArea.getWidth() / 3, fsWetDesign.getY(), pedalArea.getWidth() / 3, fsWetDesign.getHeight(), juce::Justification::centred);
 
-    // Two figures the heads can quote: what the host gave us, and how much past
-    // the looper is set to keep.
-    const auto* memoryParam = proc.apvts.getRawParameterValue("memory");
-    const float memV = memoryParam != nullptr ? memoryParam->load() : 0.f;
+    // What the host gave us. The other heads have nothing to add to what's under them.
     const juce::String srcTail = juce::String(proc.getTotalNumInputChannels()) + " IN / "
                                + juce::String(proc.getTotalNumOutputChannels()) + " OUT";
-    const juce::String loopTail = memV <= 0.001f ? juce::String("PEDAL MEMORY")
-                                                 : juce::String(brood::expMap(memV, 1.0, 30.0), 1) + " S MEMORY";
-    kit::drawPanel(g, loopArea, stock(), "01", "LOOP", loopTail);
-    kit::drawPanel(g, rampArea, stock(), "02", "MODULATION", "MOD " + juce::String(selectedMod + 1) + " SELECTED");
-    kit::drawPanel(g, dipArea, stock(), "03", "SWITCHES", juce::String(static_cast<int>(dips.size())) + " FITTED");
+    kit::drawPanel(g, loopArea, stock(), "01", "LOOP", {});
+    kit::drawPanel(g, rampArea, stock(), "02", "MODULATION", {});
+    kit::drawPanel(g, dipArea, stock(), "03", "SWITCHES", {});
     kit::drawPanel(g, srcArea, stock(), "04", "INPUT", srcTail);
 
     // Row labels: one column, one size, so the rows read as one table.
@@ -1426,8 +1422,8 @@ void BroodEditor::paint(juce::Graphics& g) {
     };
     meter(meterArea.getY(), "IN", meterIn); meter(meterArea.getY() + 11, "OUT", meterOut);
 
-    // The readout: while the mouse rests on something that has no explanation of its
-    // own it explains that; otherwise it's the last thing you moved.
+    // The readout: while the mouse rests on something it explains that; otherwise it's
+    // the last thing you moved.
     const bool helping = hoverText.isNotEmpty();
     juce::String value = helping ? hoverText : lcdValue.toUpperCase();
     if (!helping && blink) value += "_";
@@ -1438,12 +1434,12 @@ void BroodEditor::paint(juce::Graphics& g) {
 void BroodEditor::timerCallback() {
     auto& ui = proc.ui;
 
-    // Three kinds of tick, so the things that move never redraw in the same frame: macOS joins
+    // Turn about at 60 Hz, so the things that move never redraw in the same frame: macOS joins
     // what's dirty in one frame into a single rectangle, and the loop view at the top with the
-    // knobs and meters below would repaint everything between them. The loop gets two ticks
-    // in three; modulation, meters and everything built from text get the third.
-    timerTick = (timerTick + 1) % 3;
-    const bool slowTick = timerTick == 0;
+    // knobs below would repaint everything between them. The loop and the modulation each get
+    // 30 Hz; meters and everything built from text run at 10 Hz, on a modulation tick.
+    timerTick = (timerTick + 1) % 6;
+    const bool modulationTick = timerTick % 2 == 1, slowTick = timerTick == 1;
 
     // Hover help. The mouse position is mapped back into design coordinates and
     // matched against the table, so no control needs its own enter/exit handler
@@ -1472,8 +1468,8 @@ void BroodEditor::timerCallback() {
     // ENV for the loop. Changing mode rebuilds the help table, because a switch that
     // has left the panel must not still have an explanation.
     if (slowTick) updateModeControls();
-    // The knob under the mouse (or under a drag) shows its value in place of its
-    // whisper; repaint only the two lines that change.
+    // The knob under the mouse (or under a drag) shows its value beneath it; repaint
+    // only the two lines that change.
     if (slowTick) {
         int act = -1;
         for (size_t i = 0; i < knobs.size(); ++i) if (knobs[i].slider->isMouseOverOrDragging()) act = static_cast<int>(i);
@@ -1484,9 +1480,9 @@ void BroodEditor::timerCallback() {
             if (lastModeLoop == 0 && ui.loopLed.load() == 1 && !ui.envGate.load())
                 txt = "PLAY SOMETHING: ENV SLICES WHEN IT HEARS YOU";
         if (act != activeKnob || txt != activeKnobText) {
-            if (activeKnob >= 0) repaintDesign(whisperRect(activeKnob));
+            if (activeKnob >= 0) repaintDesign(valueRect(activeKnob));
             activeKnob = act; activeKnobText = txt;
-            if (act >= 0) repaintDesign(whisperRect(act));
+            if (act >= 0) repaintDesign(valueRect(act));
         }
     }
     const double now = juce::Time::getMillisecondCounterHiRes();
@@ -1501,19 +1497,21 @@ void BroodEditor::timerCallback() {
     const bool wetOn = ui.wetOn.load() && !(ui.freeze.load() && !blink);
     const bool loopOn = led == 1 || ((led == 2 || led == 3) && blink) || (led == 0 && now < flashUntil);
     // The chips' moving traces, the knobs' rings, and the route list keeping up.
-    for (int k = 0; k < 2; ++k) {
-        auto& chip = *chips[k];
-        chip.trace[static_cast<size_t>(chip.written)] = ui.modValue[static_cast<size_t>(k)].load();
-        chip.written = (chip.written + 1) % static_cast<int>(chip.trace.size());
-    }
-    if (slowTick) {
-        for (auto& chip : chips) chip->repaint();
-        const int mask = routeMask();
-        if (mask != routeMaskSeen) {
-            routeMaskSeen = mask;
-            if (routeList->isVisible()) routeList->rebuild(false);
+    if (modulationTick) {
+        for (int k = 0; k < 2; ++k) {
+            auto& chip = *chips[k];
+            chip.trace[static_cast<size_t>(chip.written)] = ui.modValue[static_cast<size_t>(k)].load();
+            chip.written = (chip.written + 1) % static_cast<int>(chip.trace.size());
         }
-        if (mask != 0) for (auto& knob : knobs) if (knob.slider->isShowing()) knob.slider->repaint();
+        for (auto& chip : chips) chip->repaint();
+        if (slowTick) {
+            const int mask = routeMask();
+            if (mask != routeMaskSeen) {
+                routeMaskSeen = mask;
+                if (routeList->isVisible()) routeList->rebuild(false);
+            }
+        }
+        if (routeMaskSeen != 0) for (auto& knob : knobs) if (knob.slider->isShowing()) knob.slider->repaint();
     }
     fsWet->setLit(wetOn);
     fsLoop->setLit(loopOn);
@@ -1523,15 +1521,15 @@ void BroodEditor::timerCallback() {
         else if (lastLoopLed == 1) showReadout("LOOP", "stopped");
         lastLoopLed = led;
     }
-    updateBench();
-    if (!slowTick) {
+    if (modulationTick) updateBench();
+    else {
         // The play head moves every frame; paint() fetches new peaks. With nothing caught
         // and nothing recording, the view holds still.
         const bool loopMoves = ui.lsrc.load() > 0 || led != 0;
         if (loopMoves || loopViewMoved) loopView.repaint();
         loopViewMoved = loopMoves;
-        return;
     }
+    if (!slowTick) return;
     const float mi = ui.peakIn.load(), mo = ui.peakOut.load();
     if (std::fabs(mi - meterIn) > 1e-3f || std::fabs(mo - meterOut) > 1e-3f) { meterIn = mi; meterOut = mo; repaintDesign(meterArea.expanded(2)); }
     const int lsrc = ui.lsrc.load();

@@ -255,10 +255,9 @@ Earlier versions of this project shipped cross-compiled bundles
 through the patch channel at all — the download button and the ZIP are gone.
 Build locally with the steps above; that is the supported route.
 
-Resting the mouse on any switch, stepper, slider or button that has no
-explanation of its own makes the readout at the top of the side column explain it
-— the six knobs are left out on purpose, since they already whisper. The browser
-version says the same thing in its footer line.
+Resting the mouse on any knob, switch, stepper, slider or button makes the readout
+at the top of the side column explain it. The browser version says the same thing
+in its footer line, and keeps each knob's whisper on the panel.
 
 The editor is a 1200 × 820 panel that can be resized from 840 × 574 up to
 2000 × 1367; the layout is drawn in design coordinates and scaled as a whole —
@@ -282,8 +281,8 @@ moves only itself, and a double-click opens the whole take again. Each marker is
 full-height rule with a tab naming it — START's hangs from the top, END's from the
 bottom, so they stay readable even when the window is a sliver.
 
-**Values sit where you are looking.** Resting on or turning a knob replaces its
-whisper with the exact value, in ink; the modulation rate prints its period (or,
+**Values sit where you are looking.** Resting on or turning a knob shows the exact
+value under it, in ink; the modulation rate prints its period (or,
 synced, its span of the beat) at the end of its row; MEMORY, WET/LOOP and the hood
 sliders carry their figures already. The knobs have no ring: five marks are the
 scale, and they turn to ink on hover. Each tempo **SYNC** switch sits directly
@@ -387,10 +386,12 @@ available to the host; the wet/loop footswitch parameters are momentary controls
 
 ## The whispers
 
-Every knob carries a sentence rather than a label. It should tell you which way to
+Every knob has a sentence as well as a label. It should tell you which way to
 turn without telling you what is inside — the mechanism stays a little hidden, the
-consequence does not. The exact value replaces it while you rest on or turn the knob, and
-the field guide in the browser version lists the current mode's set.
+consequence does not. In the plug-in it shows in the readout while you rest on the knob
+and goes to screen readers as its description; in the browser version it sits under the
+knob, the exact value replaces it while you touch it, and the field guide lists the
+current mode's set.
 
 | Knob | Reverb | Delay | Slip | Weave |
 | --- | --- | --- | --- | --- |

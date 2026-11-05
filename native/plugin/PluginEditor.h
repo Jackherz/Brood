@@ -254,8 +254,8 @@ private:
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopViewDesign;
-    // Under each knob, its whisper — or, while the knob is touched, its value.
-    juce::Rectangle<int> whisperRect(int knob) const;
+    // Under each knob, while it's touched: its value.
+    juce::Rectangle<int> valueRect(int knob) const;
     int activeKnob = -1;
     juce::String activeKnobText;
     juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];

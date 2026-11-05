@@ -322,6 +322,19 @@ int main() {
             }
         }
     }
+    // A knob's explanation left the panel, so it has to follow the mode by itself.
+    {
+        auto* wetMode = restored.apvts.getParameter("wetMode");
+        auto timeHelp = [&](float mode) {
+            wetMode->setValueNotifyingHost(wetMode->convertTo0to1(mode));
+            std::unique_ptr<juce::AudioProcessorEditor> window(restored.createEditor());
+            for (auto* child : window->getChildren())
+                if (auto* slider = dynamic_cast<juce::Slider*>(child); slider != nullptr && slider->getTitle() == "TIME") return slider->getDescription();
+            return juce::String();
+        };
+        CHECK(timeHelp(0.f) == "how long the room keeps breathing.", "TIME explains itself in REVERB");
+        CHECK(timeHelp(1.f) == "how far back the echo remembers.", "and again in DELAY");
+    }
     std::printf(failures ? "%d processor failure(s)\n" : "all processor integration tests passed\n", failures);
     return failures ? 1 : 0;
 }
