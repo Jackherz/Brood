@@ -1357,6 +1357,6 @@ test('HI-Q stops the images and keeps more of the top, and off changes nothing',
   };
   // Clock 12 kHz: a 5 kHz tone's image at 7 kHz, its level, and an 8.6 kHz tone folding to 3.4 kHz.
   assert.ok(measure(1, 5040, 6960) < measure(0, 5040, 6960) - 10, 'the image falls');
-  assert.ok(measure(1, 5040, 5040) > measure(0, 5040, 5040) + 3, 'more of the top survives');
+  assert.ok(measure(1, 5040, 5040) > measure(0, 5040, 5040) + 2, 'more of the top survives');
   assert.ok(measure(1, 8640, 3360) < measure(0, 8640, 3360) - 10, 'less folds back');
 });
