@@ -191,27 +191,34 @@ int main() {
         const auto folder = folderFile.getFile();
         kit::bench::folderForTests = folder;
         CHECK(!kit::bench::latest("I-01").has_value(), "an empty bench");
-        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD"), "send");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", "BROOD"), "send");
         CHECK(!kit::bench::latest("E-01").has_value(), "your own moment isn't offered back to you");
         const auto got = kit::bench::latest("I-01");
         CHECK(got.has_value() && got->fromChip == "E-01" && got->audio.existsAsFile()
               && std::fabs(got->seconds - moment.getNumSamples() / momentRate) < 1e-3, "the note matches the audio");
         juce::Thread::sleep(1100);   // files are named to the second
-        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD"), "send again");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", "BROOD"), "send again");
         CHECK(folder.findChildFiles(juce::File::findFiles, false, "*.wav").size() == 2, "everything sent stays, for the Finder");
         // A folder of your own, and a category inside it.
         const auto mine = folder.getChildFile("my samples");
         mine.createDirectory();
-        kit::bench::setSetting("folder", mine.getFullPathName());
+        kit::bench::setSetting("folder_BROOD", mine.getFullPathName());
         mine.getChildFile("Guitar").createDirectory();
-        kit::bench::setSetting("category", "Guitar");
-        CHECK(kit::bench::categories().contains("Guitar"), "a category is a folder");
-        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD"), "send into it");
+        kit::bench::setSetting("category_BROOD", "Guitar");
+        CHECK(kit::bench::categories("BROOD").contains("Guitar"), "a category is a folder");
+        CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", "BROOD"), "send into it");
         CHECK(mine.getChildFile("Guitar").findChildFiles(juce::File::findFiles, false, "*.wav").size() == 1, "it lands in the category");
+        // Each plug-in has its own: Brood's choice doesn't move Silt's.
+        const auto siltFolder = folder.getChildFile("silt samples");
+        CHECK(kit::bench::audioRoot("SILT") == folder, "Silt hasn't moved");
+        CHECK(kit::bench::audioFolder("SILT") == folder, "nor taken Brood's category");
+        kit::bench::setSetting("folder_SILT", siltFolder.getFullPathName());
+        CHECK(kit::bench::audioRoot("SILT") == siltFolder && kit::bench::audioRoot("BROOD") == mine, "two folders");
         // And the other way: a moment from an instrument becomes the loop.
         juce::AudioBuffer<float> fromSilt(2, 44100);
         for (int n = 0; n < fromSilt.getNumSamples(); ++n) for (int c = 0; c < 2; ++c) fromSilt.setSample(c, n, 0.25f * std::sin(static_cast<float>(n) * 0.03f));
-        CHECK(kit::bench::send(fromSilt, 44100.0, "I-01", "SILT"), "an instrument sends");
+        CHECK(kit::bench::send(fromSilt, 44100.0, "I-01", "SILT", "SILT"), "an instrument sends");
+        CHECK(siltFolder.findChildFiles(juce::File::findFiles, false, "*.wav").size() == 1, "into its own folder");
         const auto incoming = kit::bench::latest("E-01");
         CHECK(incoming.has_value() && incoming->fromName == "SILT", "and the effect sees it");
         if (incoming.has_value()) {

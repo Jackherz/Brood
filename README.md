@@ -311,11 +311,11 @@ presets called User 1 to User 4 the first time this version opens. A preset neve
 engages a channel.
 
 **The Bench** along the bottom passes a moment between plug-ins, either way: SEND writes
-what the loop is playing to a folder of your choosing (`~/Music/Bench/` until you choose), an instrument in the range (Silt) shows it
+what the loop is playing to Brood's own folder (`~/Music/Bench/Brood/` until you choose another), an instrument in the range (Silt) shows it
 and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens it in
 the Finder, chooses another folder, or picks a category, which is a folder inside it (make a
-Guitar one, and what you send goes there until you change it). Every plug-in shares the
-choice, and everything sent stays there. The menu beside SEND can send the
+Guitar one, and what you send goes there until you change it). Each plug-in has its own
+folder and categories, and sending between them works whichever you choose. and everything sent stays there. The menu beside SEND can send the
 exact output instead: 4, 8 or 16 bars from the next bar line (at once if the host is
 stopped). Silt keeps the first 30 seconds of anything longer.
 

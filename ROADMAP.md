@@ -83,6 +83,8 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 26: **a folder each.** Brood and Silt keep what they send in their own folders, with
+  their own categories. Sending between them doesn't depend on where either keeps it.
 - Round 25: **one recorder for the range.** The bars capture moved into the kit, so Silt and
   Silt FX can send the exact output too, and the Bench strip is on Silt FX.
 - Round 24: **overdub with its own head.** The write head keeps its place in the window it

@@ -535,7 +535,7 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
 // ───────── editor ─────────
 BroodEditor::BroodEditor(BroodProcessor& p)
     : AudioProcessorEditor(p), proc(p), look(stock(), p), presets(p), presetBar(presets), presetBrowser(presets, stock()),
-      benchStrip(stock(), "E-01", "BROOD"), loopView(p) {
+      benchStrip(stock(), "E-01", "BROOD", "BROOD"), loopView(p) {
     setLookAndFeel(&look);
     const std::pair<const char*, const char*> defs[] = {
         {"time", "TIME"}, {"mix", "MIX"}, {"length", "LENGTH"}, {"modWet", "MODIFY"}, {"clock", "CLOCK"}, {"modLoop", "MODIFY"}};
@@ -911,7 +911,7 @@ void BroodEditor::benchSend() {
     }
     juce::AudioBuffer<float> moment;
     double rate = 0;
-    const bool sent = proc.copyMoment(moment, rate) && kit::bench::send(moment, rate, "E-01", "BROOD");
+    const bool sent = proc.copyMoment(moment, rate) && kit::bench::send(moment, rate, "E-01", "BROOD", "BROOD");
     showReadout("THE BENCH", sent ? "moment sent" : "could not send it");
     if (sent) momentSent = juce::Time::currentTimeMillis();
 }
@@ -929,7 +929,7 @@ void BroodEditor::updateBench() {
     if (proc.outputCaptureState() == Capture::done) {
         juce::AudioBuffer<float> moment;
         double rate = 0;
-        const bool sent = proc.takeOutputCapture(moment, rate) && kit::bench::send(moment, rate, "E-01", "BROOD");
+        const bool sent = proc.takeOutputCapture(moment, rate) && kit::bench::send(moment, rate, "E-01", "BROOD", "BROOD");
         showReadout("THE BENCH", sent ? "bars sent" : "could not send them");
         if (sent) momentSent = juce::Time::currentTimeMillis();
     }
