@@ -315,7 +315,8 @@ what the loop is playing to Brood's own folder (`~/Music/Bench/Brood/` until you
 and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens it in
 the Finder, chooses another folder, or picks a category, which is a folder inside it (make a
 Guitar one, and what you send goes there until you change it). Each plug-in has its own
-folder and categories, and sending between them works whichever you choose. and everything sent stays there. The menu beside SEND can send the
+folder and categories, sending between them works whichever you choose, and everything sent
+stays there. The menu beside SEND can send the
 exact output instead: 4, 8 or 16 bars from the next bar line (at once if the host is
 stopped). Silt keeps the first 30 seconds of anything longer.
 
