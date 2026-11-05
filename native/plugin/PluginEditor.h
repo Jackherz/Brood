@@ -52,7 +52,7 @@ public:
         int written = 0;
         bool dragging = false;
     };
-    // The loop's GAIN, on the waveform as Silt has it: drag up or down, Shift for fine,
+    // The loop's GAIN, beside the waveform as Silt has it: drag up or down, Shift for fine,
     // double-click for 0 dB.
     struct GainBox final : juce::Component {
         explicit GainBox(juce::RangedAudioParameter& p);

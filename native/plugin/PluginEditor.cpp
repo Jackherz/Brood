@@ -1064,7 +1064,8 @@ void BroodEditor::resized() {
     auto inner = loopArea.withTrimmedTop(kit::panelHeadHeight).reduced(12, 6);
     loopViewDesign = inner.removeFromTop(100);
     place(loopView, loopViewDesign);
-    gainDesign = juce::Rectangle<int>(84, 17).withPosition(loopViewDesign.getRight() - 85, loopViewDesign.getY() + 1);
+    // GAIN sits in the panel's heading, so it never covers the take or its markers.
+    gainDesign = juce::Rectangle<int>(90, 19).withPosition(loopArea.getX() + 74, loopArea.getY() + 4);
     place(*gainBox, gainDesign);
     inner.removeFromTop(kSp2);
     auto trimRow = [&](juce::Rectangle<int>& out, juce::Slider& sl) {

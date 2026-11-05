@@ -493,7 +493,7 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   fewer artifacts and a fuller top at low clocks. The wet side and the loop run a little later
   (eight clock ticks, so 1 ms at 8 kHz and 4 ms at 2 kHz); the dry side isn't delayed, so
   no latency is reported to the host. CLASSIC ignores it (`tests/parity/scenarios/hi_q.txt`).
-- **GAIN** on the waveform is the loop's own level, -24 to +12 dB: drag up or down, Shift
+- **GAIN**, in the LOOP panel's heading, is the loop's own level, -24 to +12 dB: drag up or down, Shift
   for fine, double-click for 0 dB. The waveform grows and shrinks with it, and SEND sends the loop at this level.
 - **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,
   SYNC and HOLD. Drag a source onto any knob or WET/LOOP to route it. Around a knob, the rings are
