@@ -135,6 +135,77 @@ inline std::optional<Moment> latest (const juce::String& myChip)
     return best;
 }
 
+// Bars of the exact output, from the next bar line (at once if the host is stopped). The
+// message thread arms it and collects it; the audio thread only writes into what was
+// allocated first.
+class OutputRecorder
+{
+public:
+    enum class State { idle, waiting, recording, done, cancelling };
+
+    void arm (int bars, double barQuarters, double bpm, double sampleRate)
+    {
+        if (state() != State::idle)
+            return;
+        const double seconds = bars * barQuarters * 60.0 / juce::jmax (1.0, bpm);
+        rate = sampleRate;
+        audio.setSize (2, juce::jmax (1, juce::roundToInt (juce::jmin (seconds, 300.0) * sampleRate)));
+        written = 0;
+        current = (int) State::waiting;
+    }
+    void cancel() { current = (int) State::cancelling; }
+    State state() const { return (State) current.load(); }
+    float progress() const { return audio.getNumSamples() > 0 ? (float) written.load() / (float) audio.getNumSamples() : 0.0f; }
+
+    bool take (juce::AudioBuffer<float>& out, double& sampleRate)
+    {
+        if (state() != State::done)
+            return false;
+        out = audio;
+        sampleRate = rate;
+        audio.setSize (2, 0);
+        current = (int) State::idle;
+        return true;
+    }
+
+    // From the audio thread, after the block's output is final.
+    void process (const float* left, const float* right, int n, bool playing, double ppq, double barStart, double barQuarters, double bpm)
+    {
+        if (state() == State::cancelling)
+            current = (int) State::idle;
+        int from = 0;
+        if (state() == State::waiting)
+        {
+            from = -1;
+            if (! playing)
+                from = 0;
+            else
+            {
+                const double intoBar = ppq - barStart;
+                const double toBar = intoBar < 1e-6 ? 0.0 : (barQuarters - intoBar) * 60.0 / juce::jmax (1.0, bpm) * rate;
+                if (toBar < n)
+                    from = (int) toBar;
+            }
+            if (from >= 0)
+                current = (int) State::recording;
+        }
+        if (state() == State::recording)
+        {
+            const int at = written.load(), count = juce::jmin (n - from, audio.getNumSamples() - at);
+            audio.copyFrom (0, at, left + from, count);
+            audio.copyFrom (1, at, right + from, count);
+            written = at + count;
+            if (at + count >= audio.getNumSamples())
+                current = (int) State::done;
+        }
+    }
+
+private:
+    std::atomic<int> current { 0 }, written { 0 };
+    juce::AudioBuffer<float> audio;
+    double rate = 48000.0;
+};
+
 // The strip along the bottom of every plug-in: its own name and state, what's waiting
 // from elsewhere, and SEND, TAKE and the folder it all lives in.
 class Strip final : public juce::Component
@@ -153,6 +224,7 @@ public:
 
     std::function<void()> onSend, onTake;
     int reservedRight = 0;   // room left beside the keys for a control the plug-in adds
+    void setTakeShown (bool shown) { takeKey.setVisible (shown); resized(); repaint(); }   // for a plug-in that has nothing to take into
 
     void set (const juce::String& state, const juce::String& momentText, const juce::String& sendText, bool sendOn, bool takeOn)
     {
@@ -211,8 +283,11 @@ public:
         auto r = keysArea();
         folderKey.setBounds (r.removeFromRight (keyWidth));
         r.removeFromRight (keyGap);
-        takeKey.setBounds (r.removeFromRight (keyWidth));
-        r.removeFromRight (keyGap);
+        if (takeKey.isVisible())
+        {
+            takeKey.setBounds (r.removeFromRight (keyWidth));
+            r.removeFromRight (keyGap);
+        }
         sendKey.setBounds (r.removeFromRight (keyWidth));
     }
 

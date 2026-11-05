@@ -436,25 +436,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     for (int c = nOut; c < buffer.getNumChannels(); ++c) buffer.clear(c, 0, n);
 
     // The Bench's bars: the exact output, from the next bar line.
-    if (outCapState_.load() == static_cast<int>(OutputCapture::cancelling)) outCapState_ = static_cast<int>(OutputCapture::idle);
-    int capFrom = 0;
-    if (outCapState_.load() == static_cast<int>(OutputCapture::waiting)) {
-        capFrom = -1;
-        if (!hostPlaying) capFrom = 0;
-        else {
-            const double intoBar = hostPpq - hostBarStart;
-            const double toBar = intoBar < 1e-6 ? 0.0 : (hostBarQuarters_.load() - intoBar) * 60.0 / hostBpm_.load() * getSampleRate();
-            if (toBar < n) capFrom = static_cast<int>(toBar);
-        }
-        if (capFrom >= 0) outCapState_ = static_cast<int>(OutputCapture::recording);
-    }
-    if (outCapState_.load() == static_cast<int>(OutputCapture::recording)) {
-        const int at = outCapPos_.load(), count = juce::jmin(n - capFrom, outCap_.getNumSamples() - at);
-        outCap_.copyFrom(0, at, outL + capFrom, count);
-        outCap_.copyFrom(1, at, (nOut > 1 ? outR : outL) + capFrom, count);
-        outCapPos_ = at + count;
-        if (at + count >= outCap_.getNumSamples()) outCapState_ = static_cast<int>(OutputCapture::done);
-    }
+    outputRecorder_.process(outL, nOut > 1 ? outR : outL, n, hostPlaying, hostPpq, hostBarStart, hostBarQuarters_.load(), hostBpm_.load());
 
     const auto st = core_.state(), rightState = coreRight_.state();
     ui.envGate = core_.envGateOpen();
@@ -529,23 +511,6 @@ bool BroodProcessor::takeMoment(const juce::File& file) {
         ready.has = true;
         pendingTake_[c] = std::move(ready);
     }
-    return true;
-}
-
-void BroodProcessor::armOutputCapture(int bars) {
-    if (outputCaptureState() != OutputCapture::idle) return;
-    const double seconds = bars * static_cast<double>(hostBarQuarters_.load()) * 60.0 / juce::jmax(1.f, hostBpm_.load());
-    outCap_.setSize(2, juce::jmax(1, juce::roundToInt(juce::jmin(seconds, 300.0) * getSampleRate())));
-    outCapPos_ = 0;
-    outCapState_ = static_cast<int>(OutputCapture::waiting);
-}
-
-bool BroodProcessor::takeOutputCapture(juce::AudioBuffer<float>& out, double& sampleRate) {
-    if (outputCaptureState() != OutputCapture::done) return false;
-    out = outCap_;
-    sampleRate = getSampleRate();
-    outCap_.setSize(2, 0);
-    outCapState_ = static_cast<int>(OutputCapture::idle);
     return true;
 }
 

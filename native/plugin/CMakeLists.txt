@@ -29,6 +29,7 @@ juce_add_plugin(Brood
   COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(Brood PRIVATE PluginProcessor.cpp PluginEditor.cpp)
+target_include_directories(Brood PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../kit/include)
 target_include_directories(Brood PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_compile_definitions(Brood PUBLIC
   JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0

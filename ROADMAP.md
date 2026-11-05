@@ -83,6 +83,8 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 25: **one recorder for the range.** The bars capture moved into the kit, so Silt and
+  Silt FX can send the exact output too, and the Bench strip is on Silt FX.
 - Round 24: **overdub with its own head.** The write head keeps its place in the window it
   started in, so modulating LENGTH or START no longer leaves seams in the take. Route rows
   survive passing through 0%, the rings around a knob are depth handles as in Silt, the
