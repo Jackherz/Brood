@@ -275,11 +275,18 @@ pedal this follows has none. It reads in three tiers:
    FREEZE, CLASSIC) and `04 INPUT`, which is set once per session.
 3. **Under the hood** — the five sliders along the bottom.
 
-**START and END are markers on the waveform.** Press anywhere on it and the nearer
-marker comes to the mouse; drag it. Moving START keeps the end where it is, END
-moves only itself, and a double-click opens the whole take again. Each marker is a
+**START and END are markers on the waveform.** Grab one and drag it, all the way to
+either end of the take in every mode, or drag inside the window to slide it along
+the take; a press outside the window brings the nearer marker there. Moving START keeps
+the end where it is, END moves only itself, and a double-click opens the whole take
+again. In TAPE a marker that needs more room moves LENGTH with it, and once START has
+been moved, turning LENGTH by hand leaves START where it is. Each marker is a
 full-height rule with a tab naming it — START's hangs from the top, END's from the
 bottom, so they stay readable even when the window is a sliver.
+
+**WET/LOOP shows its modulation.** Drop a source on it and its swing appears as a bar in
+the source's colour, a small tab moves to where the sound has it now, and the figure at the
+end of the row follows it.
 
 **Values sit where you are looking.** Resting on or turning a knob shows the exact
 value under it, in ink; the modulation rate prints its period (or,

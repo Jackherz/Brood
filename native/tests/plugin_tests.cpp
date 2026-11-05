@@ -1,6 +1,7 @@
 // Headless integration tests for the JUCE processor (no DAW or GUI required).
 #include "plugin/PluginProcessor.h"
 #include "plugin/BroodPresets.h"
+#include "plugin/LoopTrim.h"
 #include "kit/Bench.h"
 #include <cmath>
 #include <cstdio>
@@ -227,6 +228,67 @@ int main() {
             run(4);
             CHECK(std::fabs(catcher.ui.lsrc.load() / clock - 1.0) < 0.01, "one second of it, at the looper's clock");
             CHECK(catcher.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "and it plays");
+        }
+        // The markers reach all of the take in every mode, and come out where they were asked to.
+        {
+            auto* mode = catcher.apvts.getParameter("loopMode");
+            auto* start = catcher.apvts.getParameter("start");
+            auto* end = catcher.apvts.getParameter("loopEnd");
+            auto* length = catcher.apvts.getParameter("length");
+            const auto apply = [&](const LoopTrim& t) {
+                start->setValueNotifyingHost(start->convertTo0to1(static_cast<float>(t.start)));
+                end->setValueNotifyingHost(end->convertTo0to1(static_cast<float>(t.end)));
+                length->setValueNotifyingHost(length->convertTo0to1(static_cast<float>(t.length)));
+                run(static_cast<int>(rate / size));   // LENGTH glides
+            };
+            for (const int m : {0, 1, 2}) {
+                mode->setValueNotifyingHost(mode->convertTo0to1(static_cast<float>(m)));
+                run(4);
+                const int len = catcher.ui.lsrc.load();
+                const double slack = 2.0 + len / 400.0;
+                for (const double lengthKnob : {0.1, 0.5, 1.0})
+                    for (const auto& [first, width] : std::initializer_list<std::pair<double, double>>{{0.0, 1.0}, {0.0, 0.25}, {0.75, 0.25}, {0.5, 0.1}, {0.25, 0.5}}) {
+                        const auto trim = loopTrim(m == 1, len, lengthKnob, first * len, width * len);
+                        apply(trim);
+                        CHECK(std::abs(catcher.ui.winStart.load() - trim.firstSample) <= slack, "START lands where the marker asked, in every mode");
+                        CHECK(std::abs(catcher.ui.winLen.load() - trim.width) <= slack, "END lands where the marker asked, in every mode");
+                        CHECK(trim.firstSample + trim.width <= len + 1, "and the window stays in the take");
+                    }
+            }
+            // TAPE: turning LENGTH by hand leaves a moved START where it is.
+            mode->setValueNotifyingHost(mode->convertTo0to1(1.f));
+            run(4);
+            const int len = catcher.ui.lsrc.load();
+            auto hold = loopTrim(true, len, 0.3, 0.2 * len, 0.1 * len);
+            apply(hold);
+            for (const double knob : {0.1, 0.4, 0.7}) {
+                hold.length = knob;
+                hold.start = loopStartHolding(hold.firstSample, len, knob);
+                apply(hold);
+                CHECK(std::abs(catcher.ui.winStart.load() - hold.firstSample) <= 2.0 + len / 400.0, "LENGTH leaves a moved START alone");
+            }
+            start->setValueNotifyingHost(start->getDefaultValue());
+            end->setValueNotifyingHost(end->getDefaultValue());
+            length->setValueNotifyingHost(length->getDefaultValue());
+            mode->setValueNotifyingHost(mode->getDefaultValue());
+
+            // A source dropped on WET/LOOP moves what the panel reads, around the slider's own value.
+            auto* route = catcher.apvts.getParameter("mod1_balance");
+            auto* on = catcher.apvts.getParameter("mod1On");
+            auto* rateP = catcher.apvts.getParameter("mod1Rate");
+            on->setValueNotifyingHost(1.f);
+            route->setValueNotifyingHost(route->convertTo0to1(0.5f));
+            rateP->setValueNotifyingHost(1.f);
+            float low = 1.f, high = 0.f;
+            for (int i = 0; i < 400; ++i) {
+                run(1);
+                low = std::min(low, catcher.ui.effective[6].load());
+                high = std::max(high, catcher.ui.effective[6].load());
+            }
+            CHECK(high - low > 0.3f, "WET/LOOP's live value moves with its source");
+            route->setValueNotifyingHost(route->convertTo0to1(0.f));
+            on->setValueNotifyingHost(on->getDefaultValue());
+            rateP->setValueNotifyingHost(rateP->getDefaultValue());
         }
         // An audio file dropped on the window, from anywhere: the loop, at the looper's clock.
         {

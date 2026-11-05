@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "BroodPresets.h"
+#include "LoopTrim.h"
 #include "kit/Bench.h"
 #include "kit/Look.h"
 
@@ -14,11 +15,12 @@ public:
     void fileDragEnter(const juce::StringArray&, int, int) override;
     void fileDragExit(const juce::StringArray&) override;
     void filesDropped(const juce::StringArray& files, int, int) override;
-    // The look, plus each knob's modulation: a ring in each source's colour showing the
-    // swing, and a dot where the sound has the knob now.
+    // The look, plus modulation: on a knob a ring in each source's colour showing the swing and
+    // a dot where the sound has it now, on a slider a bar for the swing and a tab for now.
     struct Look final : kit::Look {
         Look(const kit::Stock& s, BroodProcessor& p) : kit::Look(s), proc(p) {}
         void drawRotarySlider(juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
+        void drawLinearSlider(juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos, juce::Slider::SliderStyle, juce::Slider&) override;
         BroodProcessor& proc;
     };
     // A control modulation can reach. Alt-drag sets the selected source's depth on it,
@@ -156,17 +158,21 @@ public:
         // Marker positions in samples of the take; false while nothing is caught.
         bool markers(int& startAt, int& endAt) const;
         int nearestMarker(float x) const;   // 0 START, 1 END, -1 none (no take)
+        int regionAt(float x) const;        // the same, or 2 inside the window: slide it
         void moveMarker(float x);
         BroodProcessor& proc;
         std::function<void(const juce::String&)> onTouch;
+        juce::String windowText;
         std::array<float, BroodProcessor::kWaveBins> wave {};
         uint32_t version = 0;
-        int dragging = -1, hot = -1, anchorEnd = 0;
+        int dragging = -1, hot = -1, anchorStart = 0, anchorEnd = 0;
+        double grabOffset = 0;   // from where it was pressed to the thing it holds, in samples
     };
 
 private:
     void timerCallback() override;
     int timerTick = 0;
+    int lengthHolds = -1;   // the sample START holds while LENGTH is turned in TAPE, -1 when it doesn't
     bool loopViewMoved = true;
     // `follows` marks a readout that belongs to the last touched parameter, so the
     // timer may keep its value current (automation, mode changes). Anything else —

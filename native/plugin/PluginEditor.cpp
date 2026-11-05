@@ -10,6 +10,7 @@ juce::Font capFont() { return font(14); }
 juce::Font labelFont() { return font(16); }
 juce::Font textFont() { return font(18); }
 constexpr int kSp1 = 4, kSp2 = 8;
+constexpr int balanceRouteBits = (1 << 6) | (1 << (brood::kModTargets + 6));   // in routeMask(): either source to WET/LOOP
 
 constexpr int W = 1200, H = 820;
 
@@ -70,6 +71,37 @@ void BroodEditor::Look::drawRotarySlider(juce::Graphics& g, int x, int y, int w,
         g.setColour(stock().ink);
         g.fillEllipse(juce::Rectangle<float>(5.f, 5.f).withCentre(at));
     }
+}
+
+void BroodEditor::Look::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos, juce::Slider::SliderStyle style, juce::Slider& slider) {
+    kit::Look::drawLinearSlider(g, x, y, w, h, pos, minPos, maxPos, style, slider);
+    auto* mod = dynamic_cast<ModSlider*>(&slider);
+    if (mod == nullptr || mod->target < 0 || mod->editor == nullptr || style != juce::Slider::LinearHorizontal) return;
+    const float cy = static_cast<float>(y) + static_cast<float>(h) * 0.5f, left = static_cast<float>(x) + 1.f, right = static_cast<float>(x + w) - 1.f;
+    const float at = static_cast<float>(slider.valueToProportionOfLength(slider.getValue()));
+    int moving = -1, routes = 0;
+    for (int k = 0; k < 2; ++k) {
+        const float d = mod->editor->depthParam(k, mod->target)->convertFrom0to1(mod->editor->depthParam(k, mod->target)->getValue());
+        if (std::fabs(d) < 0.005f) continue;
+        const juce::String id = "mod" + juce::String(k + 1);
+        const bool on = proc.apvts.getRawParameterValue(id + "On")->load() > 0.5f;
+        const bool uni = proc.apvts.getRawParameterValue(id + "Uni")->load() > 0.5f;
+        const float lo = juce::jlimit(0.f, 1.f, uni ? juce::jmin(at, at + d) : at - std::fabs(d));
+        const float hi = juce::jlimit(0.f, 1.f, uni ? juce::jmax(at, at + d) : at + std::fabs(d));
+        // Clear of the tab: the first source's swing under the track, the second's over it.
+        g.setColour(BroodEditor::modColour(k).withAlpha(on ? 1.f : 0.35f));
+        g.fillRect(left + (right - left) * lo, k == 0 ? cy + 7.f : cy - 12.f, (right - left) * (hi - lo), 3.f);
+        ++routes;
+        if (on) moving = moving < 0 ? k : 2;
+    }
+    if (routes == 0) return;
+    // Where the sound has it now.
+    const float now = juce::jlimit(0.f, 1.f, proc.ui.effective[static_cast<size_t>(mod->target)].load());
+    const auto tab = juce::Rectangle<float>(5.f, 13.f).withCentre({left + (right - left) * now, cy - 1.f});
+    g.setColour(moving == 0 || moving == 1 ? BroodEditor::modColour(moving) : stock().ink);
+    g.fillRect(tab);
+    g.setColour(stock().ink);
+    g.drawRect(tab, 1.f);
 }
 
 int BroodEditor::ModSlider::sourceAtRing(juce::Point<float> p) const {
@@ -438,8 +470,22 @@ int BroodEditor::LoopView::nearestMarker(float x) const {
     return toStart < toEnd ? 0 : 1;
 }
 
+// On a marker: that marker. Inside the window: the window. Outside it: the nearer marker,
+// which comes to the mouse.
+int BroodEditor::LoopView::regionAt(float x) const {
+    int s = 0, e = 0;
+    if (!markers(s, e)) return -1;
+    const float scale = getWidth() / static_cast<float>(proc.ui.lsrc.load());
+    const float xs = s * scale, xe = e * scale;
+    constexpr float reach = 8.f;
+    if (std::fabs(x - xs) <= reach || std::fabs(x - xe) <= reach) return nearestMarker(x);
+    return x > xs && x < xe ? 2 : nearestMarker(x);
+}
+
 void BroodEditor::LoopView::mouseMove(const juce::MouseEvent& e) {
-    const int h = nearestMarker(static_cast<float>(e.x));
+    const int region = regionAt(static_cast<float>(e.x));
+    setMouseCursor(region == 2 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::LeftRightResizeCursor);
+    const int h = region == 2 ? -1 : region;
     if (h != hot) { hot = h; repaint(); }
 }
 void BroodEditor::LoopView::mouseExit(const juce::MouseEvent&) { if (dragging < 0 && hot != -1) { hot = -1; repaint(); } }
@@ -447,17 +493,23 @@ void BroodEditor::LoopView::mouseExit(const juce::MouseEvent&) { if (dragging < 
 void BroodEditor::LoopView::mouseDown(const juce::MouseEvent& e) {
     int s = 0, end = 0;
     if (!markers(s, end)) return;
-    dragging = nearestMarker(static_cast<float>(e.x));
-    hot = dragging;
-    anchorEnd = end;   // START moves under a fixed end, so remember where it was
-    for (auto* id : {"start", "loopEnd"}) if (auto* prm = proc.apvts.getParameter(id)) prm->beginChangeGesture();
+    dragging = regionAt(static_cast<float>(e.x));
+    hot = dragging == 2 ? -1 : dragging;
+    anchorStart = s;
+    anchorEnd = end;   // the window as it was, so each drag measures from something still
+    const double scale = proc.ui.lsrc.load() / static_cast<double>(juce::jmax(1, getWidth()));
+    const double pressed = e.x * scale;
+    // Held where it was pressed, so a grab moves nothing. Outside the window a marker comes to the mouse.
+    const bool inside = pressed >= s - 8.0 * scale && pressed <= end + 8.0 * scale;
+    grabOffset = !inside ? 0.0 : dragging == 1 ? end - pressed : s - pressed;
+    for (auto* id : {"start", "loopEnd", "length"}) if (auto* prm = proc.apvts.getParameter(id)) prm->beginChangeGesture();
     moveMarker(static_cast<float>(e.x));
 }
 void BroodEditor::LoopView::mouseDrag(const juce::MouseEvent& e) { if (dragging >= 0) moveMarker(static_cast<float>(e.x)); }
 void BroodEditor::LoopView::mouseUp(const juce::MouseEvent&) {
     if (dragging < 0) return;
     dragging = -1;
-    for (auto* id : {"start", "loopEnd"}) if (auto* prm = proc.apvts.getParameter(id)) prm->endChangeGesture();
+    for (auto* id : {"start", "loopEnd", "length"}) if (auto* prm = proc.apvts.getParameter(id)) prm->endChangeGesture();
 }
 void BroodEditor::LoopView::mouseDoubleClick(const juce::MouseEvent&) {
     for (auto* id : {"start", "loopEnd"})
@@ -467,34 +519,26 @@ void BroodEditor::LoopView::mouseDoubleClick(const juce::MouseEvent&) {
     if (onTouch) onTouch("loopEnd");
 }
 
-// The inverse of Core::loopWindow(): a marker position in samples of the take
-// becomes START and END. ENV and STRETCH measure both against the whole take;
-// TAPE measures END against LENGTH's span and START backwards from the tail.
+// A marker or the whole window, moved to where the mouse is. loopTrim() turns it into the parameters.
 void BroodEditor::LoopView::moveMarker(float x) {
     const int len = juce::jmax(64, proc.ui.lsrc.load());
-    const int span = juce::jmax(64, proc.ui.winSpan.load());
     const bool tape = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load()) == 1;
-    const double at = juce::jlimit(0.0, static_cast<double>(len), static_cast<double>(x) / juce::jmax(1, getWidth()) * len);
     auto* startP = proc.apvts.getParameter("start");
     auto* endP = proc.apvts.getParameter("loopEnd");
-    if (startP == nullptr || endP == nullptr) return;
-    const double minW = juce::jmax(64.0, 0.02 * span);   // END never closes the window
-    int s = 0, e = 0;
-    markers(s, e);
-    if (dragging == 1) {
-        const double w = juce::jlimit(minW, static_cast<double>(span), at - s);
-        endP->setValueNotifyingHost(static_cast<float>(w / span));
-    } else {
-        const int room = tape ? len - span : len - 64;
-        // START may not pass END, may not open the window wider than the span,
-        // and in TAPE cannot leave the room LENGTH allows.
-        const double lo = juce::jmax(0.0, anchorEnd - static_cast<double>(span));
-        double xs = juce::jlimit(lo, juce::jmax(lo, anchorEnd - minW), at);
-        if (tape) xs = juce::jmin(xs, static_cast<double>(juce::jmax(0, room)));
-        const double where = room <= 0 ? 0.0 : tape ? 1.0 - xs / room : xs / room;
-        startP->setValueNotifyingHost(static_cast<float>(juce::jlimit(0.0, 1.0, where)));
-        endP->setValueNotifyingHost(static_cast<float>(juce::jlimit(0.02, 1.0, (anchorEnd - xs) / span)));
-    }
+    auto* lengthP = proc.apvts.getParameter("length");
+    if (startP == nullptr || endP == nullptr || lengthP == nullptr) return;
+    const double at = static_cast<double>(x) / juce::jmax(1, getWidth()) * len + grabOffset;
+    const double shortest = juce::jmax(64.0, 0.02 * len);
+    double first = anchorStart, width = anchorEnd - anchorStart;
+    if (dragging == 0) { first = juce::jlimit(0.0, anchorEnd - shortest, at); width = anchorEnd - first; }
+    else if (dragging == 1) width = juce::jlimit(shortest, static_cast<double>(len) - anchorStart, at - anchorStart);
+    else first = juce::jlimit(0.0, juce::jmax(0.0, len - width), at);
+    const auto trim = loopTrim(tape, len, proc.apvts.getRawParameterValue("length")->load(), first, width);
+    startP->setValueNotifyingHost(static_cast<float>(trim.start));
+    endP->setValueNotifyingHost(static_cast<float>(trim.end));
+    if (tape) lengthP->setValueNotifyingHost(lengthP->convertTo0to1(static_cast<float>(trim.length)));
+    const double clock = juce::jmax(1.f, proc.ui.clockHz.load());
+    windowText = juce::String(trim.firstSample / clock, 2) + " S IN, PLAYS " + juce::String(trim.width / clock, 2) + " S";
     if (onTouch) onTouch(dragging == 1 ? "loopEnd" : "start");
 }
 
@@ -628,6 +672,23 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         showReadout("INPUT LEVEL", juce::String(db, 1) + " dB" + (db > 0.05f ? ", into old tape" : ""));
     };
     addAndMakeVisible(inputGain);
+    // TAPE, with START moved off its default: turning LENGTH by hand leaves START where it is.
+    for (auto& knob : knobs)
+        if (juce::String(knob.id) == "length") {
+            auto* slider = knob.slider.get();
+            const auto touched = slider->onValueChange;
+            slider->onDragStart = [this] {
+                const bool tape = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load()) == 1;
+                lengthHolds = tape && proc.ui.lsrc.load() > 0 && proc.apvts.getRawParameterValue("start")->load() > 0.001f ? proc.ui.winStart.load() : -1;
+            };
+            slider->onDragEnd = [this] { lengthHolds = -1; };
+            slider->onValueChange = [this, slider, touched] {
+                if (touched) touched();
+                if (lengthHolds < 0) return;
+                if (auto* startP = proc.apvts.getParameter("start"))
+                    startP->setValueNotifyingHost(static_cast<float>(loopStartHolding(lengthHolds, proc.ui.lsrc.load(), slider->getValue())));
+            };
+        }
     balance.editor = this;
     balance.target = 6;
     balance.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -645,7 +706,11 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     };
     loopSlider(memory, "memory", "Loop memory");
     memoryAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "memory", memory);
-    loopView.onTouch = [this](const juce::String& id) { touch(id); loopView.repaint(); };
+    loopView.onTouch = [this](const juce::String& id) {
+        touch(id);
+        if (loopView.windowText.isNotEmpty()) showReadout(loopView.dragging == 0 ? "START" : loopView.dragging == 1 ? "END" : "THE WINDOW", loopView.windowText);
+        loopView.repaint();
+    };
     // One row of four switches. DRY KILL was MIX at the top of its travel, LATCH is
     // what FREEZE does, SPREAD is WIDTH above the middle, and SYNC sits beside the
     // knob it governs. FREEZE and CLASSIC came up from under the hood: they are
@@ -1247,8 +1312,8 @@ void BroodEditor::rebuildHoverHelp() {
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left is the pedal's own buffer, which shrinks as CLOCK drops.");
     add(gainDesign, "LOOP GAIN", "the loop's own level. drag up or down, shift for fine, double-click for 0 dB.");
-    add(loopViewDesign, "START / END", "drag a marker to trim what plays; START keeps the end where it is. double-click opens the whole take. moves crossfade, so they do not click.");
-    add(balanceDesign.expanded(0, 2), "WET / LOOP", "the loop keeps its level across the whole travel and the wet side is added on top; hard right is the loop alone.");
+    add(loopViewDesign, "THE WINDOW", "drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.");
+    add(balanceDesign.expanded(0, 2), "WET / LOOP", "the loop keeps its level across the whole travel and the wet side is added on top. drop a source here: its bar is the swing, the small tab is where it is now.");
 
     add(sourceBoxDesign, "SOURCE", "what it listens to: the track, a phrase made here, or a file.");
     add(loadButtonDesign, "LOAD FILE", "drop a recording in. it starts playing from the moment it arrives.");
@@ -1363,7 +1428,13 @@ void BroodEditor::paint(juce::Graphics& g) {
         g.drawText(txt, r.withX(r.getRight() + kSp1).withWidth(40), juce::Justification::centredRight);
     };
     figure("memory", memoryDesign, false);
-    figure("balance", balanceDesign, true);   // loop side, %
+    // Loop side, %: where the sound has it now, in ink, while a source is moving it.
+    if ((routeMaskSeen & balanceRouteBits) != 0 && routeMaskSeen != -1) {
+        g.setColour(kInk);
+        g.drawText(juce::String(juce::roundToInt(juce::jlimit(0.f, 1.f, proc.ui.effective[6].load()) * 100.f)) + "%",
+                   balanceDesign.withX(balanceDesign.getRight() + kSp1).withWidth(40), juce::Justification::centredRight);
+        g.setColour(kMuted);
+    } else figure("balance", balanceDesign, true);
     // The rate's figure: a period, or with SYNC the span of the beat it turns over.
     if (const auto* rv = proc.apvts.getRawParameterValue(modId + "Rate")) {
         const double secs = 1.0 / brood::rampHertz(rv->load());
@@ -1512,6 +1583,10 @@ void BroodEditor::timerCallback() {
             }
         }
         if (routeMaskSeen != 0) for (auto& knob : knobs) if (knob.slider->isShowing()) knob.slider->repaint();
+        if ((routeMaskSeen & balanceRouteBits) != 0) {
+            balance.repaint();
+            repaintDesign(balanceDesign.withX(balanceDesign.getRight() + kSp1).withWidth(40));
+        }
     }
     fsWet->setLit(wetOn);
     fsLoop->setLit(loopOn);
