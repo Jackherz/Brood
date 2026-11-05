@@ -337,6 +337,53 @@ int main() {
         CHECK(noisy > 1e-4, "classic clock noise (%.5f)", noisy);
     }
 
+    {   // The wet side doesn't click: a steady two-note drone through every mode, knobs moving and FREEZE
+        // going on and off. A click is a jump far over what's around it.
+        const auto clicks = [](int mode, double time, double modify, const std::function<void(brood::Core&, long)>& move) {
+            brood::Core c; c.p.wetMode = mode; c.p.time = time; c.p.modWet = modify; c.p.mix = 1; c.p.clock = 1;
+            c.prepare(FS); tap(c, 0);
+            auto o = render(c, 8, [](double t) { return 0.2 * std::sin(2 * brood::kPi * 196 * t) + 0.15 * std::sin(2 * brood::kPi * 247 * t); }, move);
+            const int n = static_cast<int>(o.L.size());
+            std::vector<double> bend(static_cast<size_t>(n), 0.0);
+            for (int i = 2; i < n; ++i) bend[static_cast<size_t>(i)] = std::fabs(o.L[static_cast<size_t>(i)] - 2 * o.L[static_cast<size_t>(i - 1)] + o.L[static_cast<size_t>(i - 2)]);
+            int found = 0, last = -100000;
+            std::vector<double> around;
+            for (int s = static_cast<int>(FS) + 2048; s < n - 2048; s += 64) {
+                around.assign(bend.begin() + s - 2048, bend.begin() + s + 2048);
+                std::nth_element(around.begin(), around.begin() + 2048, around.end());
+                for (int i = s; i < s + 64; ++i)
+                    if (bend[static_cast<size_t>(i)] > 0.002 && bend[static_cast<size_t>(i)] > 12 * (around[2048] + 1e-6)) {
+                        if (i - last > 240) ++found;
+                        last = i;
+                    }
+            }
+            return found;
+        };
+        const char* names[4] = {"reverb", "delay", "slip", "weave"};
+        const auto every = [](double seconds) { return static_cast<long>(seconds * FS / 128); };
+        for (int mode = 0; mode < 4; ++mode) {
+            const long swing = every(1.33);
+            int n = clicks(mode, 0.5, 0.5, [=](brood::Core& c, long b) { c.p.freezeLatch = (b / swing) % 2 ? 1 : 0; });
+            CHECK(n == 0, "%s: FREEZE on and off makes %d clicks", names[mode], n);
+            n = clicks(mode, 0.5, 0.5, [](brood::Core& c, long b) { c.p.modWet = 0.5 + 0.45 * std::sin(b * 128 / FS * 2 * brood::kPi * 0.25); });
+            CHECK(n == 0, "%s: moving MODIFY makes %d clicks", names[mode], n);
+            n = clicks(mode, 0.5, 0.5, [](brood::Core& c, long b) { c.p.time = 0.5 + 0.45 * std::sin(b * 128 / FS * 2 * brood::kPi * 0.25); });
+            CHECK(n == 0, "%s: moving TIME makes %d clicks", names[mode], n);
+        }
+        const int held = clicks(1, 0.8, 0.9, nullptr);
+        CHECK(held == 0, "delay: high feedback at the limiter makes %d clicks", held);
+    }
+    {   // SLIP keeps sounding while frozen, instead of running out of audio and going quiet
+        brood::Core c; c.p.wetMode = 2; c.p.time = 0.5; c.p.modWet = 0.5; c.p.mix = 1; c.p.clock = 1;
+        c.prepare(FS); tap(c, 0);
+        render(c, 2, tone(220, 10));
+        c.p.freezeLatch = 1;
+        auto o = render(c, 2, [](double) { return 0.0; });
+        double quietest = 1;
+        for (double t = 0.5; t < 1.9; t += 0.05) quietest = std::min(quietest, rms(o.L, t, t + 0.05));
+        CHECK(quietest > 0.02, "frozen slip stays up (quietest %.4f)", quietest);
+    }
+
     // ─────────────────────────── the ramp engine ───────────────────────────
     {   // with every ramp off, the audio is exactly what it was before the engine
         auto run = [](bool withRamps) {

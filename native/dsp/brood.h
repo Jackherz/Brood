@@ -28,6 +28,8 @@ constexpr double kCoreFs = 64000.0;
 constexpr double kToneHz = 2600.0;
 constexpr double kDelayMaxSec = 2.1;
 constexpr double kSlipBufSec = 5.5;
+constexpr double kWetHoldSec = 0.01;   // how fast FREEZE takes hold of a reverb or delay
+constexpr double kWeaveClear = 2048;   // how far a stitch keeps from the write point, in samples
 constexpr double kWeaveBufSec = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
 constexpr double kWeavePitch[] = {0, 7, -5, 12, -12, 4, -17, 19};   // root-sympathetic intervals, semitones
 
@@ -241,6 +243,23 @@ struct Allpass {
 };
 
 // Fractional read from a circular buffer, Hermite-interpolated.
+// Writes into a buffer that FREEZE can stop. Writing again would put a step where the
+// old audio ends, so the input slides in from the last sample held.
+struct WetWriter {
+    bool wasFrozen = false;
+    double seam = 1, from = 0;
+    void write(std::vector<float>& buf, int& w, double input, bool frozen) {
+        if (!frozen) {
+            const int n = static_cast<int>(buf.size());
+            if (wasFrozen) { seam = 0; from = buf[static_cast<size_t>(w == 0 ? n - 1 : w - 1)]; }
+            if (seam < 1) { seam = std::min(1.0, seam + 1.0 / 240); input = from + (input - from) * seam; }
+            buf[static_cast<size_t>(w)] = static_cast<float>(input);
+            if (++w >= n) w = 0;
+        }
+        wasFrozen = frozen;
+    }
+};
+
 inline double readFrac(const std::vector<float>& buf, double pos) {
     const int N = static_cast<int>(buf.size());
     const double n = static_cast<double>(N);
@@ -261,9 +280,11 @@ struct Reverb {
     double modPh[8] = {}, modRate[8] = {};
     Allpass diff[4];
     double fs = 48000, t60 = -1, size = 1, out[2] = {0, 0};
+    double hold = 0, ring = 0, holdA = 0;   // FREEZE and endless decay, glided so they don't step the tail
 
     void init(double sr) {
-        fs = sr; t60 = -1; size = 1;
+        fs = sr; t60 = -1; size = 1; hold = ring = 0;
+        holdA = 1 - std::exp(-1 / (kWetHoldSec * fs));
         const double k = fs / 48000.0;
         const int base[8] = {1031, 1327, 1523, 1789, 2053, 2311, 2617, 2963};
         const double rates[8] = {0.31, 0.43, 0.53, 0.61, 0.37, 0.47, 0.57, 0.67};
@@ -286,7 +307,10 @@ struct Reverb {
         double d = input * 0.35;
         const double dg = 0.45 + 0.3 * modify;
         for (auto& a : diff) { a.g = dg; d = a.run(d); }
-        const double damp = freeze ? 1.0 : 1.0 - std::exp((-kTau * expMap(modify, 9000, 3500)) / fs);
+        hold += ((freeze ? 1.0 : 0.0) - hold) * holdA;
+        ring += ((freeze || infinite ? 1.0 : 0.0) - ring) * holdA;
+        const double dampOpen = 1.0 - std::exp((-kTau * expMap(modify, 9000, 3500)) / fs);
+        const double damp = dampOpen + (1.0 - dampOpen) * hold;
         const double depth = 1 + modify * modify * 18 * (fs / 48000.0);
         double sum = 0;
         for (int i = 0; i < 8; ++i) {
@@ -295,7 +319,7 @@ struct Reverb {
             const double delay = len[i] * size - depth * (1 + std::sin(modPh[i]));
             const double v = readFrac(lines[i], w[i] - delay);
             lp[i] = static_cast<float>(lp[i] + damp * (v - lp[i]));
-            const double gg = freeze || infinite ? 1.0 : g[i];
+            const double gg = g[i] + (1.0 - g[i]) * ring;
             x[i] = static_cast<float>(lp[i] * gg);
             sum += x[i];
         }
@@ -303,7 +327,7 @@ struct Reverb {
         double l = 0, r = 0;
         for (int i = 0; i < 8; ++i) {
             const double y = x[i] - h;
-            lines[i][static_cast<size_t>(w[i])] = static_cast<float>(y + (freeze ? 0.0 : d));
+            lines[i][static_cast<size_t>(w[i])] = static_cast<float>(y + d * (1.0 - hold));
             if (++w[i] >= static_cast<int>(lines[i].size())) w[i] = 0;
             if (i & 1) r += (i & 2) ? -x[i] : x[i];
             else l += (i & 2) ? -x[i] : x[i];
@@ -317,8 +341,10 @@ struct Reverb {
 struct Delay {
     std::vector<float> buf; int w = 0;
     double fs = 48000, d = -1, nextD = -1, fade = 1, lp = 0, hp = 0, lpA = 0, hpA = 0;
+    double hold = 0, full = 0, holdA = 0;   // FREEZE, and repeating exactly (FREEZE or the top of MODIFY)
     void init(double sr) {
-        fs = sr;
+        fs = sr; hold = full = 0;
+        holdA = 1 - std::exp(-1 / (kWetHoldSec * fs));
         buf.assign(static_cast<size_t>(std::ceil(kDelayMaxSec * fs) + 8), 0.f);
         w = 0; d = -1; nextD = -1; fade = 1; lp = hp = 0;
         lpA = 1 - std::exp((-kTau * 6500) / fs);
@@ -339,11 +365,12 @@ struct Delay {
         }
         lp += lpA * (y - lp);
         hp += hpA * (lp - hp);
-        const double fbSig = freeze || modify > 0.985 ? y : lp - hp;
-        const double fb = freeze || modify > 0.985 ? 1.0 : modify;
-        double v = (freeze ? 0.0 : input) + fbSig * fb;
-        if (v > 1 || v < -1) v = std::tanh(v);
-        buf[static_cast<size_t>(w)] = static_cast<float>(v);
+        // Glided, as what's written here comes back on every repeat: a hard switch would
+        // leave a seam in the line that clicks each time round.
+        hold += ((freeze ? 1.0 : 0.0) - hold) * holdA;
+        full += ((freeze || modify > 0.985 ? 1.0 : 0.0) - full) * holdA;
+        const double v = input * (1 - hold) + (lp - hp) * modify * (1 - full) + y * full;
+        buf[static_cast<size_t>(w)] = static_cast<float>(softClip(v));
         if (++w >= static_cast<int>(buf.size())) w = 0;
         return y;
     }
@@ -354,24 +381,29 @@ struct Slip {
     struct Head { double pos = 0, g = 0, level = 1; int dir = 0; bool dying = false; };
     std::vector<float> buf; int w = 0;
     Head heads[2]; int cur = 0;
-    double fs = 48000, count = 1e9, lastStart = 0, speed = 1;
+    double fs = 48000, count = 1e9, speed = 1;
+    WetWriter writer;
     void init(double sr) {
         fs = sr;
         buf.assign(static_cast<size_t>(std::ceil(kSlipBufSec * fs)), 0.f);
-        w = 0; heads[0] = heads[1] = Head{}; cur = 0; count = 1e9; lastStart = 0; speed = 1;
+        w = 0; heads[0] = heads[1] = Head{}; cur = 0; count = 1e9; speed = 1; writer = WetWriter{};
     }
     double tick(double input, double sliceLen, double speedTarget, bool freeze) {
         const int n = static_cast<int>(buf.size());
-        if (!freeze) { buf[static_cast<size_t>(w)] = static_cast<float>(input); if (++w >= n) w = 0; }
+        const bool freezing = freeze && !writer.wasFrozen;
+        writer.write(buf, w, input, freeze);
         speed += (speedTarget - speed) * 0.002;
         const double s = speed;
         const double xf = std::max(32.0, std::min(0.25 * sliceLen, 0.03 * fs));
-        if (++count >= sliceLen) {
+        // Freezing stops the write point, so a head running just behind it would reach it
+        // at once: start a slice now, from far enough back. The head being replaced has to
+        // have finished fading, or its restart would be a step.
+        if (freezing) count = 1e9;
+        if (++count >= sliceLen && heads[cur ^ 1].g <= 0) {
             count = 0;
             const double margin = xf + 64;
-            double start;
-            if (freeze) start = lastStart;
-            else { start = w - (margin + std::max(0.0, s - 1) * (sliceLen + xf)); lastStart = start; }
+            const double behind = margin + std::max(0.0, freeze ? s : s - 1) * (sliceLen + xf);
+            const double start = w - std::min(behind, n - 2 * margin);
             cur ^= 1;
             heads[cur].pos = start; heads[cur].g = 0; heads[cur].dir = 1; heads[cur].level = 1; heads[cur].dying = false;
             heads[cur ^ 1].dir = -1;
@@ -386,8 +418,9 @@ struct Slip {
                 // meets the oldest, and that seam is a click. So it bows out before it gets
                 // there: once it's close it fades for good, until the next slice replaces it.
                 double ahead = jsMod(w - h.pos, static_cast<double>(n)); if (ahead < 0) ahead += n;
-                if (ahead < 64) h.dying = true;
-                if (h.dying) h.level = std::max(0.0, h.level - 1.0 / 48);
+                const double closing = freeze ? s : s - 1;   // toward the write point; negative, away and round to it
+                if (ahead < 64 + 240 * std::max(0.0, closing) || ahead > n - 64 + 240 * std::min(0.0, closing)) h.dying = true;
+                if (h.dying) h.level = std::max(0.0, h.level - 1.0 / 240);
                 out += readFrac(buf, h.pos) * std::sin(h.g * kPi * 0.5) * h.level;
                 h.pos += s;
             }
@@ -407,17 +440,23 @@ struct Slip {
 // changes, so the same knob position always draws the same fabric — chance, but
 // repeatable, and no undo. Mirrors the JS Weave class in src/brood-worklet.js.
 struct Weave {
-    struct Thread { double pos = 0, ph = 0, rate = 1, pan = 0, amp = 1; int dir = 1; };
+    struct Thread {
+        double pos = 0, ph = 0, rate = 1, pan = 0, amp = 1; int dir = 1;
+        double level = 1; bool dying = false;
+        // A new roll waits for the next stitch, where the window is shut.
+        bool rolled = false; double nextRate = 1, nextBack = 0; int nextDir = 1;
+    };
     std::vector<float> buf; int w = 0;
     uint32_t rng = 0x5eed; int seedKey = -1;
     Thread th[3];
+    WetWriter writer;
     double fs = 48000;
     void init(double sr) {
         fs = sr;
         buf.assign(static_cast<size_t>(std::ceil(kWeaveBufSec * fs)), 0.f);
-        w = 0; rng = 0x5eed; seedKey = -1;
+        w = 0; rng = 0x5eed; seedKey = -1; writer = WetWriter{};
         static constexpr double pan[3] = {-0.7, 0, 0.7};
-        for (int i = 0; i < 3; ++i) th[i] = Thread{-fs * (0.25 + 0.3 * i), i / 3.0, 1, pan[i], 1, 1};
+        for (int i = 0; i < 3; ++i) { th[i] = Thread{}; th[i].pos = -fs * (0.25 + 0.3 * i); th[i].ph = i / 3.0; th[i].pan = pan[i]; }
     }
     double rand01() { rng = rng * 1103515245u + 12345u; return rng / 4294967296.0; }
     void reroll(int key, double reachSec) {
@@ -425,16 +464,16 @@ struct Weave {
         seedKey = key;
         for (auto& t : th) {
             const int semis = static_cast<int>(kWeavePitch[static_cast<int>(rand01() * 8)]);
-            t.rate = std::pow(2.0, semis / 12.0);
-            t.dir = rand01() < 0.3 ? -1 : 1;
-            t.amp = rand01() < 0.85 ? 1.0 : 0.45;
-            t.pos = w - fs * (0.15 + rand01() * 0.85 * std::max(0.2, reachSec));
+            t.nextRate = std::pow(2.0, semis / 12.0);
+            t.nextDir = rand01() < 0.3 ? -1 : 1;
+            t.nextBack = fs * (0.15 + rand01() * 0.85 * std::max(0.2, reachSec));
+            t.rolled = true;
         }
     }
     // out[0], out[1] are left/right.
     void tick(double input, double reachSec, double modify, bool frozen, double* out) {
         const int n = static_cast<int>(buf.size());
-        if (!frozen) { buf[static_cast<size_t>(w)] = static_cast<float>(input); if (++w >= n) w = 0; }
+        writer.write(buf, w, input, frozen);
         const int key = static_cast<int>(std::floor(clampd(reachSec, 0, 3) * 8)) * 16 +
                         static_cast<int>(std::floor(clampd(modify, 0, 1) * 16));
         reroll(key, reachSec);
@@ -447,12 +486,27 @@ struct Weave {
             if (t.ph >= 1) {
                 t.ph -= 1;
                 // A new stitch: maybe move somewhere else in the cloth, maybe not.
-                if (rand01() < 0.45) t.pos = w - fs * (0.12 + rand01() * std::max(0.2, reachSec));
+                double back = -1;
+                if (rand01() < 0.45) back = fs * (0.12 + rand01() * std::max(0.2, reachSec));
+                if (t.rolled) { t.rate = t.nextRate; t.dir = t.nextDir; back = t.nextBack; t.rolled = false; }
+                // The write point is where the newest audio meets the oldest. A thread drifts
+                // toward or away from it by its speed, so it starts where a whole stitch stays clear.
+                const double drift = t.rate * t.dir - (frozen ? 0 : 1);
+                const double nearest = kWeaveClear + std::max(0.0, drift) * grain;
+                const double farthest = std::max(nearest, n - kWeaveClear + std::min(0.0, drift) * grain);
+                double ahead = jsMod(w - t.pos, static_cast<double>(n)); if (ahead < 0) ahead += n;
+                t.pos = w - clampd(back >= 0 ? back : ahead, nearest, farthest);
+                t.level = 1; t.dying = false;
                 // Dropouts are partial, so a thread thins out instead of vanishing.
                 t.amp = rand01() < chance * 0.35 ? 0.0 : 0.45 + 0.55 * rand01();
             }
+            // MODIFY lengthening a stitch or FREEZE stopping the write point can still bring
+            // it close: then it fades for good, until the next stitch.
+            double ahead = jsMod(w - t.pos, static_cast<double>(n)); if (ahead < 0) ahead += n;
+            if (ahead < kWeaveClear * 0.5 || ahead > n - kWeaveClear * 0.5) t.dying = true;
+            if (t.dying) t.level = std::max(0.0, t.level - 1.0 / 240);
             const double win = std::sin(t.ph * kPi);
-            const double v = readFrac(buf, t.pos) * win * win * t.amp;
+            const double v = readFrac(buf, t.pos) * win * win * t.amp * t.level;
             t.pos += t.rate * t.dir;
             const double a = (t.pan + 1) * kPi / 4;
             l += v * std::cos(a);

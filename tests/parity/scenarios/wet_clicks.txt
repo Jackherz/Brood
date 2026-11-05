@@ -1,0 +1,30 @@
+# The wet side's freezes and moving knobs: each mode frozen and released with TIME and
+# MODIFY moving, so the glides, stitch placement and write seams have to agree. 375 blocks = 1 s.
+rate 48000
+seconds 16
+0 param clock 1
+0 param mix 1
+0 param time 0.5
+0 param modWet 0.5
+0 param wetMode 3
+20 fs wet down
+21 fs wet up
+300 param modWet 0.9
+500 param time 0.8
+700 param freeze 1
+1000 param freeze 0
+1300 param modWet 0.2
+1500 param wetMode 2
+1800 param freeze 1
+2100 param freeze 0
+2400 param time 0.3
+2600 param wetMode 1
+2800 param modWet 0.99
+3000 param freeze 1
+3300 param freeze 0
+3500 param modWet 0.7
+3700 param wetMode 0
+3900 param freeze 1
+4200 param freeze 0
+4400 param time 0.99
+4700 param time 0.6

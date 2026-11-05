@@ -31,6 +31,8 @@ const CORE_FS = 64000;       // buffer timings are defined at the pedal’s 64 k
 const CLOCK_STEPS = [2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000];
 const DELAY_MAX_SEC = 2.1;
 const SLIP_BUF_SEC = 5.5;
+const WET_HOLD_SEC = 0.01;   // how fast FREEZE takes hold of a reverb or delay
+const WEAVE_CLEAR = 2048;    // how far a stitch keeps from the write point, in samples
 const WEAVE_BUF_SEC = 3.0;   // Fieldtone Weaver captures a couple of seconds; three gives the threads room
 const WEAVE_PITCH = [0, 7, -5, 12, -12, 4, -17, 19];   // root-sympathetic intervals, semitones
 
@@ -215,6 +217,9 @@ class Reverb {
     this.size = 1;
     this.out = [0, 0];
     this.x = new Float32Array(8);
+    // FREEZE and endless decay, glided so they don't step the tail
+    this.hold = 0; this.ring = 0;
+    this.holdA = 1 - Math.exp(-1 / (WET_HOLD_SEC * fs));
   }
   setDecay(t60, size) {
     if (Math.abs(t60 - this.t60) < 1e-4 && Math.abs(size - this.size) < 1e-4) return;
@@ -227,7 +232,10 @@ class Reverb {
     let d = input * 0.35;
     const dg = 0.45 + 0.3 * modify;
     for (let i = 0; i < 4; i++) { this.diff[i].g = dg; d = this.diff[i].run(d); }
-    const damp = freeze ? 1 : 1 - Math.exp((-TAU * expMap(modify, 9000, 3500)) / this.fs);
+    this.hold += ((freeze ? 1 : 0) - this.hold) * this.holdA;
+    this.ring += ((freeze || infinite ? 1 : 0) - this.ring) * this.holdA;
+    const dampOpen = 1 - Math.exp((-TAU * expMap(modify, 9000, 3500)) / this.fs);
+    const damp = dampOpen + (1 - dampOpen) * this.hold;
     const depth = 1 + modify * modify * 18 * (this.fs / 48000);
     const x = this.x;
     let sum = 0;
@@ -238,7 +246,7 @@ class Reverb {
       const delay = this.len[i] * this.size - depth * (1 + Math.sin(this.modPh[i]));
       const v = readFrac(line, this.w[i] - delay);
       this.lp[i] += damp * (v - this.lp[i]);
-      const g = freeze || infinite ? 1 : this.g[i];
+      const g = this.g[i] + (1 - this.g[i]) * this.ring;
       x[i] = this.lp[i] * g;
       sum += x[i];
     }
@@ -247,7 +255,7 @@ class Reverb {
     for (let i = 0; i < 8; i++) {
       const y = x[i] - h;
       const line = this.lines[i];
-      line[this.w[i]] = y + (freeze ? 0 : d);
+      line[this.w[i]] = y + d * (1 - this.hold);
       if (++this.w[i] >= line.length) this.w[i] = 0;
       if (i & 1) r += i & 2 ? -x[i] : x[i];
       else l += i & 2 ? -x[i] : x[i];
@@ -269,6 +277,9 @@ class Delay {
     this.lp = 0; this.hp = 0;
     this.lpA = 1 - Math.exp((-TAU * 6500) / fs);
     this.hpA = 1 - Math.exp((-TAU * 70) / fs);
+    // FREEZE, and repeating exactly (FREEZE or the top of MODIFY)
+    this.hold = 0; this.full = 0;
+    this.holdA = 1 - Math.exp(-1 / (WET_HOLD_SEC * fs));
   }
   // At maximum feedback the delay repeats stably, like a looping delay.
   tick(input, delaySamples, modify, freeze) {
@@ -287,11 +298,12 @@ class Delay {
     }
     this.lp += this.lpA * (y - this.lp);
     this.hp += this.hpA * (this.lp - this.hp);
-    const fbSig = freeze || modify > 0.985 ? y : this.lp - this.hp;
-    const fb = freeze || modify > 0.985 ? 1 : modify;
-    let v = (freeze ? 0 : input) + fbSig * fb;
-    v = v > 1 || v < -1 ? Math.tanh(v) : v;
-    this.buf[this.w] = v;
+    // Glided, as what's written here comes back on every repeat: a hard switch would
+    // leave a seam in the line that clicks each time round.
+    this.hold += ((freeze ? 1 : 0) - this.hold) * this.holdA;
+    this.full += ((freeze || modify > 0.985 ? 1 : 0) - this.full) * this.holdA;
+    const v = input * (1 - this.hold) + (this.lp - this.hp) * modify * (1 - this.full) + y * this.full;
+    this.buf[this.w] = softClip(v);
     if (++this.w >= this.buf.length) this.w = 0;
     return y;
   }
@@ -299,6 +311,24 @@ class Delay {
 
 // ───────────────────────── Wet channel: SLIP ──────────────────────────
 // Repeating slices of recent audio replayed at another speed/direction.
+// Writes into a buffer that FREEZE can stop. Writing again would put a step where the
+// old audio ends, so the input slides in from the last sample held.
+class WetWriter {
+  constructor() { this.wasFrozen = false; this.seam = 1; this.from = 0; }
+  // Returns the next write position.
+  write(buf, w, input, frozen) {
+    if (!frozen) {
+      const n = buf.length;
+      if (this.wasFrozen) { this.seam = 0; this.from = buf[w === 0 ? n - 1 : w - 1]; }
+      if (this.seam < 1) { this.seam = Math.min(1, this.seam + 1 / 240); input = this.from + (input - this.from) * this.seam; }
+      buf[w] = input;
+      if (++w >= n) w = 0;
+    }
+    this.wasFrozen = frozen;
+    return w;
+  }
+}
+
 class Slip {
   constructor(fs) {
     this.fs = fs;
@@ -307,28 +337,25 @@ class Slip {
     this.heads = [{ pos: 0, g: 0, dir: 0, level: 1, dying: false }, { pos: 0, g: 0, dir: 0, level: 1, dying: false }];
     this.cur = 0;
     this.count = 1e9;
-    this.lastStart = 0;
     this.speed = 1;
+    this.writer = new WetWriter();
   }
   tick(input, sliceLen, speedTarget, freeze) {
     const n = this.buf.length;
-    if (!freeze) {
-      this.buf[this.w] = input;
-      if (++this.w >= n) this.w = 0;
-    }
+    const freezing = freeze && !this.writer.wasFrozen;
+    this.w = this.writer.write(this.buf, this.w, input, freeze);
     this.speed += (speedTarget - this.speed) * 0.002;
     const s = this.speed;
     const xf = Math.max(32, Math.min(0.25 * sliceLen, 0.03 * this.fs));
-    if (++this.count >= sliceLen) {
+    // Freezing stops the write point, so a head running just behind it would reach it at
+    // once: start a slice now, from far enough back. The head being replaced has to have
+    // finished fading, or its restart would be a step.
+    if (freezing) this.count = 1e9;
+    if (++this.count >= sliceLen && this.heads[this.cur ^ 1].g <= 0) {
       this.count = 0;
       const margin = xf + 64;
-      let start;
-      if (freeze) start = this.lastStart;
-      else {
-        const behind = margin + Math.max(0, s - 1) * (sliceLen + xf);
-        start = this.w - behind;
-        this.lastStart = start;
-      }
+      const behind = margin + Math.max(0, freeze ? s : s - 1) * (sliceLen + xf);
+      const start = this.w - Math.min(behind, n - 2 * margin);
       this.cur ^= 1;
       const h = this.heads[this.cur];
       h.pos = start; h.g = 0; h.dir = 1; h.level = 1; h.dying = false;
@@ -345,8 +372,9 @@ class Slip {
         // the oldest, and that seam is a click. So it bows out before it gets there: once
         // it's close it fades for good, until the next slice replaces it.
         let ahead = (this.w - h.pos) % n; if (ahead < 0) ahead += n;
-        if (ahead < 64) h.dying = true;
-        if (h.dying) h.level = Math.max(0, h.level - 1 / 48);
+        const closing = freeze ? s : s - 1;   // toward the write point; negative, away and round to it
+        if (ahead < 64 + 240 * Math.max(0, closing) || ahead > n - 64 + 240 * Math.min(0, closing)) h.dying = true;
+        if (h.dying) h.level = Math.max(0, h.level - 1 / 240);
         out += readFrac(this.buf, h.pos) * Math.sin(h.g * Math.PI * 0.5) * h.level;
         h.pos += s;
       }
@@ -372,32 +400,31 @@ class Weave {
     this.w = 0;
     this.rng = 0x5eed;
     this.seedKey = -1;
+    this.writer = new WetWriter();
     this.threads = [0, 1, 2].map((_, i) => ({
       pos: -fs * (0.25 + 0.3 * i), ph: i / 3, rate: 1, dir: 1, pan: [-0.7, 0, 0.7][i], amp: 1,
+      level: 1, dying: false, rolled: false, nextRate: 1, nextBack: 0, nextDir: 1,
     }));
   }
   rand01() {
     this.rng = (Math.imul(this.rng, 1103515245) + 12345) >>> 0;
     return this.rng / 4294967296;
   }
-  // One roll per knob position: rate, direction and dropout are drawn here.
+  // One roll per knob position. It waits for each thread's next stitch, where the window is shut.
   reroll(key, reachSec) {
     if (key === this.seedKey) return;
     this.seedKey = key;
     for (const th of this.threads) {
       const semis = WEAVE_PITCH[Math.floor(this.rand01() * WEAVE_PITCH.length)];
-      th.rate = Math.pow(2, semis / 12);
-      th.dir = this.rand01() < 0.3 ? -1 : 1;
-      th.amp = this.rand01() < 0.85 ? 1 : 0.45;
-      th.pos = this.w - this.fs * (0.15 + this.rand01() * 0.85 * Math.max(0.2, reachSec));
+      th.nextRate = Math.pow(2, semis / 12);
+      th.nextDir = this.rand01() < 0.3 ? -1 : 1;
+      th.nextBack = this.fs * (0.15 + this.rand01() * 0.85 * Math.max(0.2, reachSec));
+      th.rolled = true;
     }
   }
   tick(input, reachSec, modify, frozen) {
     const n = this.buf.length;
-    if (!frozen) {
-      this.buf[this.w] = input;
-      if (++this.w >= n) this.w = 0;
-    }
+    this.w = this.writer.write(this.buf, this.w, input, frozen);
     const key = Math.floor(clamp(reachSec, 0, 3) * 8) * 16 + Math.floor(clamp(modify, 0, 1) * 16);
     this.reroll(key, reachSec);
 
@@ -409,14 +436,27 @@ class Weave {
       if (th.ph >= 1) {
         th.ph -= 1;
         // A new stitch: maybe move somewhere else in the cloth, maybe not.
-        if (this.rand01() < 0.45) {
-          th.pos = this.w - this.fs * (0.12 + this.rand01() * Math.max(0.2, reachSec));
-        }
+        let back = -1;
+        if (this.rand01() < 0.45) back = this.fs * (0.12 + this.rand01() * Math.max(0.2, reachSec));
+        if (th.rolled) { th.rate = th.nextRate; th.dir = th.nextDir; back = th.nextBack; th.rolled = false; }
+        // The write point is where the newest audio meets the oldest. A thread drifts toward
+        // or away from it by its speed, so it starts where a whole stitch stays clear.
+        const drift = th.rate * th.dir - (frozen ? 0 : 1);
+        const nearest = WEAVE_CLEAR + Math.max(0, drift) * grain;
+        const farthest = Math.max(nearest, n - WEAVE_CLEAR + Math.min(0, drift) * grain);
+        let ahead = (this.w - th.pos) % n; if (ahead < 0) ahead += n;
+        th.pos = this.w - clamp(back >= 0 ? back : ahead, nearest, farthest);
+        th.level = 1; th.dying = false;
         // Dropouts are partial, so a thread thins out instead of vanishing.
         th.amp = this.rand01() < chance * 0.35 ? 0 : 0.45 + 0.55 * this.rand01();
       }
+      // MODIFY lengthening a stitch or FREEZE stopping the write point can still bring it
+      // close: then it fades for good, until the next stitch.
+      let ahead = (this.w - th.pos) % n; if (ahead < 0) ahead += n;
+      if (ahead < WEAVE_CLEAR * 0.5 || ahead > n - WEAVE_CLEAR * 0.5) th.dying = true;
+      if (th.dying) th.level = Math.max(0, th.level - 1 / 240);
       const win = Math.sin(th.ph * Math.PI);
-      const v = readFrac(this.buf, th.pos) * win * win * th.amp;
+      const v = readFrac(this.buf, th.pos) * win * win * th.amp * th.level;
       th.pos += th.rate * th.dir;
       const a = (th.pan + 1) * Math.PI / 4;
       l += v * Math.cos(a);
