@@ -228,6 +228,34 @@ int main() {
             CHECK(std::fabs(catcher.ui.lsrc.load() / clock - 1.0) < 0.01, "one second of it, at the looper's clock");
             CHECK(catcher.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "and it plays");
         }
+        // An audio file dropped on the window, from anywhere: the loop, at the looper's clock.
+        {
+            const auto dropped = folder.getChildFile("dropped.wav"), notAudio = folder.getChildFile("notes.txt");
+            notAudio.replaceWithText("not a sample");
+            juce::AudioBuffer<float> half(2, 22050);
+            for (int n = 0; n < half.getNumSamples(); ++n) for (int c = 0; c < 2; ++c) half.setSample(c, n, 0.25f * std::sin(static_cast<float>(n) * 0.05f));
+            {
+                std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(dropped);
+                auto writer = juce::WavAudioFormat().createWriterFor(stream, juce::AudioFormatWriterOptions{}.withSampleRate(44100.0).withNumChannels(2).withBitsPerSample(24));
+                CHECK(writer != nullptr && writer->writeFromAudioSampleBuffer(half, 0, half.getNumSamples()), "write a sample to drop");
+            }
+            std::unique_ptr<juce::AudioProcessorEditor> window(catcher.createEditor());
+            auto* target = dynamic_cast<juce::FileDragAndDropTarget*>(window.get());
+            CHECK(target != nullptr, "the window takes file drops");
+            if (target != nullptr) {
+                CHECK(!target->isInterestedInFileDrag({notAudio.getFullPathName()}), "not a text file");
+                CHECK(target->isInterestedInFileDrag({notAudio.getFullPathName(), dropped.getFullPathName()}), "but a sample among other files");
+                target->fileDragEnter({dropped.getFullPathName()}, 10, 10);
+                juce::Image frame(juce::Image::ARGB, window->getWidth(), window->getHeight(), true);
+                juce::Graphics graphics(frame);
+                window->paintEntireComponent(graphics, true);
+                target->filesDropped({notAudio.getFullPathName(), dropped.getFullPathName()}, 10, 10);
+                run(4);
+                const double clock = catcher.ui.clockHz.load();
+                CHECK(std::fabs(catcher.ui.lsrc.load() / clock - 0.5) < 0.01, "half a second of it");
+                CHECK(catcher.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "and it plays");
+            }
+        }
         kit::bench::folderForTests = juce::File();
         folder.deleteRecursively();
     }

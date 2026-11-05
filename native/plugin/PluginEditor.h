@@ -7,8 +7,13 @@
 // Pedal-style front panel. Repaints are limited to the small regions that change
 // (LEDs, readout, meters, loop display): a full-window repaint at 30 Hz can starve
 // the UI thread on high-DPI screens.
-class BroodEditor final : public juce::AudioProcessorEditor, private juce::Timer {
+class BroodEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
+    // An audio file dropped anywhere on the window becomes the loop.
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray&, int, int) override;
+    void fileDragExit(const juce::StringArray&) override;
+    void filesDropped(const juce::StringArray& files, int, int) override;
     // The look, plus each knob's modulation: a ring in each source's colour showing the
     // swing, and a dot where the sound has the knob now.
     struct Look final : kit::Look {
@@ -182,6 +187,7 @@ private:
     std::optional<kit::bench::Moment> waiting;
     void benchSend();
     void benchTake();
+    bool fileHovering = false;
     void updateBench();
 
     struct Knob { juce::String id, label; std::unique_ptr<ModSlider> slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };

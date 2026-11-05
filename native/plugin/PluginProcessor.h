@@ -48,6 +48,7 @@ public:
     std::atomic<int> source { Live };
     std::atomic<float> inputGain { 1.f };
     bool loadFile(const juce::File& f);           // message thread
+    bool canReadAudio(const juce::File& f) const { return formats_.findFormatForFileExtension(f.getFileExtension()) != nullptr; }
     // The sound the patch box shows; kept with the project.
     juce::String presetName { "A Little Daydream" };
     // What the loop is playing, for the Bench. Message thread; false with nothing caught.

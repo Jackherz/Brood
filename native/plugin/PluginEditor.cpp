@@ -903,7 +903,35 @@ int BroodEditor::routeMask() const {
 }
 
 // While a chip is being dragged: the control it would land on, and a tag at the mouse.
+bool BroodEditor::isInterestedInFileDrag(const juce::StringArray& files) {
+    for (const auto& path : files) if (proc.canReadAudio(juce::File(path))) return true;
+    return false;
+}
+
+void BroodEditor::fileDragEnter(const juce::StringArray&, int, int) { fileHovering = true; repaint(); }
+void BroodEditor::fileDragExit(const juce::StringArray&) { fileHovering = false; repaint(); }
+
+void BroodEditor::filesDropped(const juce::StringArray& files, int, int) {
+    fileHovering = false;
+    repaint();
+    for (const auto& path : files) {
+        const juce::File file(path);
+        if (!proc.canReadAudio(file)) continue;
+        showReadout(file.getFileName(), proc.takeMoment(file) ? "it's the loop now" : "could not read it");
+        return;
+    }
+}
+
 void BroodEditor::paintOverChildren(juce::Graphics& g) {
+    if (fileHovering) {
+        const auto all = getLocalBounds();
+        g.setColour(kPaper.withAlpha(0.8f));
+        g.fillRect(all);
+        g.setColour(kInk);
+        g.drawRect(all.reduced(10), 3);
+        g.setFont(font(34));
+        g.drawText("DROP TO MAKE IT THE LOOP", all, juce::Justification::centred);
+    }
     if (dragSource < 0) return;
     g.addTransform(view);
     const auto colour = modColour(dragSource);

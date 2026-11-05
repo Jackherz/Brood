@@ -310,6 +310,8 @@ every project and every instance shares them. The four user slots from round 18 
 presets called User 1 to User 4 the first time this version opens. A preset never
 engages a channel.
 
+**Drop an audio file** on the window, from Finder or anywhere that drags files, and it becomes the loop, at the looper's clock.
+
 **The Bench** along the bottom passes a moment between plug-ins, either way: SEND writes
 what the loop is playing to Brood's own folder (`~/Music/Glyph Audio/Brood/` until you choose another), an instrument in the range (Silt) shows it
 and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens it in
