@@ -811,7 +811,7 @@ function App() {
 
   return <div className="page">
     <div className="utility-bar layout-width">
-      <div className="utility-brand"><span className="brand-mark"><Spark size={14}/></span><span>BROOD <i>/</i> AUDIO OBJECTS</span></div>
+      <div className="utility-brand"><span className="brand-mark"><Spark size={14}/></span><span>GLYPH AUDIO <i>/</i> BROOD</span></div>
       <div className="utility-center">A LITTLE MACHINE FOR HAPPY ACCIDENTS <span>✳</span></div>
       <div className="utility-actions">
         <button className="utility-help" onClick={() => setGuideOpen(!guideOpen)} aria-expanded={guideOpen}><span>?</span> {guideOpen ? 'CLOSE GUIDE' : 'HOW TO PLAY'}</button>

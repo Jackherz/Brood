@@ -83,6 +83,8 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 28: **Glyph Audio.** The range has a name, on the panels and in the plug-in lists, and
+  the kit has its own repository (glyph-audio-kit), held here as a submodule.
 - Round 27: **a quicker way off.** Double-click a modulation ring to take that source off the
   knob, and Delete on a clicked knob removes all of its modulation, in Brood and in Silt.
 - Round 26: **a folder each.** Brood and Silt keep what they send in their own folders, with

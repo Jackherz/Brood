@@ -7,12 +7,13 @@ from a chat: everything comes from the repository.
 
 ```sh
 cd ~/Documents/AI
-git clone https://github.com/Jackherz/Brood.git Brood-Source
+git clone --recurse-submodules https://github.com/Jackherz/Brood.git Brood-Source
 cd Brood-Source
 open -a "Visual Studio Code" .
 ```
 
-Everything is on `main`, so a plain clone is all you need.
+Everything is on `main`. The repository is private, and so is the panel kit it holds as a
+submodule, so you need access to both.
 
 Do **not** apply a `.patch` file. Patches cannot carry binary files, so a tree
 restored from one arrives without the interface fonts and fails to build. The

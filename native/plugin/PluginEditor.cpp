@@ -1217,7 +1217,7 @@ void BroodEditor::rebuildHoverHelp() {
 void BroodEditor::paint(juce::Graphics& g) {
     g.fillAll(stock().page);
     g.addTransform(view);   // draw in design coordinates; the window scales it
-    kit::drawMasthead(g, mastheadArea, stock(), "E-01", kInk, kPaper, "BROOD.", "EFFECTS LINE", "MICRO-LOOPER + SPACE");
+    kit::drawMasthead(g, mastheadArea, stock(), "E-01", kInk, kPaper, "BROOD.", "GLYPH AUDIO", "MICRO-LOOPER + SPACE");
     g.setColour(kMuted); g.setFont(font(17));
     g.drawText("PATCH", presetBarDesign.getX() - 56, presetBarDesign.getY(), 48, presetBarDesign.getHeight() - 2, juce::Justification::centredRight);
 

@@ -5,6 +5,9 @@ FetchContent_Declare(juce GIT_REPOSITORY https://github.com/juce-framework/JUCE.
 FetchContent_MakeAvailable(juce)
 
 # The shared panel kit: the look, the fonts, the preset browser and the Bench.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../kit/CMakeLists.txt")
+  message(FATAL_ERROR "The kit is missing. Run: git submodule update --init")
+endif()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../kit ${CMAKE_CURRENT_BINARY_DIR}/kit)
 set(BROOD_FORMATS Standalone VST3)
 if(APPLE)
@@ -13,7 +16,7 @@ endif()
 
 juce_add_plugin(Brood
   VERSION 0.1.0
-  COMPANY_NAME "Brood Audio Objects"
+  COMPANY_NAME "Glyph Audio"
   BUNDLE_ID "audio.brood.brood"
   PLUGIN_MANUFACTURER_CODE Broo
   PLUGIN_CODE BrMd

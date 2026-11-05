@@ -18,9 +18,15 @@ public:
     static juce::File defaultFolder() {
         const auto data = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
        #if JUCE_MAC
-        return data.getChildFile("Audio/Presets/Brood");
+        const auto folder = data.getChildFile("Audio/Presets/Glyph Audio/Brood");
+        // Presets from before the range had a name.
+        if (const auto old = data.getChildFile("Audio/Presets/Brood"); old.isDirectory() && !folder.exists()) {
+            folder.getParentDirectory().createDirectory();
+            old.moveFileTo(folder);
+        }
+        return folder;
        #else
-        return data.getChildFile("Brood").getChildFile("Presets");
+        return data.getChildFile("Glyph Audio").getChildFile("Brood").getChildFile("Presets");
        #endif
     }
     static juce::File defaultOldSlots() {

@@ -27,6 +27,7 @@ help:
 # commit it came from, so a stale checkout can never be mistaken for a stale bug.
 update:
 	@git -C "$(CURDIR)" pull --ff-only
+	@git -C "$(CURDIR)" submodule update --init
 	@$(MAKE) --no-print-directory install
 
 install:

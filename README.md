@@ -59,7 +59,7 @@ result matches your machine and your macOS version exactly.
 
 ```sh
 cd ~/Documents/AI
-git clone https://github.com/Jackherz/Brood.git Brood-Source
+git clone --recurse-submodules https://github.com/Jackherz/Brood.git Brood-Source
 cd Brood-Source
 open -a "Visual Studio Code" .
 ```
@@ -305,13 +305,13 @@ state: every control goes back to its default before it sets its own. Click the 
 for the preset browser, the same one every plug-in in the range uses: search, category
 keys and stars; clicking a preset plays it, KEEP (Return) keeps it, CANCEL (Esc) puts
 back the sound you had, and right-clicking a user preset renames, files or removes it.
-User presets are `.broodpreset` files in `~/Library/Audio/Presets/Brood/` on macOS, so
+User presets are `.broodpreset` files in `~/Library/Audio/Presets/Glyph Audio/Brood/` on macOS, so
 every project and every instance shares them. The four user slots from round 18 become
 presets called User 1 to User 4 the first time this version opens. A preset never
 engages a channel.
 
 **The Bench** along the bottom passes a moment between plug-ins, either way: SEND writes
-what the loop is playing to Brood's own folder (`~/Music/Bench/Brood/` until you choose another), an instrument in the range (Silt) shows it
+what the loop is playing to Brood's own folder (`~/Music/Glyph Audio/Brood/` until you choose another), an instrument in the range (Silt) shows it
 and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens it in
 the Finder, chooses another folder, or picks a category, which is a folder inside it (make a
 Guitar one, and what you send goes there until you change it). Each plug-in has its own
