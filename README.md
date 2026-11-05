@@ -494,7 +494,8 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
 - **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,
   SYNC and HOLD. Drag a source onto any knob or WET/LOOP to route it. Around a knob, the rings are
   handles as in Silt: drag up or down to set that source's depth (negative inverts), and
-  where there's no ring yet it makes one for the selected source. Alt-drag does the same, right-click a knob to remove a route,
+  where there's no ring yet it makes one for the selected source. Alt-drag does the same, double-click a ring to remove that source, Delete on a clicked knob removes both,
+  right-click for the list,
   and ROUTES lists them all. CC 20, 52, 66 and 67 act on both sources
   (`tests/parity/scenarios/mod_routes.txt`).
 - **ENV** slices when it hears the input: LENGTH and MODIFY act on those slices, so with

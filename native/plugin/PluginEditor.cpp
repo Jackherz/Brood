@@ -130,14 +130,35 @@ void BroodEditor::ModSlider::mouseUp(const juce::MouseEvent& e) {
     juce::Slider::mouseUp(e);
 }
 void BroodEditor::ModSlider::mouseDoubleClick(const juce::MouseEvent& e) {
-    // Alt-double-click takes the selected source off this control.
-    if (target >= 0 && editor != nullptr && e.mods.isAltDown()) {
-        auto* prm = editor->depthParam(editor->selectedSource(), target);
+    // On a ring: that source comes off this control, the way a double-click resets anything
+    // else. Alt-double-click anywhere does the same for the selected source.
+    const int ring = sourceAtRing(e.position);
+    const int source = ring >= 0 ? ring : e.mods.isAltDown() ? (editor != nullptr ? editor->selectedSource() : -1) : -1;
+    if (source >= 0 && target >= 0 && editor != nullptr) {
+        auto* prm = editor->depthParam(source, target);
+        prm->beginChangeGesture();
         prm->setValueNotifyingHost(prm->convertTo0to1(0.f));
+        prm->endChangeGesture();
+        hoverSource = -1;
+        editor->showReadout("MOD " + juce::String(source + 1), juce::String(brood::kModTargetNames[target]).toLowerCase() + " removed");
         repaint();
         return;
     }
     juce::Slider::mouseDoubleClick(e);
+}
+// Delete or Backspace on a clicked knob: all of its modulation goes.
+void BroodEditor::ModSlider::removeRoutes() {
+    for (int k = 0; k < 2; ++k) {
+        auto* prm = editor->depthParam(k, target);
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost(prm->convertTo0to1(0.f));
+        prm->endChangeGesture();
+    }
+    repaint();
+}
+bool BroodEditor::ModSlider::keyPressed(const juce::KeyPress& key) {
+    if ((key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) && target >= 0 && editor != nullptr) { removeRoutes(); return true; }
+    return juce::Slider::keyPressed(key);
 }
 
 // ───────── modulation chip ─────────
@@ -542,6 +563,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     for (const auto& [id, label] : defs) {
         Knob k { id, label, std::make_unique<ModSlider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox), nullptr };
         k.slider->editor = this;
+        k.slider->setWantsKeyboardFocus(true);
         for (int t = 0; t < brood::kModTargets; ++t) if (juce::String(id) == brood::kModTargetIds[t]) k.slider->target = t;
         k.slider->setRotaryParameters(juce::degreesToRadians(-135.f), juce::degreesToRadians(135.f), true);
         k.slider->setMouseDragSensitivity(220);

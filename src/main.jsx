@@ -239,6 +239,12 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, 
     else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') v -= step;
     else if (event.key === 'Home') v = 0;
     else if (event.key === 'End') v = 1;
+    else if (event.key === 'Delete' || event.key === 'Backspace') {
+      // All of this knob's modulation goes.
+      event.preventDefault();
+      onChange(`mod1_${id}`, 0); onChange(`mod2_${id}`, 0);
+      return;
+    }
     else return;
     event.preventDefault();
     event.stopPropagation();
@@ -258,7 +264,12 @@ function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, 
       aria-label={`${title}${id === 'modWet' ? ' wet' : id === 'modLoop' ? ' loop' : ''}`}
       aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value * 100)} aria-valuetext={describe(id, params)}
       onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
-      onKeyDown={key} onFocus={() => onTouch(id)} onDoubleClick={() => onChange(id, KNOB_DEFAULTS[id])}>
+      onKeyDown={key} onFocus={() => onTouch(id)} onDoubleClick={(event) => {
+        // On a ring: that source comes off this knob, as a double-click resets anything else.
+        const ring = ringAt(event);
+        if (ring >= 0 && Math.abs(params[`mod${ring + 1}_${id}`] || 0) >= 0.005) onChange(`mod${ring + 1}_${id}`, 0);
+        else onChange(id, KNOB_DEFAULTS[id]);
+      }}>
       <svg viewBox="0 0 120 120" aria-hidden="true">
         <g className="knob-ticks">{ticks}</g>
         {hoverRing >= 0 && Math.abs(params[`mod${hoverRing + 1}_${id}`] || 0) < 0.005 && <circle cx="60" cy="60" r={55 + hoverRing * 3.5} fill="none" stroke={MOD_COLOURS[hoverRing]} strokeOpacity=".45"/>}
@@ -931,7 +942,7 @@ function App() {
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
-          <div><dt>MODULATION <span>/ two sources</span></dt><dd>Two sources, each with its own rate and shape. Drag one onto any knob or WET / LOOP to route it, and it moves that control around where the knob sits. Alt-drag a knob to set the selected source’s depth; a negative depth inverts it. <b>UNI</b> keeps the swing above the knob, <b>BOUNCE</b> reflects it so it never snaps back, <b>SWEEP</b> drops the shape and just climbs, <b>SYNC</b> makes a turn a division of the beat, and <b>HOLD</b> stops it where it is.</dd></div>
+          <div><dt>MODULATION <span>/ two sources</span></dt><dd>Two sources, each with its own rate and shape. Drag one onto any knob or WET / LOOP to route it, and it moves that control around where the knob sits. Drag up or down around a knob, or Alt-drag it, to set depth; a negative depth inverts it. Double-click a ring to remove that source, or press Delete on a clicked knob to remove both. <b>UNI</b> keeps the swing above the knob, <b>BOUNCE</b> reflects it so it never snaps back, <b>SWEEP</b> drops the shape and just climbs, <b>SYNC</b> makes a turn a division of the beat, and <b>HOLD</b> stops it where it is.</dd></div>
           <div><dt>SOFT <span>/ under LENGTH, in ENV</span></dt><dd>The slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. A rounder, less percussive stutter. Off is the sharp cut the pedal makes.</dd></div>
           <div><dt>BEFORE THE LOOP <span>/ wet channel</span></dt><dd>Puts the wet side before the looper: input, then wet, then loop. Catches and overdubs keep the wet sound, and it hears only the input, so ROUTING stands aside. Off, the loop stays clean and the wet side plays over it.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>

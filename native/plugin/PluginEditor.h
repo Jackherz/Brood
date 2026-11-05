@@ -28,6 +28,8 @@ public:
         void mouseDoubleClick(const juce::MouseEvent&) override;
         void mouseMove(const juce::MouseEvent&) override;
         void mouseExit(const juce::MouseEvent&) override;
+        bool keyPressed(const juce::KeyPress&) override;
+        void removeRoutes();
         // The rings are handles, as in Silt: a press around the knob drags that source's
         // depth, and where there's no ring yet it makes one for the selected source.
         int sourceAtRing(juce::Point<float>) const;
@@ -163,6 +165,7 @@ private:
     // timer may keep its value current (automation, mode changes). Anything else —
     // a switch, the loop state, a patch name — is left alone until replaced.
     void showReadout(const juce::String& label, const juce::String& value, bool follows = false);
+    friend struct ModSlider;
     void touch(const juce::String& id);
     // Shows only the tempo switches the current modes can use.
     void updateModeControls();

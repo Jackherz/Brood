@@ -83,6 +83,8 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 27: **a quicker way off.** Double-click a modulation ring to take that source off the
+  knob, and Delete on a clicked knob removes all of its modulation, in Brood and in Silt.
 - Round 26: **a folder each.** Brood and Silt keep what they send in their own folders, with
   their own categories. Sending between them doesn't depend on where either keeps it.
 - Round 25: **one recorder for the range.** The bars capture moved into the kit, so Silt and
