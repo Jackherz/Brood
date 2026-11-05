@@ -502,7 +502,7 @@ class BroodCore {
     this.envHold = 0;
     this.envMix = 0;
     this.slice = { start: 0, ph: 0 };
-    this.grain = [{ ph: 0, start: 0 }, { ph: 0.5, start: 0 }];
+    this.grain = [{ ph: 0, start: 0, dir: 1 }, { ph: 0.5, start: 0, dir: 1 }];
     this.rng = 22222;
     this.toneL = 0; this.toneR = 0;              // TONE hi-cut state
     this.wowPh = 0;                              // CLASSIC loop wobble
@@ -597,6 +597,7 @@ class BroodCore {
     this.stretchSpeed = stretchMap(this.e.modLoop);
     this.grain[0].ph = 0; this.grain[1].ph = 0.5;
     this.grain[0].start = 0; this.grain[1].start = 0;
+    this.grain[0].dir = 1; this.grain[1].dir = 1;
     this.loopState = 'play';
     this.events.push('loop-wave');
   }
@@ -790,13 +791,15 @@ class BroodCore {
       // A divided loop stretches each grain by div as well, or the grains would
       // still be read at full speed and the division would only thin them out.
       const Gs = G * ldiv;
+      // A grain keeps the direction it started with. Flipping grains already sounding as
+      // MODIFY passes the middle jumped both read heads, and that was a click.
       const dir = this.stretchSpeed < 0 ? -1 : 1;
       y = 0;
       for (let k = 0; k < 2; k++) {
         const g = this.grain[k];
         g.ph += 1 / Gs;
-        if (g.ph >= 1) { g.ph -= 1; g.start = pos + (this.rand() - 0.5) * 0.2 * G; }
-        const p = g.start + dir * g.ph * G;
+        if (g.ph >= 1) { g.ph -= 1; g.start = pos + (this.rand() - 0.5) * 0.2 * G; g.dir = dir; }
+        const p = g.start + g.dir * g.ph * G;
         const sw = Math.sin(Math.PI * g.ph);
         y += rd(p) * sw * sw * edgeAt(p);
       }

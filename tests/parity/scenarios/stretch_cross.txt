@@ -1,0 +1,15 @@
+# STRETCH with MODIFY swinging through the middle, so grains change direction, at two grain sizes.
+rate 48000
+seconds 8
+0 param loopMode 2
+0 param mix 0.8
+0 param balance 1
+0 param modLoop 0.5
+0 param length 0.5
+0 param mod1_modLoop 0.5
+0 param mod1Rate 0.6
+0 param mod1Wave 0.5
+200 fs loop down
+204 fs loop up
+1200 param length 0.2
+2000 param mod1Wave 0.75

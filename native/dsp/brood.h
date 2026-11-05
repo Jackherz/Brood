@@ -524,7 +524,7 @@ public:
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         softStart = softPh = softS = softOldFade = softOldS = 0;
         dubGain = dubPrev = 0; dubLast = -1;
-        grain[0] = {0, 0}; grain[1] = {0.5, 0};
+        grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
         rng = 22222;
         toneL = toneR = 0; wowPh = 0;
         fsWet = FsWet{}; fsLoop = FsLoop{};
@@ -765,7 +765,7 @@ private:
     struct Ramp { double ph = 0, dir = 1, prev = 0.5, next = 0.5; uint32_t rng = 0; };
     struct FsWet { bool active = false; int64_t t = 0; bool held = false; };
     struct FsLoop { bool active = false; int64_t t = 0; bool held = false; int histIdx = 0; uint32_t histCycle = 0; bool playing = false; };
-    struct Grain { double ph, start; };
+    struct Grain { double ph, start, dir; };
     struct Window { int W, start; };
 
     double fs = 48000;
@@ -807,7 +807,7 @@ private:
     double env = 0, envHold = 0, envMix = 0, sliceStart = 0, slicePh = 0;
     double softStart = 0, softPh = 0, softS = 0, softOldFade = 0, softOldS = 0;   // SOFT: the slice being let go
     bool envGate = false;
-    Grain grain[2] = {{0, 0}, {0.5, 0}};
+    Grain grain[2] = {{0, 0, 1}, {0.5, 0, 1}};
     uint32_t rng = 22222;
     FsWet fsWet; FsLoop fsLoop;
     double engaged = 0, peakIn = 0, peakOut = 0;
@@ -916,7 +916,7 @@ private:
         lsrc = n; loopPos = 0;
         tapeSpeed = speedMap(e.modLoop, 0.04);
         stretchSpeed = stretchMap(e.modLoop);
-        grain[0] = {0, 0}; grain[1] = {0.5, 0};
+        grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
         loopState = LoopState::Play;
         loopWaveDirty = true;
     }
@@ -1028,12 +1028,14 @@ private:
             // A divided loop stretches each grain by div as well, or the grains
             // would still be read at full speed.
             const double Gs = G * ldivd;
+            // A grain keeps the direction it started with. Flipping grains already sounding
+            // as MODIFY passes the middle jumped both read heads, and that was a click.
             const double dir = stretchSpeed < 0 ? -1.0 : 1.0;
             y = 0;
             for (auto& g : grain) {
                 g.ph += 1 / Gs;
-                if (g.ph >= 1) { g.ph -= 1; g.start = pos + (rand01() - 0.5) * 0.2 * G; }
-                const double q = g.start + dir * g.ph * G;
+                if (g.ph >= 1) { g.ph -= 1; g.start = pos + (rand01() - 0.5) * 0.2 * G; g.dir = dir; }
+                const double q = g.start + g.dir * g.ph * G;
                 const double sw = std::sin(kPi * g.ph);
                 y += rd(q) * sw * sw * edgeAt(q);
             }

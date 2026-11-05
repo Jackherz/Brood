@@ -80,6 +80,8 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 30: STRETCH keeps each grain's direction until the grain ends, so MODIFY passing through
+  the middle no longer clicks.
 - Round 29: **HI-Q.** A switch for sinc conversion into and out of the clock, with steeper input
   filtering. Off changes nothing. The look-ahead limiter is still to decide once HI-Q has been
   heard, and is the one upgrade that would add real reported latency.

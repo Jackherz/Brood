@@ -1360,3 +1360,26 @@ test('HI-Q stops the images and keeps more of the top, and off changes nothing',
   assert.ok(measure(1, 5040, 5040) > measure(0, 5040, 5040) + 2, 'more of the top survives');
   assert.ok(measure(1, 8640, 3360) < measure(0, 8640, 3360) - 10, 'less folds back');
 });
+
+test('STRETCH does not click as MODIFY passes through the middle', () => {
+  const worstCorner = (depth) => {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ loopMode: 2, mix: 1, balance: 1, modLoop: 0.5, mod1_modLoop: depth, mod1Rate: 0.6, mod1Wave: 0.5, length: 0.5 })) core.setParam(k, v);
+    const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
+    let t = 0, worst = 0, a = 0, b = 0, seen = 0;
+    const run = (seconds, level, measure) => {
+      for (let n = 0; n < Math.ceil((seconds * FS) / BLOCK); n++) {
+        for (let i = 0; i < BLOCK; i++, t++) inp[i] = level * Math.sin(2 * Math.PI * 110 * t / FS);
+        core.process(inp, L, R);
+        if (measure) for (let i = 0; i < BLOCK; i++) { if (seen++ >= 2) worst = Math.max(worst, Math.abs(L[i] - 2 * a + b)); b = a; a = L[i]; }
+      }
+    };
+    run(1.5, 0.4, false);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    run(0.3, 0, false);
+    run(4, 0, true);
+    return worst;
+  };
+  const moving = worstCorner(0.5);
+  assert.ok(moving < 0.05, `worst corner ${moving.toFixed(4)}, still ${worstCorner(0).toFixed(4)}`);
+});
