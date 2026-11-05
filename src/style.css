@@ -194,7 +194,7 @@ input[type="range"]::-moz-range-track { height: 2px; background: #181815; }
 input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: var(--paper); border: 1.5px solid #181815; border-radius: 0; box-shadow: inset 0 0 0 3px #181815; }
 .notice { margin-top: 8px; border: 1px solid #b9b8ad; background: #faf9f3; padding: 5px 6px; font: 13px/1.05 'Terminal', monospace; }
 .dip-heading { margin-top: 12px; }
-.dips { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; }
+.dips { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
 /* Each switch is a cell of a small table, as in the editor: hairline box, the
    switch inside it, the name under. Three floating things read as an accident. */
 .dip { display: flex; flex-direction: column; align-items: center; gap: 4px; background: #fbfaf5; border: 1px solid #b9b8ad; padding: 7px 2px 5px; font: 10px/1 'Terminal', monospace; color: #66665e; min-width: 0; text-align: center; white-space: normal; }

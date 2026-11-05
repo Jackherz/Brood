@@ -63,6 +63,7 @@ BroodProcessor::BroodProcessor()
           layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("classic", 1), "Classic (MK I quirks)", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Wet before the loop", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("hiQ", 1), "High quality conversion", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze (hold the wet side)", false));
           // The ramp engine: two generators, one per channel.
           // The two modulation sources: a rate, a shape and five switches each, and a
@@ -263,6 +264,7 @@ void BroodProcessor::pullParams() {
     p.classic = param("classic") > 0.5f;
     p.wetPre = param("wetPre") > 0.5f;
     p.loopDb = param("loopDb");
+    p.hiQ = param("hiQ") > 0.5f;
     p.envSoft = param("envSoft") > 0.5f;
     p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
     for (int k = 0; k < 2; ++k) {

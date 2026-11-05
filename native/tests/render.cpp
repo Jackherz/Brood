@@ -36,6 +36,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     }
     else if (n == "wetPre") p.wetPre = v != 0;
     else if (n == "loopDb") p.loopDb = v;
+    else if (n == "hiQ") p.hiQ = v != 0;
     else if (n == "envSoft") p.envSoft = v != 0;
     else if (n == "envSync") p.envSync = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }

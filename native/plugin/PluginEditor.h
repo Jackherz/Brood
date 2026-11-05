@@ -202,7 +202,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<Dip, 4> dips;
+    std::array<Dip, 5> dips;
     std::unique_ptr<juce::FileChooser> chooser;
     // Modulation: a chip per source, and the selected source's controls under them.
     struct SourceControls {
@@ -248,7 +248,7 @@ private:
     juce::Rectangle<int> whisperRect(int knob) const;
     int activeKnob = -1;
     juce::String activeKnobText;
-    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[4];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains

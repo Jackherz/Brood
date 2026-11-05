@@ -652,6 +652,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         {"smooth", "Smooth", "clock glides", "clock steps"},
         {"freeze", "Freeze", "held, ringing", "moving"},
         {"classic", "Classic", "mk I manners", "as built"},
+        {"hiQ", "HI-Q", "cleaner conversion, wet a little later", "no added delay"},
     };
     for (size_t i = 0; i < dips.size(); ++i) {
         const auto& def = dipDefs[i];
@@ -1105,10 +1106,10 @@ void BroodEditor::resized() {
         for (size_t i = 0; i < c.switches.size(); ++i) place(*c.switches[i], rampSwitchDesign[i]);
     }
 
-    // 03 SWITCHES: four cells, sized to their words.
+    // 03 SWITCHES: five cells, sized to their words.
     auto dipRow = dipArea.withTrimmedTop(kit::panelHeadHeight).reduced(10, 0).withSizeKeepingCentre(dipArea.getWidth() - 20, 26);
     dipRow.setY(dipArea.getY() + kit::panelHeadHeight + 5);
-    const int dipWeights[] = {72, 74, 72, 79};
+    const int dipWeights[] = {59, 62, 59, 66, 51};
     const int dipTotal = dipRow.getWidth();
     for (size_t i = 0; i < dips.size(); ++i) {
         dipCellDesign[i] = i + 1 == dips.size() ? dipRow : dipRow.removeFromLeft(dipTotal * dipWeights[i] / 297);
@@ -1156,8 +1157,9 @@ void BroodEditor::rebuildHoverHelp() {
         "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
         "the hold gesture without the holding: the wet side comes up frozen and rings on its own.",
         "the MK I in the room: a noisy clock, a loop that never sits still, a longer reverb.",
+        "cleaner conversion in and out of CLOCK: far fewer artifacts and a fuller top. the wet side runs a little later, 1 ms at an 8 kHz clock; dry isn't delayed. CLASSIC ignores it.",
     };
-    static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE", "CLASSIC"};
+    static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE", "CLASSIC", "HI-Q"};
     for (size_t i = 0; i < dips.size(); ++i) add(dipCellDesign[i], dipNames[i], dipText[i]);
     // These two are only in the table while their mode is on, so help never explains
     // a control that is not on the panel.

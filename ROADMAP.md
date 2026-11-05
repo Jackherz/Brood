@@ -17,9 +17,6 @@ Rounds 18 and 19 worked through most of the list written after round 17. What is
 
 - **A look-ahead limiter.** Round 18 widened the soft clip's knee; a true limiter
   with a millisecond or two of look-ahead would hold peaks without shaping them.
-- **Windowed-sinc or polyphase resampling.** Hermite in and out removed the
-  stair-step and most of the images; a longer kernel would go further, at a cost
-  in CPU and latency.
 - **One engine for a mono track.** A mono input runs two identical engines.
   Saving the second one is only possible when the host gives a mono bus (Live
   hands effects a stereo bus even on mono tracks), and the second engine would
@@ -83,6 +80,9 @@ policy, and a parity harness per model.
 
 ## Done
 
+- Round 29: **HI-Q.** A switch for sinc conversion into and out of the clock, with steeper input
+  filtering. Off changes nothing. The look-ahead limiter is still to decide once HI-Q has been
+  heard, and is the one upgrade that would add real reported latency.
 - Round 28: **Glyph Audio.** The range has a name, on the panels and in the plug-in lists, and
   the kit has its own repository (glyph-audio-kit), held here as a submodule.
 - Round 27: **a quicker way off.** Double-click a modulation ring to take that source off the

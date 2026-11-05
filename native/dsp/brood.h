@@ -145,6 +145,49 @@ inline double softLimit(double x) {
 // Four-point, third-order Hermite: x0..x1 is the span, xm1 and x2 its neighbours.
 // Linear interpolation dulls the top and leaves images of everything a read head
 // slides over; this is the cheapest curve that is smooth through the points.
+// HI-Q: a windowed sinc in place of the four-point curve, for the crossings into and out of
+// the core clock. A table of Kaiser-windowed sincs, one row per position between samples, rows
+// interpolated. It looks ahead by half its length, so the wet side runs that much later: eight
+// ticks going out, which is 1 ms at an 8 kHz clock. The dry side doesn't wait.
+constexpr int kSincPhases = 256;
+inline double besselI0(double x) {
+    double sum = 1, term = 1;
+    for (int k = 1; k < 32; ++k) { term *= (x / (2.0 * k)) * (x / (2.0 * k)); sum += term; }
+    return sum;
+}
+template <int Taps>
+struct SincTable {
+    double c[kSincPhases + 1][Taps];
+    SincTable(double cutoff, double beta) {
+        const double mid = Taps / 2 - 1;
+        for (int ph = 0; ph <= kSincPhases; ++ph) {
+            const double f = static_cast<double>(ph) / kSincPhases;
+            double total = 0;
+            for (int k = 0; k < Taps; ++k) {
+                const double t = k - mid - f;
+                const double x = kPi * cutoff * t;
+                const double sinc = std::fabs(x) < 1e-9 ? 1.0 : std::sin(x) / x;
+                const double w = t / (Taps / 2.0);
+                c[ph][k] = sinc * besselI0(beta * std::sqrt(std::max(0.0, 1 - w * w))) / besselI0(beta);
+                total += c[ph][k];
+            }
+            for (int k = 0; k < Taps; ++k) c[ph][k] /= total;
+        }
+    }
+    // `at(k)` gives sample k, oldest first; f is the position between samples mid and mid + 1.
+    template <typename At>
+    double read(const At& at, double f) const {
+        const double pos = f * kSincPhases;
+        const int i = std::min(kSincPhases - 1, static_cast<int>(pos));
+        const double fr = pos - i;
+        double y = 0;
+        for (int k = 0; k < Taps; ++k) y += at(k) * (c[i][k] + (c[i + 1][k] - c[i][k]) * fr);
+        return y;
+    }
+};
+inline const SincTable<8>& sincIn() { static const SincTable<8> t(0.97, 7.0); return t; }
+inline const SincTable<16>& sincOut() { static const SincTable<16> t(0.92, 8.0); return t; }
+
 inline double hermite(double xm1, double x0, double x1, double x2, double f) {
     const double c1 = 0.5 * (x1 - xm1);
     const double c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
@@ -436,6 +479,7 @@ struct Params {
     ModSource mods[2];
     bool envSync = false;                           // ENV slice follows the tempo
     bool envSoft = false;                           // ENV's slices fade in and out instead of cutting
+    bool hiQ = false;                               // HI-Q: sinc conversion into and out of the clock
     double loopDb = 0;                              // GAIN on the loop, -24..+12 dB
     bool wetPre = false;                            // the wet side runs into the looper instead of beside it
 };
@@ -455,9 +499,12 @@ public:
         s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width, {p.mods[0].rate, p.mods[1].rate}};
         e = Eff{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance};
         hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1; filterClassic = -1;
-        aa = reconL = reconR = LowPassN{};
+        aa = reconL = reconR = aaHi[0] = aaHi[1] = LowPassN{};
         for (auto& ch : ticks) for (auto& t : ch) t = 0;
         for (auto& x : xin) x = 0;
+        for (auto& x : xinHi) x = 0;
+        for (auto& ch : ticksHi) for (auto& t : ch) t = 0;
+        xinHiW = ticksHiW = 0; hiMix = 0;
         reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs); weave.init(kCoreFs);
         wetOn = freeze = wetMomentary = false;
         wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
@@ -557,12 +604,19 @@ public:
                     filterClock = c; filterClassic = classicNow;
                     const double fc = std::min({0.45 * c * fs, 0.45 * fs, 20000.0});
                     aa.set(fc, fs, !p.classic); reconL.set(fc, fs, !p.classic); reconR.set(fc, fs, !p.classic);
+                    // HI-Q's input: twice the filter, a little higher up, so more of the top
+                    // survives and less folds back.
+                    const double fcHi = std::min({0.48 * c * fs, 0.45 * fs, 20000.0});
+                    aaHi[0].set(fcHi, fs, true); aaHi[1].set(fcHi, fs, true);
                 }
             }
             const double dry = in ? in[i] : 0.0;
             pkIn = std::max(pkIn, std::fabs(dry));
             const double xa = aa.run(dry);
             xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
+            hiMix += ((p.hiQ && !p.classic ? 1.0 : 0.0) - hiMix) * 0.002;
+            const bool hi = hiMix > 1e-5;
+            if (hi) { xinHi[xinHiW] = aaHi[1].run(aaHi[0].run(dry)); xinHiW = (xinHiW + 1) & 7; }
             phase += clockRatio;
             while (phase >= 1) {
                 phase -= 1;
@@ -572,7 +626,9 @@ public:
                 // repeated one sample in four at 48 kHz, a stair-step jitter that was
                 // recorded into every loop. CLASSIC keeps that hold as part of its grit.
                 const double u = 1 - phase / clockRatio;
-                coreTick(p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u));
+                double xt = p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
+                if (hi) xt += (sincIn().read([this](int k) { return xinHi[(xinHiW + k) & 7]; }, u) - xt) * hiMix;
+                coreTick(xt);
             }
             const double f = phase;
             double il, ir;
@@ -583,8 +639,12 @@ public:
                 il = hermite(ticks[0][0], ticks[0][1], ticks[0][2], ticks[0][3], f);
                 ir = hermite(ticks[1][0], ticks[1][1], ticks[1][2], ticks[1][3], f);
             }
+            const double sincL = hi ? sincOut().read([this](int k) { return ticksHi[0][(ticksHiW + k) & 15]; }, f) : 0.0;
+            const double sincR = hi ? sincOut().read([this](int k) { return ticksHi[1][(ticksHiW + k) & 15]; }, f) : 0.0;
             double el = reconL.run(il);
             double er = reconR.run(ir);
+            // HI-Q: the sinc already stops the images, so the droop of the filter isn't needed.
+            if (hi) { el += (sincL - el) * hiMix; er += (sincR - er) * hiMix; }
             // STEREO WIDTH: mid/side on the effect bus only — the dry signal must
             // not move. 0.5 is the image as built, so that setting is untouched.
             if (std::fabs(s.width - 0.5) > 0.002) {
@@ -714,12 +774,15 @@ private:
     int64_t hostCount = 0;
     double phase = 0, clockRatio = 1, filterClock = -1;
     int filterClassic = -1;
-    LowPassN aa, reconL, reconR;
+    LowPassN aa, reconL, reconR, aaHi[2];
     // The last four core ticks per channel, oldest first. The host-rate output is
     // a Hermite curve through the middle two (one tick of latency), or for
     // CLASSIC the old straight line between the newest two.
     double ticks[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
     double xin[4] = {0, 0, 0, 0};   // the last four host input samples, oldest first
+    double xinHi[8] = {0, 0, 0, 0, 0, 0, 0, 0}, ticksHi[2][16] = {{0}, {0}};   // HI-Q's longer memory of both
+    int xinHiW = 0, ticksHiW = 0;
+    double hiMix = 0;               // HI-Q, faded in and out so switching it doesn't click
 
     Reverb reverb; Delay delay; Slip slip; Weave weave;
     bool wetOn = false, freeze = false, wetMomentary = false;
@@ -1184,6 +1247,8 @@ private:
         for (auto& ch : ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
         ticks[0][3] = wl * wetLvl + ld;
         ticks[1][3] = wr * wetLvl + ld;
+        ticksHi[0][ticksHiW] = ticks[0][3]; ticksHi[1][ticksHiW] = ticks[1][3];
+        ticksHiW = (ticksHiW + 1) & 15;
     }
 };
 

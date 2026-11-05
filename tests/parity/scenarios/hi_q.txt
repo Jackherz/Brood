@@ -1,0 +1,21 @@
+# HI-Q: the sinc crossings, switched on and off while the wet side and a loop run at a low
+# clock, through a clock change and CLASSIC, which ignores it.
+rate 48000
+seconds 8
+0 param wetMode 1
+0 param loopMode 1
+0 param routing 1
+0 param clock 0.5
+0 param time 0.4
+0 param mix 0.7
+0 param hiQ 1
+0 fs wet down
+3 fs wet up
+200 fs loop down
+204 fs loop up
+700 param hiQ 0
+1000 param hiQ 1
+1300 param clock 0.2
+1700 param clock 1
+2100 param classic 1
+2400 param classic 0

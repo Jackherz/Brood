@@ -134,6 +134,40 @@ class LowPassN {
 // Four-point, third-order Hermite: x0..x1 is the span, xm1 and x2 its neighbours.
 // Linear interpolation dulls the top and leaves images of everything a read head
 // slides over; this is the cheapest curve that is smooth through the points.
+// HI-Q: a windowed sinc in place of the four-point curve, for the crossings into and out of
+// the core clock. A table of Kaiser-windowed sincs, one row per position between samples, rows
+// interpolated. It looks ahead by half its length, so the wet side runs that much later: eight
+// ticks going out, which is 1 ms at an 8 kHz clock. The dry side doesn't wait.
+const SINC_PHASES = 256;
+const besselI0 = (x) => { let sum = 1, term = 1; for (let k = 1; k < 32; k++) { term *= (x / (2 * k)) * (x / (2 * k)); sum += term; } return sum; };
+function sincTable(taps, cutoff, beta) {
+  const table = [];
+  const mid = taps / 2 - 1;
+  for (let ph = 0; ph <= SINC_PHASES; ph++) {
+    const f = ph / SINC_PHASES, row = new Float64Array(taps);
+    let total = 0;
+    for (let k = 0; k < taps; k++) {
+      const t = k - mid - f, x = Math.PI * cutoff * t;
+      const sinc = Math.abs(x) < 1e-9 ? 1 : Math.sin(x) / x;
+      const w = t / (taps / 2);
+      row[k] = sinc * besselI0(beta * Math.sqrt(Math.max(0, 1 - w * w))) / besselI0(beta);
+      total += row[k];
+    }
+    for (let k = 0; k < taps; k++) row[k] /= total;
+    table.push(row);
+  }
+  return table;
+}
+const SINC_IN = sincTable(8, 0.97, 7), SINC_OUT = sincTable(16, 0.92, 8);
+// `ring` holds the samples and `w` is the oldest; f is the position between samples mid and mid + 1.
+function sincRead(table, taps, ring, w, f) {
+  const pos = f * SINC_PHASES, i = Math.min(SINC_PHASES - 1, Math.floor(pos)), fr = pos - i;
+  const a = table[i], b = table[i + 1];
+  let y = 0;
+  for (let k = 0; k < taps; k++) y += ring[(w + k) & (taps - 1)] * (a[k] + (b[k] - a[k]) * fr);
+  return y;
+}
+
 function hermite(xm1, x0, x1, x2, f) {
   const c1 = 0.5 * (x1 - xm1);
   const c2 = xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2;
@@ -397,7 +431,7 @@ class BroodCore {
       sync: 0, bpm: 120,
       loopEnd: 1, start: 0, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
-      wetPre: 0, envSoft: 0, loopDb: 0,
+      wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
       // 0 is no route) for each control it can move.
       ...Object.fromEntries([1, 2].flatMap((n) => [
@@ -426,6 +460,10 @@ class BroodCore {
     // CLASSIC the old straight line between the newest two.
     this.ticks = [[0, 0, 0, 0], [0, 0, 0, 0]];
     this.xin = [0, 0, 0, 0];   // the last four host input samples, oldest first
+    this.xinHi = new Float64Array(8); this.ticksHi = [new Float64Array(16), new Float64Array(16)];   // HI-Q's longer memory of both
+    this.xinHiW = 0; this.ticksHiW = 0;
+    this.hiMix = 0;            // HI-Q, faded in and out so switching it doesn't click
+    this.aaHi = [new LowPassN(), new LowPassN()];
 
     // wet channel
     this.reverb = new Reverb(CORE_FS);
@@ -987,6 +1025,8 @@ class BroodCore {
     for (const ch of this.ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
     this.ticks[0][3] = wl * wetLvl + ld;
     this.ticks[1][3] = wr * wetLvl + ld;
+    this.ticksHi[0][this.ticksHiW] = this.ticks[0][3]; this.ticksHi[1][this.ticksHiW] = this.ticks[1][3];
+    this.ticksHiW = (this.ticksHiW + 1) & 15;
   }
 
   // in: Float32Array (mono), outL/outR: Float32Array
@@ -1030,6 +1070,10 @@ class BroodCore {
           this.filterClock = c; this.filterClassic = classicNow;
           const fc = Math.min(0.45 * c * fs, 0.45 * fs, 20000);
           this.aa.set(fc, fs, !p.classic); this.reconL.set(fc, fs, !p.classic); this.reconR.set(fc, fs, !p.classic);
+          // HI-Q's input: twice the filter, a little higher up, so more of the top survives
+          // and less folds back.
+          const fcHi = Math.min(0.48 * c * fs, 0.45 * fs, 20000);
+          this.aaHi[0].set(fcHi, fs, true); this.aaHi[1].set(fcHi, fs, true);
         }
       }
 
@@ -1038,6 +1082,9 @@ class BroodCore {
       const xa = this.aa.run(dry);
       const xin = this.xin;
       xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
+      this.hiMix += ((p.hiQ && !p.classic ? 1 : 0) - this.hiMix) * 0.002;
+      const hi = this.hiMix > 1e-5;
+      if (hi) { this.xinHi[this.xinHiW] = this.aaHi[1].run(this.aaHi[0].run(dry)); this.xinHiW = (this.xinHiW + 1) & 7; }
       this.phase += this.clockRatio;
       while (this.phase >= 1) {
         this.phase -= 1;
@@ -1047,7 +1094,9 @@ class BroodCore {
         // four at 48 kHz, a stair-step jitter that was recorded into every loop.
         // CLASSIC keeps that hold as part of its grit.
         const u = 1 - this.phase / this.clockRatio;
-        this.coreTick(p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u));
+        let xt = p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
+        if (hi) xt += (sincRead(SINC_IN, 8, this.xinHi, this.xinHiW, u) - xt) * this.hiMix;
+        this.coreTick(xt);
       }
       const f = this.phase;
       const t = this.ticks;
@@ -1059,8 +1108,12 @@ class BroodCore {
         il = hermite(t[0][0], t[0][1], t[0][2], t[0][3], f);
         ir = hermite(t[1][0], t[1][1], t[1][2], t[1][3], f);
       }
+      const sincL = hi ? sincRead(SINC_OUT, 16, this.ticksHi[0], this.ticksHiW, f) : 0;
+      const sincR = hi ? sincRead(SINC_OUT, 16, this.ticksHi[1], this.ticksHiW, f) : 0;
       let el = this.reconL.run(il);
       let er = this.reconR.run(ir);
+      // HI-Q: the sinc already stops the images, so the droop of the filter isn't needed.
+      if (hi) { el += (sincL - el) * this.hiMix; er += (sincR - er) * this.hiMix; }
       // STEREO WIDTH: mid/side on the effect bus only — the dry signal must not
       // move. 0.5 is the image as built, so the neutral setting is untouched.
       if (Math.abs(s.width - 0.5) > 0.002) {

@@ -1343,3 +1343,20 @@ test('overdub leaves no seams in the take while LENGTH is modulated', () => {
   for (let i = 1; i < core.lsrc; i++) { worst = Math.max(worst, Math.abs(core.loopBuf[i] - core.loopBuf[i - 1])); peak = Math.max(peak, Math.abs(core.loopBuf[i])); }
   assert.ok(worst / peak < 0.03, `worst step ${worst.toFixed(4)} against a peak of ${peak.toFixed(3)}`);
 });
+
+test('HI-Q stops the images and keeps more of the top, and off changes nothing', () => {
+  const FS2 = FS;
+  const measure = (hiQ, f, at) => {
+    const core = new BroodCore(FS2);
+    for (const [k, v] of Object.entries({ wetMode: 1, mix: 1, time: 0.2, modWet: 0, clock: 0.5, hiQ })) core.setParam(k, v);
+    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    const { L } = render(core, 2.2, (t) => 0.3 * Math.sin(2 * Math.PI * f * t));
+    let c = 0, s = 0;
+    for (let i = FS2; i < L.length; i++) { const p = 2 * Math.PI * at * i / FS2; c += L[i] * Math.cos(p); s += L[i] * Math.sin(p); }
+    return 20 * Math.log10((2 * Math.hypot(c, s) / (L.length - FS2) + 1e-12) / 0.3);
+  };
+  // Clock 12 kHz: a 5 kHz tone's image at 7 kHz, its level, and an 8.6 kHz tone folding to 3.4 kHz.
+  assert.ok(measure(1, 5040, 6960) < measure(0, 5040, 6960) - 10, 'the image falls');
+  assert.ok(measure(1, 5040, 5040) > measure(0, 5040, 5040) + 3, 'more of the top survives');
+  assert.ok(measure(1, 8640, 3360) < measure(0, 8640, 3360) - 10, 'less folds back');
+});
