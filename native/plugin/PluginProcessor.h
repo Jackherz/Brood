@@ -4,6 +4,7 @@
 #include <optional>
 #include "dsp/brood.h"
 #include "kit/Bench.h"
+#include "kit/TapeInput.h"
 
 // The pedal as an AudioProcessor. Every control (knobs, toggles, dips, and both
 // footswitches as momentary switches) is a host parameter, so a DAW can automate
@@ -46,7 +47,7 @@ public:
     // ---- input source ----
     enum Source { Live = 0, Demo = 1, File = 2 };
     std::atomic<int> source { Live };
-    std::atomic<float> inputGain { 1.f };
+    std::atomic<float> inputGain { 1.f };   // up to +24 dB; past 0 dB it drives the tape
     bool loadFile(const juce::File& f);           // message thread
     bool canReadAudio(const juce::File& f) const { return formats_.findFormatForFileExtension(f.getFileExtension()) != nullptr; }
     // The sound the patch box shows; kept with the project.
@@ -99,6 +100,8 @@ private:
     PendingTake pendingTake_[2];
     void applyPendingTakes();
     std::vector<float> inputLeft_, inputRight_, scratchLeft_, scratchRight_;
+    float inputGainNow_ = 1.f;   // audio thread: ramped across a block so moving it can't click
+    kit::TapeInput tape_;
     int dubBlocks_ = 0;
     bool pendingWave_ = false;
 

@@ -259,6 +259,22 @@ int main() {
         kit::bench::folderForTests = juce::File();
         folder.deleteRecursively();
     }
+    // The input level past 0 dB drives the tape, for everything after it: no peak, even dry.
+    {
+        BroodProcessor driven;
+        driven.setPlayConfigDetails(2, 2, rate, size);
+        driven.prepareToPlay(rate, size);
+        driven.inputGain = 15.85f;
+        juce::AudioBuffer<float> io(2, size);
+        juce::MidiBuffer none;
+        float most = 0.f;
+        for (int b = 0; b < 200; ++b) {
+            for (int n = 0; n < size; ++n) for (int c = 0; c < 2; ++c) io.setSample(c, n, 0.9f * std::sin(static_cast<float>(b * size + n) * 0.03f));
+            driven.processBlock(io, none);
+            if (b > 20) most = juce::jmax(most, io.getMagnitude(0, size));
+        }
+        CHECK(most > 0.5f && most < 1.0f, "cranked input rounds over");
+    }
     // SEND's bars: the exact output, and nothing goes out early.
     {
         BroodProcessor catcher;

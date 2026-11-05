@@ -551,6 +551,7 @@ class BroodCore {
     this.grain = [{ ph: 0, start: 0, dir: 1 }, { ph: 0.5, start: 0, dir: 1 }];
     this.rng = 22222;
     this.toneL = 0; this.toneR = 0;              // TONE hi-cut state
+    this.warmIn = [0, 0]; this.warmOut = [0, 0];
     this.wowPh = 0;                              // CLASSIC loop wobble
     // Two generators, each with its own phase and its own seeded stream (never the
     // shared rng: STRETCH grains and CLASSIC hiss draw from that one).
@@ -1042,8 +1043,17 @@ class BroodCore {
     // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
     const toneAmt = 1 - clamp(this.s.tone);
     if (toneAmt > 1e-4) {
+      // Closing it warms as well as darkens: the range's saturation, the same curve Silt's
+      // filter drives, with a little second harmonic and its offset taken out.
+      const warm = (x, ch) => {
+        const y = Math.tanh(1.5 * x) / 1.5 + 0.03 * x * x / (1 + x * x);
+        this.warmOut[ch] = y - this.warmIn[ch] + 0.9995 * this.warmOut[ch];
+        this.warmIn[ch] = y;
+        return this.warmOut[ch];
+      };
+      const warmL = warm(wl, 0), warmR = warm(wr, 1);
       const c = this.toneCoeff();
-      this.toneL += c * (wl - this.toneL); this.toneR += c * (wr - this.toneR);
+      this.toneL += c * (warmL - this.toneL); this.toneR += c * (warmR - this.toneR);
       wl += (this.toneL - wl) * toneAmt;
       wr += (this.toneR - wr) * toneAmt;
     }

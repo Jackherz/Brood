@@ -166,6 +166,8 @@ public:
 
 private:
     void timerCallback() override;
+    int timerTick = 0;
+    bool loopViewMoved = true;
     // `follows` marks a readout that belongs to the last touched parameter, so the
     // timer may keep its value current (automation, mode changes). Anything else —
     // a switch, the loop state, a patch name — is left alone until replaced.
@@ -208,7 +210,9 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
     // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<Dip, 5> dips;
+    std::array<Dip, 3> dips;
+    std::unique_ptr<Stepper> character;
+    juce::String knobName(size_t knob) const;
     std::unique_ptr<juce::FileChooser> chooser;
     // Modulation: a chip per source, and the selected source's controls under them.
     struct SourceControls {
@@ -266,7 +270,7 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
+    juce::Rectangle<int> characterDesign, srcArea, dipArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
     juce::Rectangle<int> rampWaveDesign, sourceBoxDesign, loadButtonDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

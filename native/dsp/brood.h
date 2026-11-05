@@ -590,6 +590,7 @@ public:
         grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
         rng = 22222;
         toneL = toneR = 0; wowPh = 0;
+        warmIn[0] = warmIn[1] = warmOut[0] = warmOut[1] = 0;
         fsWet = FsWet{}; fsLoop = FsLoop{};
         engaged = 0; peakIn = peakOut = 0;
         loopWaveDirty = false;
@@ -875,6 +876,7 @@ private:
     FsWet fsWet; FsLoop fsLoop;
     double engaged = 0, peakIn = 0, peakOut = 0;
     bool loopWaveDirty = false;
+    double warmIn[2] = {0, 0}, warmOut[2] = {0, 0};
     double toneL = 0, toneR = 0, wowPh = 0;   // hidden-option state
 
     // Two generators, each with its own phase and its own seeded stream (never the
@@ -1284,8 +1286,17 @@ private:
         // TONE: hi-cut on the wet bus. A blend, so fully open is bit-transparent.
         const double toneAmt = 1 - clampd(s.tone, 0, 1);
         if (toneAmt > 1e-4) {
+            // Closing it warms as well as darkens: the range's saturation, the same curve
+            // Silt's filter drives, with a little second harmonic and its offset taken out.
+            const auto warm = [](double x, double& in, double& out) {
+                const double y = std::tanh(1.5 * x) / 1.5 + 0.03 * x * x / (1 + x * x);
+                out = y - in + 0.9995 * out;
+                in = y;
+                return out;
+            };
+            const double warmL = warm(wl, warmIn[0], warmOut[0]), warmR = warm(wr, warmIn[1], warmOut[1]);
             const double c = toneCoeff();
-            toneL += c * (wl - toneL); toneR += c * (wr - toneR);
+            toneL += c * (warmL - toneL); toneR += c * (warmR - toneR);
             wl += (toneL - wl) * toneAmt;
             wr += (toneR - wr) * toneAmt;
         }

@@ -61,9 +61,8 @@ BroodProcessor::BroodProcessor()
           layout.add(loopParam("width", "Stereo width", 0.5f));
           layout.add(loopParam("wetDiv", "Wet clock division", 0.f));
           layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
-          layout.add(std::make_unique<APB>(juce::ParameterID("classic", 1), "Classic (MK I quirks)", false));
+          layout.add(loopParam("character", "Wear (clean, pedal, worn)", 0.5f));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Wet before the loop", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("hiQ", 1), "High quality conversion", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze (hold the wet side)", false));
           // The ramp engine: two generators, one per channel.
           // The two modulation sources: a rate, a shape and five switches each, and a
@@ -233,6 +232,7 @@ void BroodProcessor::makeDemo(double sr) {
 }
 
 void BroodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+    tape_.prepare(sampleRate);
     // DAWs may re-prepare for a sample-rate or block-size change. Preserve the
     // wet switch while resetting the DSP buffers, unless state is pending.
     if (restoreWet_.load() < 0 && ui.wetOn.load()) restoreWet_ = 1;
@@ -261,10 +261,11 @@ void BroodProcessor::pullParams() {
     p.start = param("start");
     p.tone = param("tone"); p.fade = param("fade"); p.width = param("width");
     p.wetDiv = param("wetDiv"); p.loopDiv = param("loopDiv");
-    p.classic = param("classic") > 0.5f;
+    // WEAR is one line from clean to worn: HI-Q conversion, the pedal, the MK I's noisy manners.
+    p.classic = param("character") > 0.75f;
+    p.hiQ = param("character") < 0.25f;
     p.wetPre = param("wetPre") > 0.5f;
     p.loopDb = param("loopDb");
-    p.hiQ = param("hiQ") > 0.5f;
     p.envSoft = param("envSoft") > 0.5f;
     p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
     for (int k = 0; k < 2; ++k) {
@@ -371,7 +372,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
-            else if (cc == 71) id = "classic";
+            else if (cc == 71) id = "character";
             else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }
@@ -394,13 +395,12 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     const auto needed = static_cast<size_t>(n);
     if (inputLeft_.size() < needed) { inputLeft_.resize(needed); inputRight_.resize(needed); scratchLeft_.resize(needed); scratchRight_.resize(needed); }
     float* xL = inputLeft_.data(); float* xR = inputRight_.data();
-    const float gain = inputGain.load();
     const int src = source.load();
     if (src == Demo && demo_.getNumSamples() > 0) {
         const float* d = demo_.getReadPointer(0);
         const int len = demo_.getNumSamples();
         int pos = static_cast<int>(demoPos_);
-        for (int i = 0; i < n; ++i) { xL[i] = xR[i] = d[pos] * gain; if (++pos >= len) pos = 0; }
+        for (int i = 0; i < n; ++i) { xL[i] = xR[i] = d[pos]; if (++pos >= len) pos = 0; }
         demoPos_ = pos;
     } else if (src == File) {
         std::fill(xL, xL + n, 0.f); std::fill(xR, xR + n, 0.f);
@@ -413,15 +413,27 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             for (int i = 0; i < n; ++i) {
                 const int i0 = static_cast<int>(filePos_), i1 = (i0 + 1) % len;
                 const float fr = static_cast<float>(filePos_ - i0);
-                xL[i] = (left[i0] + (left[i1] - left[i0]) * fr) * gain;
-                xR[i] = (right[i0] + (right[i1] - right[i0]) * fr) * gain;
+                xL[i] = (left[i0] + (left[i1] - left[i0]) * fr);
+                xR[i] = (right[i0] + (right[i1] - right[i0]) * fr);
                 filePos_ += ratio; while (filePos_ >= len) filePos_ -= len;
             }
         }
     } else {
         const float* left = nIn > 0 ? buffer.getReadPointer(0) : nullptr;
         const float* right = nIn > 1 ? buffer.getReadPointer(1) : left;
-        for (int i = 0; i < n; ++i) { xL[i] = left ? left[i] * gain : 0.f; xR[i] = right ? right[i] * gain : 0.f; }
+        for (int i = 0; i < n; ++i) { xL[i] = left ? left[i] : 0.f; xR[i] = right ? right[i] : 0.f; }
+    }
+
+    // The input level, and past 0 dB the tape: everything after it hears the driven sound.
+    const float gain = inputGain.load();
+    if (gain != 1.f || inputGainNow_ != 1.f) {
+        const float step = (gain - inputGainNow_) / static_cast<float>(n);
+        for (int i = 0; i < n; ++i) {
+            const float g = inputGainNow_ + step * static_cast<float>(i + 1);
+            xL[i] *= g; xR[i] *= g;
+        }
+        tape_.process(xL, xR, n, juce::Decibels::gainToDecibels(inputGainNow_, -100.f), juce::Decibels::gainToDecibels(gain, -100.f));
+        inputGainNow_ = gain;
     }
 
     // Each engine is mono in, stereo out. The left engine supplies the left
@@ -562,7 +574,7 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
         if (!xml->hasTagName(apvts.state.getType()) && !xml->hasTagName(kLegacyStateTag)) return;
         xml->setTagName(apvts.state.getType().toString());
         auto state = juce::ValueTree::fromXml(*xml);
-        if (state.hasProperty("source")) { const int saved = static_cast<int>(state["source"]); source = saved == File ? Live : juce::jlimit(0, 1, saved); }
+        if (state.hasProperty("source") && wrapperType == wrapperType_Standalone) { const int saved = static_cast<int>(state["source"]); source = saved == File ? Live : juce::jlimit(0, 1, saved); }
         if (state.hasProperty("inputGain")) inputGain = static_cast<float>(state["inputGain"]);
         if (state.hasProperty("presetName")) presetName = state["presetName"].toString();
         if (state.hasProperty("wetEnabled")) restoreWet_ = static_cast<bool>(state["wetEnabled"]) ? 1 : 0;
