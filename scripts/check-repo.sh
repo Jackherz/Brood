@@ -35,6 +35,7 @@ binaries=""
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   [ -f "$f" ] || continue
+  case "$f" in docs/images/*) continue ;; esac   # README screenshots: never part of a build
   if LC_ALL=C grep -Iq . < "$f" 2>/dev/null; then :; else binaries="$binaries $f"; fi
 done <<EOF
 $(git ls-files -o --exclude-standard 2>/dev/null; git ls-files -m 2>/dev/null)
