@@ -7,3 +7,5 @@ native/build/
 assets/fonts/*.ttf
 *.patch
 *.log
+native/build-release/
+release/

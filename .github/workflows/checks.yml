@@ -17,7 +17,6 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
-          token: ${{ secrets.KIT_TOKEN }}   # the kit is a private repository
 
       - uses: actions/setup-node@v4
         with:

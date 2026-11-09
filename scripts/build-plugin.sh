@@ -21,7 +21,7 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-BUILD="$ROOT/native/build"
+BUILD="${BROOD_BUILD_DIR:-$ROOT/native/build}"   # the release packager builds elsewhere
 
 # Which source this build came from. A warning report only means something if
 # the tree it came from is known: `-dirty` means local edits, `unknown` means a
