@@ -32,23 +32,25 @@ Every control is described in the [manual](docs/MANUAL.md).
 ## Status
 
 Brood is in active development. The plug-in is developed and tested in Ableton Live 12
-on macOS; other hosts and platforms are untested. There are no downloadable builds:
-build it from source.
+on macOS; other hosts and platforms are untested.
 
-## Get started
+## Install
 
-**Plug-in (macOS):** needs the Xcode command line tools and CMake.
+Download `Brood-<version>-macOS.pkg` from the
+[latest release](https://github.com/Jackherz/Brood/releases/latest). It works on
+Apple Silicon and Intel Macs, and installs the VST3, the Audio Unit and the standalone
+app. It's free, and not notarised by Apple, so macOS asks you to allow it once:
 
-```sh
-git clone --recurse-submodules https://github.com/Jackherz/Brood.git
-cd Brood
-make install
-```
+1. Open the package. macOS says it can't verify it: click **Done**.
+2. Open **System Settings > Privacy & Security**, scroll to *Security*, and click
+   **Open Anyway** beside the message about Brood. Confirm with your password.
+3. The installer opens. Install, then restart your DAW and rescan its plug-ins.
 
-Then restart your DAW and rescan. [INSTALL.md](INSTALL.md) has the full steps, VS Code
-tasks and troubleshooting.
+To build it yourself instead, see [INSTALL.md](INSTALL.md).
 
-**Browser version:** needs Node.js 20 or newer.
+## Browser version
+
+Needs Node.js 20 or newer.
 
 ```sh
 npm ci
@@ -60,7 +62,7 @@ stays in your browser. Use headphones with live input.
 
 ## Documentation
 
-- [INSTALL.md](INSTALL.md): installing on macOS, and what to do if your DAW can't see it
+- [INSTALL.md](INSTALL.md): installing and building on macOS, and what to do if your DAW can't see it
 - [docs/MANUAL.md](docs/MANUAL.md): every control, the MIDI map, and how the sound is made
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): building by hand, tests, repository layout
 - [ROADMAP.md](ROADMAP.md): what's next, and what is deliberately left out

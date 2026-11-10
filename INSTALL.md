@@ -1,17 +1,43 @@
 # Installing Brood on macOS
 
-Brood is built on your own Mac from this repository: there are no downloadable bundles.
-Building locally means the plug-in matches your machine and macOS version, is signed for
-it, and is never blocked by Gatekeeper.
+## From a release
 
-## 1. Install the tools
+Download `Brood-<version>-macOS.pkg` from the
+[latest release](https://github.com/Jackherz/Brood/releases/latest). It's Universal
+(Apple Silicon and Intel) and installs:
+
+| Format | Installed to |
+| --- | --- |
+| VST3 | `Library/Audio/Plug-Ins/VST3/Brood.vst3` |
+| Audio Unit | `Library/Audio/Plug-Ins/Components/Brood.component` |
+| Standalone | `Applications/Brood.app` |
+
+The installer asks whether to install for all users (`/Library`, `/Applications`) or
+just you (the same folders in your home folder).
+
+The package is free and isn't notarised by Apple, so macOS blocks it the first time:
+
+1. Open the package. macOS says it can't verify it: click **Done** (not *Move to Bin*).
+2. Open **System Settings > Privacy & Security** and scroll to *Security*. Beside the
+   message about the Brood package, click **Open Anyway**, then confirm with your
+   password or Touch ID.
+3. The installer opens. Install, quit your DAW completely, reopen it and rescan.
+
+You only allow it once per download. Brood's bundles are ad-hoc signed, which is all
+macOS needs to run them; the installed plug-ins load without further steps.
+
+## Building from source
+
+Building locally means the plug-in matches your machine and macOS version exactly.
+
+### 1. Install the tools
 
 ```sh
 xcode-select --install     # Apple's compiler and SDK
 brew install cmake         # CMake 3.22 or newer
 ```
 
-## 2. Get the source
+### 2. Get the source
 
 ```sh
 git clone --recurse-submodules https://github.com/Jackherz/Brood.git
@@ -21,7 +47,7 @@ cd Brood
 `--recurse-submodules` brings in the panel kit at `kit/`. The interface fonts are
 downloaded during the build by `scripts/fetch-fonts.sh`.
 
-## 3. Build and install
+### 3. Build and install
 
 ```sh
 make install
@@ -40,7 +66,7 @@ the commit it came from (`==> Source 1c3fdc4`; `-dirty` means local edits).
 
 To update later: `make update` pulls, updates the kit and installs again.
 
-## 4. Find it in your DAW
+### 4. Find it in your DAW
 
 Quit the DAW completely and reopen it, so it loads the new build. In Ableton Live, then
 choose `Settings > Plug-Ins > Rescan` while holding **Option**. Brood is an effect: look
