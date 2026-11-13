@@ -9,15 +9,18 @@ const kit::Stock& stock() {
         k.page = juce::Colour(0xffefebe0); k.panel = juce::Colour(0xfff6f3ea); k.head = juce::Colour(0xffefebe0);
         k.rule = juce::Colour(0xffbdb9ab); k.onSunk = k.panel; k.onAccent = k.panel;
         k.accent = juce::Colour(0xff8f5f12); k.lit = juce::Colour(0xffc98f2e);
+        k.frameless = true;   // rounded surfaces and plates, no frames or hard shadows
         return k;
     }();
     return s;
 }
 const juce::Colour kInk = stock().ink, kPaper = stock().panel, kMuted = stock().soft, kLine = stock().rule, kPanel = stock().head;
 
-juce::Font font(float size) { return kit::label(size); }
+juce::Font font(float size) { return kit::label(size); }                  // figures and readouts: the monospace
+juce::Font nameFont(float size) { return kit::nameFont(true, size); }        // names and labels: the sans face
+void plate(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour colour, float corner = 4.f) { g.setColour(colour); g.fillRoundedRectangle(r, corner); }
 juce::Font capFont() { return font(14); }
-juce::Font labelFont() { return font(16); }
+juce::Font labelFont() { return nameFont(16); }
 juce::Font textFont() { return font(18); }
 constexpr int kSp1 = 4, kSp2 = 8;
 constexpr int balanceRouteBits = (1 << 6) | (1 << (brood::kModTargets + 6));   // in routeMask(): either source to WET/LOOP
@@ -100,7 +103,7 @@ void BroodEditor::Look::drawLinearSlider(juce::Graphics& g, int x, int y, int w,
         const float hi = juce::jlimit(0.f, 1.f, uni ? juce::jmax(at, at + d) : at + std::fabs(d));
         // Clear of the tab: the first source's swing under the track, the second's over it.
         g.setColour(BroodEditor::modColour(k).withAlpha(on ? 1.f : 0.35f));
-        g.fillRect(left + (right - left) * lo, k == 0 ? cy + 7.f : cy - 12.f, (right - left) * (hi - lo), 3.f);
+        g.fillRoundedRectangle(left + (right - left) * lo, k == 0 ? cy + 8.f : cy - 13.f, (right - left) * (hi - lo), 3.f, 1.5f);
         ++routes;
         if (on) moving = moving < 0 ? k : 2;
     }
@@ -109,9 +112,7 @@ void BroodEditor::Look::drawLinearSlider(juce::Graphics& g, int x, int y, int w,
     const float now = juce::jlimit(0.f, 1.f, proc.ui.effective[static_cast<size_t>(mod->target)].load());
     const auto tab = juce::Rectangle<float>(5.f, 13.f).withCentre({left + (right - left) * now, cy - 1.f});
     g.setColour(moving == 0 || moving == 1 ? BroodEditor::modColour(moving) : stock().ink);
-    g.fillRect(tab);
-    g.setColour(stock().ink);
-    g.drawRect(tab, 1.f);
+    g.fillRoundedRectangle(tab, 2.f);
 }
 
 int BroodEditor::ModSlider::sourceAtRing(juce::Point<float> p) const {
@@ -209,11 +210,9 @@ void BroodEditor::ModChip::paint(juce::Graphics& g) {
     const bool on = editor.proc.apvts.getRawParameterValue("mod" + juce::String(k + 1) + "On")->load() > 0.5f;
     const bool selected = editor.selectedMod == k;
     const auto colour = modColour(k);
-    if (selected) { g.setColour(kInk); g.fillRect(r.translated(2, 2)); }
-    g.setColour(kPaper); g.fillRect(r);
-    g.setColour(selected || isMouseOver(true) ? kInk : kLine); g.drawRect(r, selected ? 2 : 1);
+    plate(g, r.toFloat(), selected ? colour.withAlpha(0.22f) : kInk.withAlpha(isMouseOver(true) ? 0.1f : 0.05f), 5.f);
     const auto number = juce::Rectangle<int>(5, 4, 15, 15);
-    g.setColour(on ? colour : kLine); g.fillRect(number);
+    plate(g, number.toFloat(), on ? colour : kLine, 3.f);
     g.setColour(kPaper); g.setFont(font(15));
     g.drawText(juce::String(k + 1), number, juce::Justification::centred);
     int routes = 0;
@@ -223,8 +222,7 @@ void BroodEditor::ModChip::paint(juce::Graphics& g) {
     g.drawText(juce::String(routes) + (routes == 1 ? " ROUTE" : " ROUTES"), 24, 3, getWidth() - 48, 16, juce::Justification::centredLeft);
     // ON: lit like every other switch.
     const auto box = onBox();
-    g.setColour(on ? stock().lit : kPaper); g.fillRect(box);
-    g.setColour(kInk); g.drawRect(box, 1);
+    plate(g, box.toFloat(), on ? stock().lit : kInk.withAlpha(0.18f), 3.f);
     // The last two seconds of what it's doing.
     const auto plot = juce::Rectangle<float>(6.f, 22.f, static_cast<float>(r.getWidth() - 12), static_cast<float>(r.getHeight() - 26));
     juce::Path path;
@@ -367,10 +365,10 @@ void BroodEditor::RouteList::paint(juce::Graphics& g) {
     for (auto& row : rows) {
         auto line = r.removeFromTop(32);
         const auto num = line.removeFromLeft(22).withSizeKeepingCentre(18, 18);
-        g.setColour(modColour(row.k)); g.fillRect(num);
+        plate(g, num.toFloat(), modColour(row.k), 3.f);
         g.setColour(kPaper); g.setFont(font(16));
         g.drawText(juce::String(row.k + 1), num, juce::Justification::centred);
-        g.setColour(kInk); g.setFont(font(19));
+        g.setColour(kInk); g.setFont(nameFont(19));
         g.drawText(brood::kModTargetNames[row.t], line.withWidth(200).withTrimmedLeft(8), juce::Justification::centredLeft);
         const int depth = juce::roundToInt(row.depth->getValue() * 100.0);
         g.setColour(kMuted);
@@ -389,15 +387,12 @@ void BroodEditor::ThreeWay::paint(juce::Graphics& g) {
     // One plate across the column, the chosen cell a solid block.
     const auto bounds = getLocalBounds().withTrimmedRight(2).withTrimmedBottom(2);
     const int count = juce::jmax(1, labels.size());
-    g.setColour(kInk); g.fillRect(bounds.translated(2, 2));
-    g.setColour(kPaper); g.fillRect(bounds);
-    g.setColour(kInk); g.drawRect(bounds, 1);
+    plate(g, bounds.toFloat(), kInk.withAlpha(0.08f), 5.f);
     for (int i = 0; i < count; ++i) {
         const int x0 = bounds.getX() + bounds.getWidth() * i / count, x1 = bounds.getX() + bounds.getWidth() * (i + 1) / count;
         const juce::Rectangle<int> r(x0, bounds.getY(), x1 - x0, bounds.getHeight());
-        if (i == index) { g.setColour(kInk); g.fillRect(r); }
-        else if (i > 0) { g.setColour(kInk); g.drawVerticalLine(x0, static_cast<float>(r.getY()), static_cast<float>(r.getBottom())); }
-        g.setColour(i == index ? kPaper : kInk); g.setFont(font(16));
+        if (i == index) plate(g, r.toFloat().reduced(2.f), kInk, 4.f);
+        g.setColour(i == index ? kPaper : kInk); g.setFont(nameFont(16));
         g.drawFittedText(labels[i].toUpperCase(), r.reduced(2, 0), juce::Justification::centred, 1, 0.8f);
     }
 }
@@ -426,16 +421,14 @@ void BroodEditor::Stepper::paint(juce::Graphics& g) {
     auto r = getLocalBounds();
     const bool hot = isMouseOver(true);
     auto body = r.reduced(2).withTrimmedRight(2).withTrimmedBottom(2);
-    g.setColour(hot ? kPanel : kPaper); g.fillRect(body);
-    g.setColour(hot ? kInk : kLine); g.drawRect(body, 1);
+    plate(g, body.toFloat(), kInk.withAlpha(hot ? 0.14f : 0.08f));
     auto inner = body.reduced(2, 2);
     const int arrow = arrowWidth();
     auto tri = [&](juce::Rectangle<int> zone, bool right) {
-        if (hot) { g.setColour(kInk); g.fillRect(zone); }
         juce::Path t;
         const float w = 4.f, h = 7.f, cx = zone.getCentreX(), cy = zone.getCentreY();
         t.addTriangle(cx + (right ? -w / 2 : w / 2), cy - h / 2, cx + (right ? -w / 2 : w / 2), cy + h / 2, cx + (right ? w / 2 : -w / 2), cy);
-        g.setColour(hot ? kPaper : kMuted); g.fillPath(t);
+        g.setColour(hot ? kInk : kMuted); g.fillPath(t);
     };
     tri(inner.removeFromLeft(arrow), false);
     tri(inner.removeFromRight(arrow), true);
@@ -466,18 +459,13 @@ void BroodEditor::Footswitch::press(bool down) {
 }
 void BroodEditor::Footswitch::paint(juce::Graphics& g) {
     auto r = getLocalBounds().withTrimmedRight(3).withTrimmedBottom(3);
-    const int travel = isDown ? 2 : 0;
-    g.setColour(kInk); g.fillRect(r.translated(3, 3));
-    r.translate(travel, travel);
-    g.setColour(isDown ? kPanel : kPaper); g.fillRect(r);
-    g.setColour(kInk); g.drawRect(r, 1);
+    // A big plate that darkens while it's held, with a light that's solid while this side is on.
+    plate(g, r.toFloat(), kInk.withAlpha(isDown ? 0.22f : isMouseOver(true) ? 0.13f : 0.08f), 6.f);
     auto row = r.reduced(12, 0);
-    // The light: an outlined square, solid while this side is on.
-    const auto led = row.removeFromLeft(16).withSizeKeepingCentre(16, 16);
-    g.setColour(kInk); g.fillRect(led);
-    g.setColour(lit ? stock().lit : kPaper); g.fillRect(led.reduced(lit ? 1 : 2));
+    const auto led = row.removeFromLeft(16).withSizeKeepingCentre(14, 14);
+    g.setColour(lit ? stock().lit : kInk.withAlpha(0.25f)); g.fillEllipse(led.toFloat());
     row.removeFromLeft(10);
-    g.setColour(kInk); g.setFont(font(24));
+    g.setColour(kInk); g.setFont(nameFont(24));
     g.drawText(name, row.removeFromLeft(62), juce::Justification::centredLeft);
     g.setFont(font(16));
     g.drawText("[ " + keyName + " ]", row.removeFromRight(36), juce::Justification::centredRight);
@@ -1436,7 +1424,7 @@ void BroodEditor::paint(juce::Graphics& g) {
     g.fillAll(stock().page);
     g.addTransform(view);   // draw in design coordinates; the window scales it
     kit::drawMasthead(g, mastheadArea, stock(), "E-01", kInk, kPaper, "BROOD.", "GLYPH AUDIO", "MICRO-LOOPER + SPACE");
-    g.setColour(kMuted); g.setFont(font(17));
+    g.setColour(kMuted); g.setFont(nameFont(17));
     g.drawText("PATCH", presetBarDesign.getX() - 56, presetBarDesign.getY(), 48, presetBarDesign.getHeight() - 2, juce::Justification::centredRight);
 
     // ── the main sheet ──
@@ -1446,14 +1434,14 @@ void BroodEditor::paint(juce::Graphics& g) {
         for (int c = 0; c < 3; ++c) {
             const auto col = juce::Rectangle<int>(pedalArea.getX() + c * pedalArea.getWidth() / 3, wetModeDesign.getY() - 20, pedalArea.getWidth() / 3, pedalArea.getBottom() - wetModeDesign.getY() + 20);
             if (c > 0) { g.setColour(kLine); g.drawVerticalLine(col.getX(), static_cast<float>(col.getY() + 2), static_cast<float>(col.getBottom() - 1)); }
-            g.setColour(kMuted); g.setFont(font(15));
+            g.setColour(kMuted); g.setFont(nameFont(15));
             g.drawText(columns[c], col.getX(), col.getY(), col.getWidth(), 16, juce::Justification::centred);
         }
     }
     for (size_t i = 0; i < knobs.size(); ++i) {
         const auto kb = knobDesign[i];
         const auto nameRow = kb.withY(kb.getY() - 20).withHeight(20);
-        g.setColour(kInk); g.setFont(font(20));
+        g.setColour(kInk); g.setFont(nameFont(20));
         g.drawText(knobName(i), nameRow, juce::Justification::centred);
         // Its value, always; in ink while the knob is touched, right where you are looking.
         const bool touched = static_cast<int>(i) == activeKnob && activeKnobText.isNotEmpty();
@@ -1461,7 +1449,7 @@ void BroodEditor::paint(juce::Graphics& g) {
         g.setFont(font(touched ? 18 : 16));
         g.drawFittedText(touched ? activeKnobText.toUpperCase() : knobValues[i], valueRect(static_cast<int>(i)), juce::Justification::centred, 1, 0.7f);
     }
-    g.setColour(kMuted); g.setFont(font(15));
+    g.setColour(kMuted); g.setFont(nameFont(15));
     g.drawText("ONE CLOCK. TWO WORLDS.", characterDesign.withSizeKeepingCentre(pedalArea.getWidth() / 3, 16).translated(0, 21), juce::Justification::centred);
 
     // What the host gave us. The other heads have nothing to add to what's under them.
@@ -1558,8 +1546,7 @@ void BroodEditor::paint(juce::Graphics& g) {
         const int lit = juce::roundToInt(level * (float) cells);
         for (int i = 0; i < cells; ++i) {
             const auto c = juce::Rectangle<int>(left + i * cw + 1, y, cw - 2, 8);
-            g.setColour(i < lit ? kInk : kPaper); g.fillRect(c);
-            g.setColour(i < lit ? kInk : kLine); g.drawRect(c, 1);
+            plate(g, c.toFloat(), i < lit ? kInk : kInk.withAlpha(0.14f), 1.5f);
         }
     };
     meter(meterArea.getY(), "IN", meterIn); meter(meterArea.getY() + 11, "OUT", meterOut);
