@@ -239,3 +239,28 @@ CHROMIUM_PATH=/path/to/chromium npm run test:browser
 - The JUCE processor already reads the host time signature into `hostBarQuarters_` (used by the Bench); step 3 passes it to the core.
 - `readFrac` is Hermite, so the delay's existing reads keep their top end; the tape head can reuse it.
 - `capture()` copies up to the whole buffer on the audio thread today. RECORD calls it exactly as often as Capture does (once per take), so it is no worse.
+
+## After the five fixes: Arturia-style modulation
+
+Requested on 14 November 2026, to pick up once the five fixes are done. Change how
+modulation looks and works on the knobs so it is closer to Arturia's "click and drag to
+mod a param" workflow. Reference: the user's screen recording of Arturia Efx Fragments
+(`Screen Recording 2026-11-14 at 9.15.58 am.mov` on the Desktop). What it shows:
+
+- **A handle on every knob.** A small yellow dot sits on the ring just above the knob.
+  Dragging it up or down sets that knob's modulation amount; the knob's value doesn't move.
+- **The amount is an arc on the ring.** The dot grows into a yellow arc running from the
+  knob's current value, to one side or the other depending on the sign. Zero amount shrinks
+  back to the dot.
+- **Bipolar amounts with a live readout.** While dragging, a black tooltip beside the knob
+  shows the amount in yellow, signed ("+28.8%", "-44.2%", "-6.64%"), or "+/-" for a
+  two-sided amount ("+/-20.2%").
+- **The knob itself is unchanged.** A plain drag on the knob still sets its value, with its
+  own tooltip in the parameter's unit ("26.6 Hz", "48.8 %").
+- **The status line explains it.** Hovering the handle shows a line at the bottom of the
+  window naming the source and what it does to the parameter.
+
+To work out before building: which source the handle drives (Brood has two, so a source
+picker or one handle per source, with colours to tell them apart), how this replaces
+dragging a source onto a knob, and whether the same handle goes into the kit so Silt
+gets it too.
