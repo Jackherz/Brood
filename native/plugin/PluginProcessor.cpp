@@ -17,6 +17,27 @@ juce::String fmtSpeed(double s) {
 const char kLegacyStateTag[] = { 0x4d, 0x4f, 0x4f, 0x44, 0 };
 juce::String pct(double x) { return juce::String(juce::roundToInt(x * 100)) + "%"; }
 
+// Host value strings: a number and its unit, at most 8 characters, the way a controller's
+// display shows its own parameters (35%, -3.1 dB, 1708 Hz). The editor keeps the prose.
+juce::String shortTime(double s) {
+    if (s < 1) return juce::String(juce::roundToInt(s * 1000)) + " ms";
+    if (s < 10) return juce::String(s, 2) + " s";
+    if (s < 100) return juce::String(s, 1) + " s";
+    return juce::String(juce::roundToInt(s)) + " s";
+}
+juce::String shortSpeed(double s) {
+    if (std::fabs(s) < 1e-9) return "Stop";
+    return juce::String(s, std::fabs(s) < 10 ? 2 : 1) + "x";
+}
+juce::String signedPct(double x) {
+    const int n = juce::roundToInt(x * 100);
+    return (n > 0 ? "+" : "") + juce::String(n) + "%";
+}
+juce::String titleCase(juce::String s) { s = s.toLowerCase(); return s.substring(0, 1).toUpperCase() + s.substring(1); }
+// The number at the front of what someone typed ("350 ms", "-6 dB", "40%"), and its unit.
+double leadingNumber(const juce::String& text) { return text.retainCharacters("0123456789.-+").getDoubleValue(); }
+double inverseExp(double x, double a, double b) { return x <= a ? 0.0 : x >= b ? 1.0 : std::log(x / a) / std::log(b / a); }
+
 struct FloatDef { const char* id; const char* name; float def; };
 const FloatDef kKnobs[] = {
     {"time", "Time", 0.55f}, {"mix", "Mix", 0.5f}, {"length", "Length", 0.72f},
@@ -33,11 +54,12 @@ BroodProcessor::BroodProcessor()
           for (const auto& k : kKnobs) {
               const juce::String id = k.id;
               layout.add(std::make_unique<APF>(juce::ParameterID(id, 1), k.name, juce::NormalisableRange<float>(0.f, 1.f), k.def,
-                  juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-                      [this, id](float v, int) { return describe(id, v); })));
+                  juce::AudioParameterFloatAttributes()
+                      .withStringFromValueFunction([this, id](float v, int) { return hostValue(id, v); })
+                      .withValueFromStringFunction([this, id](const juce::String& t) { return hostValueFromText(id, t); })));
           }
           layout.add(std::make_unique<APC>(juce::ParameterID("wetMode", 1), "Wet Mode", juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, 0));
-          layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In + Loop", "Loop"}, 1));
+          layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In+Loop", "Loop"}, 1));
           layout.add(std::make_unique<APC>(juce::ParameterID("loopMode", 1), "Loop Mode", juce::StringArray{"Env", "Tape", "Stretch"}, 1));
           layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Trails", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Smooth", false));
@@ -47,11 +69,14 @@ BroodProcessor::BroodProcessor()
               // parameter of the same name (clang's -Wshadow-uncaptured-local).
               const juce::String paramId = id;
               return std::make_unique<APF>(juce::ParameterID(id, 1), name, juce::NormalisableRange<float>(0.f, 1.f), def,
-                  juce::AudioParameterFloatAttributes().withStringFromValueFunction(
-                      [this, paramId](float v, int) { return describe(paramId, v); }));
+                  juce::AudioParameterFloatAttributes()
+                      .withStringFromValueFunction([this, paramId](float v, int) { return hostValue(paramId, v); })
+                      .withValueFromStringFunction([this, paramId](const juce::String& t) { return hostValueFromText(paramId, t); }));
           };
           layout.add(std::make_unique<APF>(juce::ParameterID("loopDb", 1), "Loop Gain", juce::NormalisableRange<float>(-24.f, 12.f), 0.f,
-              juce::AudioParameterFloatAttributes().withLabel("dB")));
+              juce::AudioParameterFloatAttributes()
+                  .withStringFromValueFunction([](float v, int) { return (v > 0.04f ? "+" : "") + juce::String(v, 1) + " dB"; })
+                  .withValueFromStringFunction([](const juce::String& t) { return static_cast<float>(juce::jlimit(-24.0, 12.0, leadingNumber(t))); })));
           layout.add(loopParam("memory", "Memory", 0.f));
           layout.add(loopParam("loopEnd", "Loop End", 1.f));
           // 1 is the newest audio in every mode: a fresh TAPE loop plays the tail, as it always has.
@@ -89,7 +114,10 @@ BroodProcessor::BroodProcessor()
               layout.add(std::make_unique<APB>(juce::ParameterID(m + "Hold", 1), name + "Hold", false));
               for (int t = 0; t < brood::kModTargets; ++t)
                   layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID(m + "_" + brood::kModTargetIds[t], 1),
-                      "M" + juce::String(n) + ">" + shortTarget[t], juce::NormalisableRange<float>(-1.f, 1.f), 0.f));
+                      "M" + juce::String(n) + ">" + shortTarget[t], juce::NormalisableRange<float>(-1.f, 1.f), 0.f,
+                      juce::AudioParameterFloatAttributes()
+                          .withStringFromValueFunction([](float v, int) { return signedPct(v); })
+                          .withValueFromStringFunction([](const juce::String& t) { return static_cast<float>(juce::jlimit(-1.0, 1.0, leadingNumber(t) / 100.0)); })));
           }
           layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV Sync", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV Soft", false));
@@ -200,6 +228,86 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         return div == 1 ? juce::String("1x clock") : juce::String(div) + "x slower";
     }
     return juce::String(v, 3);
+}
+
+// What a host shows for a parameter's value: at most 8 characters, a number and its unit.
+juce::String BroodProcessor::hostValue(const juce::String& id, float v) const {
+    const auto* wm = apvts.getRawParameterValue("wetMode");
+    const auto* lm = apvts.getRawParameterValue("loopMode");
+    const auto* ck = apvts.getRawParameterValue("clock");
+    if (wm == nullptr || lm == nullptr || ck == nullptr) return juce::String(v, 2);   // still constructing
+    const int wetMode = juce::roundToInt(wm->load()), loopMode = juce::roundToInt(lm->load());
+    const auto on = [this](const char* p) { const auto* r = apvts.getRawParameterValue(p); return r != nullptr && r->load() > 0.5f; };
+    const bool smooth = on("smooth");
+    const double hz = brood::clockHz(ck->load(), smooth);
+    const double c = hz / brood::kCoreFs;
+    if (id == "time") {
+        if (wetMode == 0) return v > 0.985f ? juce::String("Inf") : shortTime(brood::expMap(v, 0.4, 25) / c);
+        if ((wetMode == 1 || wetMode == 3) && on("sync")) return brood::syncLabel(v);
+        if (wetMode == 1) return shortTime(brood::expMap(v, 0.02, 2) / c);
+        if (wetMode == 3) return shortTime(0.2 + v * 2.6);
+        return shortTime(brood::expMap(v, 0.05, 1.5) / c);
+    }
+    if (id == "length") {
+        if (loopMode == 1) return shortTime(brood::kLoopSamples / hz * brood::expMap(v, 0.02, 1));
+        if (loopMode == 0) return on("envSync") ? juce::String(brood::syncLabel(v)) : shortTime(brood::expMap(v, 0.01, 1) / c);
+        return shortTime(brood::expMap(v, 0.01, 0.5) / c);
+    }
+    if (id == "modWet") return wetMode == 2 ? shortSpeed(brood::slipSpeedMap(v)) : pct(v);
+    if (id == "modLoop") return loopMode == 0 ? pct(v) : loopMode == 1 ? shortSpeed(brood::speedMap(v, 0.04)) : shortSpeed(brood::stretchMap(v));
+    if (id == "clock") return juce::String(brood::clockHz(v, smooth) / 1000, 1) + " kHz";
+    if (id == "mix" || id == "balance" || id == "loopEnd") return pct(v);
+    if (id == "memory") return v <= 0.001f ? juce::String("Pedal") : shortTime(brood::expMap(v, 1, 30));
+    if (id == "start") return v <= 0.005f ? juce::String("Oldest") : v >= 0.995f ? juce::String("Newest") : pct(v);
+    if (id == "tone") return v > 0.995f ? juce::String("Open") : "Cut " + pct(1 - v);
+    if (id == "fade") return v <= 0.001f ? juce::String("Pedal") : "Keep " + pct(1 - v);
+    if (id == "width") return v <= 0.005f ? juce::String("Mono") : std::fabs(v - 0.5f) <= 0.01f ? juce::String("As built") : signedPct((v - 0.5) * 2);
+    if (id == "wetDiv" || id == "loopDiv") { const int div = brood::divMap(v); return div == 1 ? juce::String("1x") : juce::String(div) + "x slow"; }
+    if (id == "character") return v < 0.25f ? "Clean" : v > 0.75f ? "Worn" : "Pedal";
+    if (id == "wearNoise") return v <= 0.005f ? juce::String("Off") : pct(v);
+    if (id == "recBars") { const int bars = recBarsFor(v); return bars == 0 ? juce::String("Free") : juce::String(bars) + (bars == 1 ? " bar" : " bars"); }
+    if (id.startsWith("mod1") || id.startsWith("mod2")) {
+        const auto field = id.substring(4);
+        if (field == "Wave") return titleCase(brood::kRampWaves[brood::rampWaveIndex(v)]);
+        if (field == "Rate") return on((id.substring(0, 4) + "Sync").toRawUTF8()) ? titleCase(brood::rampDivLabel(v)) : juce::String(brood::rampHertz(v), 2) + " Hz";
+    }
+    return juce::String(v, 2);
+}
+
+// A value typed into a host's field, back into the parameter. Numbers with the units hostValue()
+// shows are read for the plain ones; a value whose meaning depends on the mode in a way that
+// can't be undone from the text (a speed, a division, a stepped CLOCK) keeps its current value
+// rather than jumping to the top of its range.
+float BroodProcessor::hostValueFromText(const juce::String& id, const juce::String& text) const {
+    const auto* now = apvts.getRawParameterValue(id);
+    const float current = now != nullptr ? now->load() : 0.f;
+    const auto t = text.trim().toLowerCase();
+    const double x = leadingNumber(t);
+    const bool ms = t.endsWith("ms"), sec = !ms && t.endsWith("s");
+    const double seconds = ms ? x / 1000.0 : x;
+    const auto* wm = apvts.getRawParameterValue("wetMode");
+    const auto* lm = apvts.getRawParameterValue("loopMode");
+    const auto* ck = apvts.getRawParameterValue("clock");
+    const int wetMode = wm != nullptr ? juce::roundToInt(wm->load()) : 0, loopMode = lm != nullptr ? juce::roundToInt(lm->load()) : 1;
+    const double c = brood::clockHz(ck != nullptr ? ck->load() : 0.9f, false) / brood::kCoreFs;
+    if (t.endsWith("%")) {
+        if (id == "tone" || id == "fade") return static_cast<float>(juce::jlimit(0.0, 1.0, 1.0 - x / 100.0));
+        if (id == "width") return static_cast<float>(juce::jlimit(0.0, 1.0, 0.5 + x / 200.0));
+        return static_cast<float>(juce::jlimit(0.0, 1.0, x / 100.0));
+    }
+    if ((ms || sec) && id == "time") {
+        if (wetMode == 0) return static_cast<float>(inverseExp(seconds * c, 0.4, 25));
+        if (wetMode == 1) return static_cast<float>(inverseExp(seconds * c, 0.02, 2));
+        if (wetMode == 3) return static_cast<float>(juce::jlimit(0.0, 1.0, (seconds - 0.2) / 2.6));
+        return static_cast<float>(inverseExp(seconds * c, 0.05, 1.5));
+    }
+    if ((ms || sec) && id == "length") {
+        if (loopMode == 0) return static_cast<float>(inverseExp(seconds * c, 0.01, 1));
+        if (loopMode == 2) return static_cast<float>(inverseExp(seconds * c, 0.01, 0.5));
+    }
+    if (sec && id == "memory") return static_cast<float>(inverseExp(x, 1, 30));
+    if (t.endsWith("hz") && !t.endsWith("khz") && id.endsWith("Rate")) return static_cast<float>(inverseExp(x, 0.05, 8));
+    return current;
 }
 
 juce::String BroodProcessor::describe(const juce::String& id) const {
@@ -392,7 +500,8 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
-            else if (cc == 71) id = "character";
+            // WEAR: 0 is the pedal as built, anything above it worn (the pedal's CLASSIC switch).
+            else if (cc == 71) { if (auto* parameter = apvts.getParameter("character")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.5f); }
             else if (cc == 28) { if (auto* parameter = apvts.getParameter("balance")) parameter->setValueNotifyingHost(value / 127.f); }   // the pedal's LEVEL BALANCE
             else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);

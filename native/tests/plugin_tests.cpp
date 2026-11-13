@@ -436,6 +436,33 @@ int main() {
         BroodProcessor::migrateStart(env, take);
         CHECK(std::fabs(static_cast<double>(env.getChildWithProperty("id", "start")["value"]) - 0.3) < 1e-6, "ENV keeps its START");
     }
+    {   // Every value a host shows fits a controller's display: 8 characters at most, in every mode
+        BroodProcessor h;
+        auto set = [&h](const char* id, float plain) { auto* q = h.apvts.getParameter(id); q->setValueNotifyingHost(q->convertTo0to1(plain)); };
+        int longest = 0; juce::String worst;
+        for (float wet : {0.f, 1.f, 2.f, 3.f})
+            for (float loop : {0.f, 1.f, 2.f})
+                for (float sync : {0.f, 1.f}) {
+                    set("wetMode", wet); set("loopMode", loop); set("sync", sync); set("envSync", sync); set("mod1Sync", sync);
+                    for (auto* prm : h.getParameters())
+                        for (float v : {0.f, 0.1f, 0.25f, 0.5f, 0.75f, 0.9f, 1.f}) {
+                            const auto text = prm->getText(v, 64);
+                            if (text.length() > longest) { longest = text.length(); worst = prm->getName(32) + ": " + text; }
+                        }
+                }
+        if (longest > 8) std::printf("  longest host value: %s\n", worst.toRawUTF8());
+        CHECK(longest <= 8, "every host value is 8 characters or fewer");
+        // Typed back in, the plain ones land where they were.
+        set("wetMode", 1.f); set("sync", 0.f);
+        for (const char* id : {"time", "mix", "loopEnd", "balance", "memory", "mod1_time"}) {
+            auto* q = dynamic_cast<juce::RangedAudioParameter*>(h.apvts.getParameter(id));
+            for (float v : {0.2f, 0.6f}) {
+                const float back = q->getValueForText(q->getText(v, 64));
+                if (std::fabs(back - v) > 0.02f) std::printf("  %s: %.3f -> \"%s\" -> %.3f\n", id, v, q->getText(v, 64).toRawUTF8(), back);
+                CHECK(std::fabs(back - v) <= 0.02f, "a host value typed back in lands where it was");
+            }
+        }
+    }
     std::printf(failures ? "%d processor failure(s)\n" : "all processor integration tests passed\n", failures);
     return failures ? 1 : 0;
 }

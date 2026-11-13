@@ -128,6 +128,7 @@ exact output instead: 4, 8 or 16 bars from the next bar line (at once if the hos
 stopped). Silt keeps the first 30 seconds of anything longer.
 
 Sets saved under the old product name still open: the plug-in IDs did not change,
+and the old state tag is read as the new one.
 
 ## MIDI
 
@@ -141,12 +142,12 @@ the effect. Changes are applied at audio-block boundaries:
 | 52 | Hold both modulation sources (`0` running, `1–127` held) |
 | 66, 67 | Bounce, Sweep (`0` off, `1–127` on) |
 | 53, 54 | Wet and loop clock division |
-| 71 | Classic mode (`0` off, `1–127` on) |
+| 71 | WEAR: pedal (`0`) or worn (`1–127`) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
 | 28 | WET/LOOP balance (the pedal's LEVEL BALANCE) |
 | 75, 78 | Trails, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
-| 105 | Wet freeze — same as the FREEZE switch (`0` off, `1–127` on) |
+| 105 | Wet freeze, the same as the FREEZE switch (`0` off, `1–127` on) |
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware controller set up for the pedal
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
@@ -157,7 +158,14 @@ second, the FREEZE switch the third), so the pedal's controllers for them do
 nothing now. Routes and depths have no CC: automate the `mod1_time`-style depth parameters instead. NOISE has no CC either. Loop memory and END are host-only parameters too.
 
 Tempo sync has no CC in the pedal's map; automate the `sync` parameter, or switch
-it on in the editor.
+it on in the editor. TAPE, CAPTURE / RECORD, BARS and AT TAP have none either: the
+pedal's map has nothing for them, and a spare number could clash with a controller set
+up for the pedal. Automate `tapeDelay`, `recMode`, `recBars` and `recAtTap` instead.
+
+What a host or controller shows for each value is kept to 8 characters, a number and its
+unit where there is one (`2.31 s`, `426 ms`, `1/8D`, `16.0 kHz`, `1.00x`, `-6.0 dB`,
+`+40%`), so it fits a controller's display such as Push's. The editor's readout keeps
+the fuller wording. Hosts that let you type a value accept the same form.
 
 ## What each knob says
 
@@ -293,7 +301,7 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   for fine, double-click for 0 dB. The waveform grows and shrinks with it, and SEND sends the loop at this level.
 - **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,
   SYNC and HOLD. Drag a source onto any knob or WET/LOOP to route it. Around a knob, the rings are
-  handles as in Silt: drag up or down to set that source's depth (negative inverts), and
+  handles: drag up or down to set that source's depth (negative inverts), and
   where there's no ring yet it makes one for the selected source. Alt-drag does the same, double-click a ring to remove that source, Delete on a clicked knob removes both,
   right-click for the list,
   and ROUTES lists them all. CC 20, 52, 66 and 67 act on both sources

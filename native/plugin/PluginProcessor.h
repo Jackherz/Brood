@@ -50,6 +50,9 @@ public:
     // Readout text for a parameter in real-world units (depends on mode and clock).
     juce::String describe(const juce::String& id) const;
     juce::String describe(const juce::String& id, float value) const;
+    // What a host (and a controller such as Push) shows for a value: at most 8 characters.
+    juce::String hostValue(const juce::String& id, float value) const;
+    float hostValueFromText(const juce::String& id, const juce::String& text) const;
 
     // ---- input source ----
     enum Source { Live = 0, Demo = 1, File = 2 };
