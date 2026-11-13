@@ -883,6 +883,75 @@ int main() {
             }
         CHECK(brood::migrateTapeStart(0, 0.5, len) == 1.0 && brood::migrateTapeStart(1, 0.5, len) == 0.0, "the newest becomes 1, the oldest 0");
     }
+    {   // RECORD: the loop switch records what's played after it
+        auto fresh = [] { brood::Core c; c.p.recMode = 1; c.p.clock = 1; c.p.memory = 1; c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.prepare(FS); return c; };
+        const auto seconds = [](const brood::Core& c) { return c.state().lsrc / c.state().clockHz; };
+        {   // tap, play, tap
+            brood::Core c = fresh();
+            render(c, 1, [](double) { return 0.0; });
+            tap(c, 1);
+            CHECK(c.state().loop == brood::LoopLed::Rec, "RECORD: a tap starts recording");
+            render(c, 1, [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); });
+            tap(c, 1);
+            CHECK(c.state().loop == brood::LoopLed::Play, "RECORD: a second tap plays it");
+            CHECK(std::fabs(seconds(c) - 1.0) < 0.01, "RECORD: the take is what was played after the tap (%.3f s)", seconds(c));
+            CHECK(c.loopWindowRms() > 0.2, "RECORD: and it holds the tone, not the silence before (%.3f)", c.loopWindowRms());
+            tap(c, 1);
+            CHECK(c.state().loop == brood::LoopLed::Off, "RECORD: with a loop playing, a tap still stops it");
+        }
+        {   // a hold records while it's held
+            brood::Core c = fresh();
+            render(c, 0.5, [](double) { return 0.0; });
+            c.footswitch(1, true);
+            render(c, 1.5, [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); });
+            c.footswitch(1, false);
+            CHECK(c.state().loop == brood::LoopLed::Play && std::fabs(seconds(c) - 1.5) < 0.01, "RECORD: a hold records while held (%.3f s)", seconds(c));
+        }
+        {   // 2 bars at 120 bpm close themselves at 4 s, with CLOCK moved part way
+            brood::Core c = fresh(); c.p.recBars = 2; c.p.recAtTap = true; c.p.bpm = 120;
+            render(c, 0.5, [](double) { return 0.0; });
+            tap(c, 1);
+            long closed = -1;
+            render(c, 5, [](double t) { return 0.3 * std::sin(2 * brood::kPi * 330 * t); }, [&](brood::Core& cc, long b) {
+                if (b == blk(2.0)) cc.p.clock = 0.6;
+                if (closed < 0 && cc.state().loop == brood::LoopLed::Play) closed = b;
+            });
+            CHECK(closed >= 0 && std::labs(closed - blk(4.0)) <= 1, "RECORD: 2 bars close at 4 s (block %ld, want %ld)", closed, blk(4.0));
+        }
+        {   // waiting for the bar line while the host plays; a second tap stands it down
+            brood::Core c = fresh(); c.p.recBars = 1; c.p.bpm = 120; c.p.hostPlaying = true;
+            auto transport = [](brood::Core& cc, long b) { cc.p.ppq = static_cast<double>(b * B) / FS * 2; cc.p.barStartPpq = std::floor(cc.p.ppq / 4) * 4; };
+            render(c, 1.3, [](double) { return 0.0; }, transport);
+            tap(c, 1);
+            CHECK(c.state().recArmed && c.state().loop == brood::LoopLed::Off, "RECORD: a tap mid-bar waits for the bar line");
+            long started = -1, closed = -1;
+            render(c, 4, [](double) { return 0.2; }, [&](brood::Core& cc, long b) {
+                transport(cc, b + blk(1.3));
+                if (started < 0 && cc.state().loop == brood::LoopLed::Rec) started = b + blk(1.3);
+                if (closed < 0 && cc.state().loop == brood::LoopLed::Play) closed = b + blk(1.3);
+            });
+            CHECK(started >= 0 && std::labs(started - blk(2.0)) <= 1, "RECORD: it starts on the bar line at 2 s (block %ld)", started);
+            CHECK(closed >= 0 && std::labs(closed - blk(4.0)) <= 1, "RECORD: and plays a bar later (block %ld)", closed);
+            brood::Core d = fresh(); d.p.recBars = 1; d.p.bpm = 120; d.p.hostPlaying = true;
+            render(d, 1.3, [](double) { return 0.0; }, transport);
+            tap(d, 1); tap(d, 1);
+            CHECK(!d.state().recArmed && d.state().loop == brood::LoopLed::Off, "RECORD: a second tap while waiting stands it down");
+        }
+        {   // the MEMORY ceiling closes it, keeping what was played first
+            brood::Core c = fresh(); c.p.memory = std::log(2.0) / std::log(30.0);   // a 2 s ceiling
+            render(c, 0.5, [](double) { return 0.0; });
+            tap(c, 1);
+            render(c, 3, [](double t) { return 0.3 * std::sin(2 * brood::kPi * (200 + 100 * t) * t); });
+            CHECK(c.state().loop == brood::LoopLed::Play, "RECORD: the ceiling closes the recording");
+            CHECK(std::fabs(seconds(c) - 2.0) < 0.02, "RECORD: at 2 s (%.3f)", seconds(c));
+        }
+        {   // CAPTURE is as it was: a tap keeps the recent past
+            brood::Core c; c.p.clock = 1; c.p.memory = 0.6; c.prepare(FS);
+            render(c, 3, [](double) { return 0.2; });
+            tap(c, 1);
+            CHECK(c.state().loop == brood::LoopLed::Play && seconds(c) > 2.5, "CAPTURE: a tap still keeps the recent past");
+        }
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

@@ -249,6 +249,14 @@ private:
     juce::Rectangle<int> targetDesign(int t) const;
     // PRE: the wet side runs into the looper. It belongs to the wet column.
     std::unique_ptr<ThreeWay> wetPre;
+    // RECORD, in 01 LOOP: CAPTURE or RECORD, and in RECORD the bars and whether they wait
+    // for the bar line.
+    std::unique_ptr<ThreeWay> recMode;
+    std::unique_ptr<Stepper> recBars;
+    juce::ToggleButton recAtTap { "AT TAP" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> recAtTapAtt;
+    juce::Rectangle<int> recModeDesign, recBarsDesign, recAtTapDesign;
+    int lastRec = -1;
     juce::Rectangle<int> wetPreDesign;
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.

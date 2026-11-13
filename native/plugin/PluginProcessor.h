@@ -40,6 +40,9 @@ public:
     // 2: START counts from the oldest audio in every loop mode. Older sets and presets
     // stored TAPE's START from the newest, and are rewritten when they load.
     static constexpr int kStateVersion = 2;
+    // RECORD's bar counts, in the order the stepper steps through them. 0 is FREE.
+    static constexpr int kRecBarCounts[9] = {0, 1, 2, 3, 4, 6, 8, 12, 16};
+    static int recBarsFor(float v) { return kRecBarCounts[brood::rampIndexOfValue(v, 9)]; }
     static void migrateStart(juce::ValueTree& state, int takeLength);
 
     juce::AudioProcessorValueTreeState apvts;
@@ -77,6 +80,7 @@ public:
         std::array<std::atomic<float>, brood::kModTargets> effective {};   // each control as the sound has it now
         std::array<std::atomic<float>, 2> modValue {};                     // each source now, 0..1
         std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 }, winSpan { 0 };
+        std::atomic<bool> recArmed { false };   // RECORD: waiting for the bar line
         std::atomic<float> pos { 0 }, clockHz { 48000 }, peakIn { 0 }, peakOut { 0 }, load { 0 };
         std::atomic<float> bpm { 120.f };
         std::atomic<uint32_t> histCycles { 0 };
@@ -95,6 +99,8 @@ private:
     bool lastWetSw_ = false, lastLoopSw_ = false;
     std::atomic<float> hostBpm_ { 120.f };   // last tempo the host reported
     std::atomic<float> hostBarQuarters_ { 4.f };   // a bar's length in quarter notes
+    // The host's transport at the start of this block (audio thread only), for RECORD's bar line.
+    bool hostPlaying_ = false; double hostPpq_ = 0, hostBarStart_ = 0;
     kit::bench::OutputRecorder outputRecorder_;
     std::atomic<int> restoreWet_ { -1 };
     // A take restored from the state, waiting to be swapped in by the audio thread.

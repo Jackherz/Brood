@@ -39,6 +39,9 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     else if (n == "hiQ") p.hiQ = v != 0;
     else if (n == "envSoft") p.envSoft = v != 0;
     else if (n == "envSync") p.envSync = v != 0;
+    else if (n == "recMode") p.recMode = static_cast<int>(v); else if (n == "recBars") p.recBars = static_cast<int>(v);
+    else if (n == "recAtTap") p.recAtTap = v != 0; else if (n == "barQuarters") p.barQuarters = v;
+    else if (n == "hostPlaying") p.hostPlaying = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }
 }
 
@@ -78,6 +81,12 @@ int main(int argc, char** argv) {
                 if (e.isParam) setParam(core.p, e.a, e.value);
                 else core.footswitch(e.a == "wet" ? 0 : 1, e.b == "down");
             }
+        // A host transport running from the start at the scenario's tempo, for RECORD's bar line.
+        // Same arithmetic as tests/parity/render.js.
+        if (core.p.hostPlaying) {
+            core.p.ppq = static_cast<double>(b * B) / rate * core.p.bpm / 60;
+            core.p.barStartPpq = std::floor(core.p.ppq / core.p.barQuarters) * core.p.barQuarters;
+        }
         for (int i = 0; i < B; ++i) x[i] = input(b * B + i, rate);
         core.process(x, L, R, B);
         for (int i = 0; i < B; ++i) { out[static_cast<size_t>(2 * (b * B + i))] = L[i]; out[static_cast<size_t>(2 * (b * B + i) + 1)] = R[i]; }

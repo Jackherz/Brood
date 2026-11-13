@@ -1,0 +1,17 @@
+# RECORD, 2 bars at 120 bpm from the tap: it closes by itself after 4 s of host time,
+# though CLOCK moves while it records.
+rate 48000
+seconds 10
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param memory 1
+0 param bpm 120
+0 param recMode 1
+0 param recBars 2
+0 param recAtTap 1
+150 fs loop down
+154 fs loop up
+700 param clock 0.6
+1100 param clock 1

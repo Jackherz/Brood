@@ -65,6 +65,10 @@ BroodProcessor::BroodProcessor()
           layout.add(loopParam("character", "Wear", 0.5f));
           layout.add(loopParam("wearNoise", "Noise", 1.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("wearPost", 1), "Wear Post", false));
+          // RECORD: the loop switch records what's played after it, for FREE or a number of bars.
+          layout.add(std::make_unique<APC>(juce::ParameterID("recMode", 1), "Rec Mode", juce::StringArray{"Capture", "Record"}, 0));
+          layout.add(loopParam("recBars", "Rec Bars", 0.f));
+          layout.add(std::make_unique<APB>(juce::ParameterID("recAtTap", 1), "Rec At Tap", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Pre-Loop", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze", false));
           // The ramp engine: two generators, one per channel.
@@ -169,6 +173,7 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
     }
     if (id == "freeze") return v > 0.5f ? "held, ringing" : "moving";
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
+    if (id == "recBars") { const int bars = recBarsFor(v); return bars == 0 ? juce::String("free") : juce::String(bars) + (bars == 1 ? " bar" : " bars"); }
     if (id == "wearNoise") return v <= 0.005f ? juce::String("worn hiss off") : "worn hiss " + pct(v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
     // WIDTH is where the removed SPREAD lives now: hard left is mono.
@@ -285,6 +290,11 @@ void BroodProcessor::pullParams() {
     }
     p.envSync = param("envSync") > 0.5f;
     p.bpm = hostBpm_.load();
+    p.recMode = juce::roundToInt(param("recMode"));
+    p.recBars = recBarsFor(param("recBars"));
+    p.recAtTap = param("recAtTap") > 0.5f;
+    p.barQuarters = hostBarQuarters_.load();
+    p.hostPlaying = hostPlaying_; p.ppq = hostPpq_; p.barStartPpq = hostBarStart_;
     coreRight_.p = p;
 }
 
@@ -333,6 +343,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     // known value stands (120 BPM until told otherwise).
     bool hostPlaying = false;
     double hostPpq = 0, hostBarStart = 0;
+    hostPlaying_ = false;   // stopped unless this block's position says otherwise
     if (auto* head = getPlayHead()) {   // not "playHead": that shadows AudioProcessor's own
         if (const auto position = head->getPosition()) {
             if (const auto sig = position->getTimeSignature(); sig.hasValue() && sig->denominator > 0)
@@ -341,6 +352,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
                 hostPlaying = position->getIsPlaying();
                 hostPpq = *ppq;
                 hostBarStart = *position->getPpqPositionOfLastBarStart();
+                hostPlaying_ = hostPlaying; hostPpq_ = hostPpq; hostBarStart_ = hostBarStart;
             }
             if (const auto bpm = position->getBpm()) {
                 if (std::isfinite(*bpm) && *bpm > 5.0 && *bpm < 400.0) {
@@ -463,7 +475,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     ui.envGate = core_.envGateOpen();
     for (int t = 0; t < brood::kModTargets; ++t) ui.effective[static_cast<size_t>(t)] = static_cast<float>(core_.effective(t));
     for (int k = 0; k < 2; ++k) ui.modValue[static_cast<size_t>(k)] = static_cast<float>(core_.rampValue(k));
-    ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop);
+    ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop); ui.recArmed = st.recArmed;
     ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.winSpan = core_.loopSpan(); ui.pos = static_cast<float>(st.pos);
     ui.clockHz = static_cast<float>(st.clockHz); ui.histCycles = st.histCycles;
     ui.peakIn = std::max(st.peakIn, rightState.peakIn); ui.peakOut = std::max(st.peakOut, rightState.peakOut);

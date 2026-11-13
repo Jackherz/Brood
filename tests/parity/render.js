@@ -16,6 +16,12 @@ for (let b = 0; b < nBlocks; b++) {
     if (ev.kind === 'param') core.setParam(ev.name, ev.value);
     else core.footswitch(ev.which, ev.action);
   }
+  // A host transport running from the start at the scenario's tempo, for RECORD's bar line.
+  // Same arithmetic as native/tests/render.cpp.
+  if (core.p.hostPlaying) {
+    core.p.ppq = (b * BLOCK) / sc.rate * core.p.bpm / 60;
+    core.p.barStartPpq = Math.floor(core.p.ppq / core.p.barQuarters) * core.p.barQuarters;
+  }
   for (let i = 0; i < BLOCK; i++) inp[i] = input(b * BLOCK + i, sc.rate);
   core.process(inp, L, R);
   for (let i = 0; i < BLOCK; i++) { out[2 * (b * BLOCK + i)] = L[i]; out[2 * (b * BLOCK + i) + 1] = R[i]; }

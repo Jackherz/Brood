@@ -50,7 +50,7 @@ const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, smooth: 0, balance: 0.5,
-  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0,
+  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0, recMode: 0, recBars: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
   wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
@@ -119,6 +119,8 @@ function sanitize(input) {
     else if (['trails', 'smooth', 'sync', 'envSync', 'wetPre', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
     else if (key.includes('_')) out[key] = clamp(input[key], -1, 1);
     else if (key === 'loopDb') out[key] = clamp(input[key], -24, 12);
+    else if (key === 'recMode') out[key] = input[key] ? 1 : 0;
+    else if (key === 'recBars') out[key] = REC_BARS.includes(input[key]) ? input[key] : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
     else out[key] = clamp(input[key]);
   }
@@ -516,6 +518,10 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
   </div>;
 }
 
+// RECORD's bar counts. 0 is FREE: it records until the next tap. Here there is no host
+// transport, so a bar count starts at the tap, timed from the TEMPO field.
+const REC_BARS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
+
 function TrimStrip({ params, onChange, help }) {
   const hint = 'how much of the recent past the looper may keep';
   return <div className="trim-strip" role="group" aria-label="Loop trim">
@@ -529,6 +535,19 @@ function TrimStrip({ params, onChange, help }) {
       <input type="range" min="-24" max="12" step="0.5" value={params.loopDb} aria-label="Loop gain in dB" onDoubleClick={() => onChange('loopDb', 0)} onChange={(event) => onChange('loopDb', Number(event.target.value))}/>
       <b>{params.loopDb > 0 ? '+' : ''}{params.loopDb.toFixed(1)} DB</b>
     </label>
+    <label className="trim-control" {...help('LOOP SWITCH', 'capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.')}>
+      <span>LOOP</span>
+      <select aria-label="Loop switch" value={params.recMode} onChange={(event) => onChange('recMode', Number(event.target.value))}>
+        <option value={0}>CAPTURE</option>
+        <option value={1}>RECORD</option>
+      </select>
+    </label>
+    {params.recMode === 1 && <label className="trim-control" {...help('BARS', 'free records until the next tap. a number records that many bars at the TEMPO, then plays. longer than MEMORY allows, MEMORY wins.')}>
+      <span>BARS</span>
+      <select aria-label="Bars to record" value={params.recBars} onChange={(event) => onChange('recBars', Number(event.target.value))}>
+        {REC_BARS.map((n) => <option key={n} value={n}>{n === 0 ? 'FREE' : n}</option>)}
+      </select>
+    </label>}
     <div className="trim-readout"><span>START</span><b>{describe('start', params)}</b></div>
     <div className="trim-readout"><span>END</span><b>{describe('loopEnd', params)}</b></div>
     <span className="trim-hint">DRAG THE MARKERS · DOUBLE-CLICK FOR ALL</span>
@@ -895,7 +914,7 @@ function App() {
             </div>
           </div>
           <div className="capture-strip">
-            <div className="capture-label"><span className="capture-icon">▧</span><div><strong>LOOP MEMORY</strong><small>{state?.lsrc ? `${timeText(state.winLen / state.clockHz)} CAPTURED` : 'ALWAYS LISTENING'}</small></div></div>
+            <div className="capture-label"><span className="capture-icon">▧</span><div><strong>LOOP MEMORY</strong><small>{state?.lsrc ? `${timeText(state.winLen / state.clockHz)} CAPTURED` : params.recMode === 1 ? 'PRESS LOOP TO RECORD' : 'ALWAYS LISTENING'}</small></div></div>
             <LoopWave wave={wave} state={state} params={params} onChange={update} onTouch={touch} modSource={modSource} help={help}/>
             <div className="capture-end"><Eyes/><span>LISTEN<br/>CLOSER.</span></div>
           </div>

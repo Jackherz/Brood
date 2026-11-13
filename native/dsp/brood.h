@@ -556,6 +556,15 @@ struct Params {
     // wobble and the hiss stays out of what's recorded, so the take is as clean as PEDAL's
     // and only what's heard is worn.
     bool wearPost = false;
+    // RECORD: the loop switch records what's played after it instead of keeping the recent
+    // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
+    // Bars start at the next bar line while the host plays, unless recAtTap.
+    int recMode = 0;                                 // 0 capture, 1 record
+    int recBars = 0;
+    bool recAtTap = false;
+    double barQuarters = 4;                          // the host's bar, in quarter notes
+    bool hostPlaying = false;                        // the host's transport, at the start of this block
+    double ppq = 0, barStartPpq = 0;                 // and where it is: now, and where this bar began
     double freezeLatch = 0;                          // the FREEZE switch: wet up, held
     // The two modulation sources. Each can move any of the seven controls below by its
     // own depth (-1..1, 0 is no route), and runs at its own rate and shape.
@@ -576,6 +585,7 @@ struct State {
     bool wetOn, freeze; LoopLed loop;
     int lsrc, winStart, winLen; double pos, clockHz; uint32_t histCycles;
     float peakIn, peakOut;
+    bool recArmed;   // RECORD: waiting for the bar line
 };
 
 class Core {
@@ -616,7 +626,7 @@ public:
         rng = 22222;
         toneL = toneR = 0; wowPh = 0;
         warmIn[0] = warmIn[1] = warmOut[0] = warmOut[1] = 0;
-        fsWet = FsWet{}; fsLoop = FsLoop{};
+        fsWet = FsWet{}; fsLoop = FsLoop{}; rec = Recording{};
         engaged = 0; peakIn = peakOut = 0;
         loopWaveDirty = false;
     }
@@ -640,10 +650,33 @@ public:
         }
         if (down) {
             const bool playing = loopState == LoopState::Play;
+            // RECORD, with nothing playing: a tap while recording (or armed) ends it there.
+            if (!playing && rec.phase != RecPhase::Idle) {
+                if (rec.phase == RecPhase::Recording) closeRecording();
+                else rec.phase = RecPhase::Idle;   // armed: a second tap stands it down
+                fsLoop = FsLoop{};
+                return;
+            }
             fsLoop = FsLoop{true, now, false, histW, histCycles, playing};
+            if (!playing && p.recMode == 1) {
+                // Recording starts here, or at the next bar line when bars are chosen and the
+                // host is playing. A hold records from the press either way.
+                rec.histIdx = histW; rec.histCycle = histCycles; rec.endAt = -1;
+                if (p.recBars > 0 && !p.recAtTap && p.hostPlaying) {
+                    const double into = (p.ppq - p.barStartPpq) / std::max(0.25, p.barQuarters);
+                    rec.barTarget = p.barStartPpq + std::ceil(into - 1e-9) * std::max(0.25, p.barQuarters);
+                    rec.phase = RecPhase::Armed;
+                } else startRecording(false);
+            }
         } else if (fsLoop.active) {
             const FsLoop d = fsLoop;
             fsLoop.active = false;
+            if (!d.playing && p.recMode == 1 && rec.phase != RecPhase::Idle) {
+                // RECORD: a hold ends on release; a tap leaves it running (to the next tap,
+                // the bar count or the ceiling).
+                if (d.held) closeRecording();
+                return;
+            }
             if (d.playing) {
                 overdub = false;
                 if (!d.held) loopState = LoopState::Off;
@@ -668,7 +701,13 @@ public:
             fsWet.held = true;
             freeze = true;
         }
-        if (fsLoop.active && !fsLoop.held && hostCount - fsLoop.t >= holdN) { fsLoop.held = true; if (fsLoop.playing) overdub = true; }
+        if (fsLoop.active && !fsLoop.held && hostCount - fsLoop.t >= holdN) {
+            fsLoop.held = true;
+            if (fsLoop.playing) overdub = true;
+            // RECORD held: it records from the press for as long as it's held, bars or not.
+            else if (rec.phase != RecPhase::Idle) { rec.histIdx = fsLoop.histIdx; rec.histCycle = fsLoop.histCycle; rec.phase = RecPhase::Recording; rec.endAt = -1; }
+        }
+        const int64_t blockStart = hostCount;
 
         double pkIn = 0, pkOut = 0;
         for (int i = 0; i < n; ++i) {
@@ -753,6 +792,12 @@ public:
             outL[i] = static_cast<float>(l); outR[i] = static_cast<float>(r);
             pkOut = std::max(pkOut, std::max(std::fabs(l), std::fabs(r)));
             ++hostCount;
+            // RECORD: the bar line, and the bar count, in host time, so moving CLOCK can't
+            // stretch them. Checked every sample, so both engines close on the same one.
+            if (rec.phase == RecPhase::Armed) {
+                const double now = p.ppq + static_cast<double>(hostCount - blockStart) * p.bpm / 60.0 / fs;
+                if (!p.hostPlaying || now >= rec.barTarget) startRecording(true);
+            } else if (rec.phase == RecPhase::Recording && rec.endAt >= 0 && hostCount >= rec.endAt) closeRecording();
         }
         peakIn = std::max(pkIn, peakIn * 0.9);
         peakOut = std::max(pkOut, peakOut * 0.9);
@@ -760,14 +805,14 @@ public:
 
     State state() const {
         LoopLed led = loopState == LoopState::Play ? LoopLed::Play : LoopLed::Off;
-        if (fsLoop.active && fsLoop.held && !fsLoop.playing) led = LoopLed::Rec;
+        if ((fsLoop.active && fsLoop.held && !fsLoop.playing) || rec.phase == RecPhase::Recording) led = LoopLed::Rec;
         else if (overdub && loopState == LoopState::Play) led = LoopLed::Dub;
         // TAPE plays a window that follows LENGTH at a capped speed: report that one, so the
         // playhead drawn is the playhead heard.
         const Window win = lsrc <= 0 ? Window{0, 0} : p.loopMode == 1 && lengthSlew >= 0 ? loopWindowAt(lengthSlew) : loopWindow();
         const bool heldNow = p.freezeLatch > 0.5;
         return State{wetOn || heldNow, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
-                     static_cast<float>(peakIn), static_cast<float>(peakOut)};
+                     static_cast<float>(peakIn), static_cast<float>(peakOut), rec.phase == RecPhase::Armed};
     }
 
     // Peak envelope of the captured loop, for drawing. Not real-time safe to call
@@ -857,6 +902,9 @@ private:
     struct Ramp { double ph = 0, dir = 1, prev = 0.5, next = 0.5; uint32_t rng = 0; };
     struct FsWet { bool active = false; int64_t t = 0; bool held = false; };
     struct FsLoop { bool active = false; int64_t t = 0; bool held = false; int histIdx = 0; uint32_t histCycle = 0; bool playing = false; };
+    enum class RecPhase { Idle, Armed, Recording };
+    struct Recording { RecPhase phase = RecPhase::Idle; int histIdx = 0; uint32_t histCycle = 0; int64_t endAt = -1; double barTarget = 0; };
+    Recording rec;
     struct Grain { double ph, start, dir; };
     struct Window { int W, start; };
 
@@ -1004,6 +1052,20 @@ private:
         const double clock = clockHz(e.clock, p.smooth);
         const double user = p.memory > 0.001 ? expMap(clampd(p.memory, 0, 1), 1, 30) * clock : kLoopSamples;
         return static_cast<int>(std::min<double>(kMaxLoopSamples - 1, std::max(64.0, std::min(user, kMaxLoopSeconds * clock))));
+    }
+
+    // RECORD: from here, for the chosen bars (from the next bar line, when `atBar`).
+    void startRecording(bool atBar) {
+        if (atBar) { rec.histIdx = histW; rec.histCycle = histCycles; }
+        rec.phase = RecPhase::Recording;
+        rec.endAt = p.recBars > 0 ? hostCount + static_cast<int64_t>(std::llround(p.recBars * std::max(0.25, p.barQuarters) * 60.0 / std::max(5.0, p.bpm) * fs)) : -1;
+    }
+    // Everything written since the recording began becomes the loop, which plays at once.
+    void closeRecording() {
+        const auto cycles = static_cast<uint32_t>(histCycles - rec.histCycle);
+        const int64_t written = static_cast<int64_t>(cycles) * static_cast<int64_t>(hist.size()) + histW - rec.histIdx;
+        rec.phase = RecPhase::Idle;
+        capture(static_cast<int>(std::min<int64_t>(static_cast<int64_t>(hist.size()) - 1, std::max<int64_t>(0, written))));
     }
 
     void capture(int n) {
@@ -1386,6 +1448,12 @@ private:
         hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (pre ? (wl + wr) * 0.5 : 0)));
         if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
         if (histCount < static_cast<int>(hist.size())) ++histCount;
+        // RECORD at the MEMORY ceiling: it closes, keeping what was played first.
+        if (rec.phase == RecPhase::Recording) {
+            const auto cycles = static_cast<uint32_t>(histCycles - rec.histCycle);
+            const int64_t written = static_cast<int64_t>(cycles) * static_cast<int64_t>(hist.size()) + histW - rec.histIdx;
+            if (written >= maxCaptureSamples()) closeRecording();
+        }
 
         // WET / LOOP blends two complete worlds: the loop keeps its own level
         // across the whole knob and the wet side adds to it. It used to be ducked

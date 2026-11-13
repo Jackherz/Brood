@@ -14,9 +14,10 @@ calibrated against the hardware. It is not affiliated with or endorsed by Chase 
 - **Two channels on one clock.** A wet channel (REVERB, DELAY, SLIP or WEAVE) and a
   micro-looper (ENV, TAPE or STRETCH) share a CLOCK that sets the engine's own sample
   rate, so slowing it darkens and lengthens everything together.
-- **Always listening.** Tap the looper to catch the last few seconds, hold to overdub
-  or record a new loop. Keep up to 30 s, and trim the take with START and END markers on
-  the waveform.
+- **Always listening, or recording.** In CAPTURE, tap the looper to catch the last few
+  seconds. In RECORD, tap to record what you play and tap again to loop it, or record a
+  set number of bars that lands on the host's bar lines. Hold to overdub. Keep up to
+  30 s, and trim the take with START and END markers on the waveform.
 - **Routing:** the wet side hears the input, the loop, or both, and runs before or after
   the looper. FREEZE holds the wet side ringing on its own.
 - **Two modulation sources** with their own rate and shape, routed by dragging onto any

@@ -485,6 +485,10 @@ class BroodCore {
       sync: 0, bpm: 120,
       loopEnd: 1, start: 1, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
+      // RECORD: the loop switch records what's played after it instead of keeping the recent
+      // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
+      // Bars start at the next bar line while the host plays, unless recAtTap.
+      recMode: 0, recBars: 0, recAtTap: 0, barQuarters: 4, hostPlaying: 0, ppq: 0, barStartPpq: 0,
       wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
       // 0 is no route) for each control it can move.
@@ -578,6 +582,7 @@ class BroodCore {
     this.modDepthS = [new Array(7).fill(0), new Array(7).fill(0)];   // depths, smoothed
 
     this.fsDown = { wet: null, loop: null };   // press state for footswitches
+    this.rec = { phase: 'idle', histIdx: 0, histCycle: 0, endAt: -1, barTarget: 0 };   // RECORD
     this.engaged = 0;
     this.events = [];                           // UI notifications (loop captured, ...)
     this.peakIn = 0; this.peakOut = 0;
@@ -611,10 +616,34 @@ class BroodCore {
     }
     if (action === 'down') {
       const playing = this.loopState === 'play';
+      const p = this.p, rec = this.rec;
+      // RECORD, with nothing playing: a tap while recording (or armed) ends it there.
+      if (!playing && rec.phase !== 'idle') {
+        if (rec.phase === 'recording') this.closeRecording();
+        else rec.phase = 'idle';   // armed: a second tap stands it down
+        this.fsDown.loop = null;
+        return;
+      }
       this.fsDown.loop = { t: now, held: false, histIdx: this.histW, histCycle: this.histCycles, playing };
+      if (!playing && p.recMode === 1) {
+        // Recording starts here, or at the next bar line when bars are chosen and the
+        // host is playing. A hold records from the press either way.
+        rec.histIdx = this.histW; rec.histCycle = this.histCycles; rec.endAt = -1;
+        if (p.recBars > 0 && !p.recAtTap && p.hostPlaying) {
+          const into = (p.ppq - p.barStartPpq) / Math.max(0.25, p.barQuarters);
+          rec.barTarget = p.barStartPpq + Math.ceil(into - 1e-9) * Math.max(0.25, p.barQuarters);
+          rec.phase = 'armed';
+        } else this.startRecording(false);
+      }
     } else if (this.fsDown.loop) {
       const d = this.fsDown.loop;
       this.fsDown.loop = null;
+      if (!d.playing && this.p.recMode === 1 && this.rec.phase !== 'idle') {
+        // RECORD: a hold ends on release; a tap leaves it running (to the next tap,
+        // the bar count or the ceiling).
+        if (d.held) this.closeRecording();
+        return;
+      }
       if (d.playing) {
         this.overdub = false;
         if (!d.held) { this.loopState = 'off'; this.events.push('loop-stop'); }
@@ -640,6 +669,22 @@ class BroodCore {
     const clock = clockHz(this.e.clock, this.p.smooth);
     const user = this.p.memory > 0.001 ? expMap(clamp(this.p.memory), 1, 30) * clock : LOOP_SAMPLES;
     return Math.floor(Math.min(MAX_LOOP_SAMPLES - 1, Math.max(64, Math.min(user, MAX_LOOP_SECONDS * clock))));
+  }
+
+  // RECORD: from here, for the chosen bars (from the next bar line, when `atBar`).
+  startRecording(atBar) {
+    const p = this.p, rec = this.rec;
+    if (atBar) { rec.histIdx = this.histW; rec.histCycle = this.histCycles; }
+    rec.phase = 'recording';
+    rec.endAt = p.recBars > 0 ? this.hostCount + Math.round(p.recBars * Math.max(0.25, p.barQuarters) * 60 / Math.max(5, p.bpm) * this.fs) : -1;
+  }
+
+  // Everything written since the recording began becomes the loop, which plays at once.
+  closeRecording() {
+    const rec = this.rec;
+    const written = (this.histCycles - rec.histCycle) * this.hist.length + this.histW - rec.histIdx;
+    rec.phase = 'idle';
+    this.capture(Math.min(this.hist.length - 1, Math.max(0, written)));
   }
 
   capture(n) {
@@ -1124,6 +1169,11 @@ class BroodCore {
     this.hist[this.histW] = softClip(x + (pre ? (wl + wr) * 0.5 : 0));
     if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
     if (this.histCount < this.hist.length) this.histCount++;
+    // RECORD at the MEMORY ceiling: it closes, keeping what was played first.
+    if (this.rec.phase === 'recording') {
+      const written = (this.histCycles - this.rec.histCycle) * this.hist.length + this.histW - this.rec.histIdx;
+      if (written >= this.maxCaptureSamples()) this.closeRecording();
+    }
 
     // WET / LOOP is a blend of two complete worlds, not a ducking contest: the
     // loop keeps its own level all the way across the knob, and the wet side adds
@@ -1158,7 +1208,13 @@ class BroodCore {
       this.freeze = true;
     }
     const fl = this.fsDown.loop;
-    if (fl && !fl.held && this.hostCount - fl.t >= holdN) { fl.held = true; if (fl.playing) this.overdub = true; }
+    if (fl && !fl.held && this.hostCount - fl.t >= holdN) {
+      fl.held = true;
+      if (fl.playing) this.overdub = true;
+      // RECORD held: it records from the press for as long as it's held, bars or not.
+      else if (this.rec.phase !== 'idle') { this.rec.histIdx = fl.histIdx; this.rec.histCycle = fl.histCycle; this.rec.phase = 'recording'; this.rec.endAt = -1; }
+    }
+    const blockStart = this.hostCount;
 
     let pkIn = 0, pkOut = 0;
     for (let i = 0; i < n; i++) {
@@ -1251,6 +1307,12 @@ class BroodCore {
       outL[i] = l; outR[i] = r;
       const ao = Math.max(Math.abs(l), Math.abs(r)); if (ao > pkOut) pkOut = ao;
       this.hostCount++;
+      // RECORD: the bar line, and the bar count, in host time, so moving CLOCK can't
+      // stretch them. Checked every sample, so both engines close on the same one.
+      if (this.rec.phase === 'armed') {
+        const now = p.ppq + (this.hostCount - blockStart) * p.bpm / 60 / fs;
+        if (!p.hostPlaying || now >= this.rec.barTarget) this.startRecording(true);
+      } else if (this.rec.phase === 'recording' && this.rec.endAt >= 0 && this.hostCount >= this.rec.endAt) this.closeRecording();
     }
     this.peakIn = Math.max(pkIn, this.peakIn * 0.9);
     this.peakOut = Math.max(pkOut, this.peakOut * 0.9);
@@ -1260,7 +1322,7 @@ class BroodCore {
   state() {
     const fl = this.fsDown.loop;
     let loop = this.loopState;
-    if (fl && fl.held && !fl.playing) loop = 'rec';
+    if ((fl && fl.held && !fl.playing) || this.rec.phase === 'recording') loop = 'rec';
     else if (this.overdub && this.loopState === 'play') loop = 'dub';
     // TAPE plays a window that follows LENGTH at a capped speed: report that one, so the
     // playhead drawn is the playhead heard.
@@ -1269,6 +1331,7 @@ class BroodCore {
       wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
       mods: this.rampRaw.slice(), lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
+      recArmed: this.rec.phase === 'armed',
     };
   }
 

@@ -586,7 +586,12 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
     if (lsrc <= 0) {
         g.setColour(dimmed); g.fillRect(b.getX() + 12.f, mid + 14.f, b.getWidth() - 24.f, 1.f);
         g.setColour(k.onSunk); g.setFont(font(18));
-        g.drawText(led == 2 ? "RECORDING_" : "LISTENING. PRESS LOOP TO KEEP THE LAST MOMENT_", b.withTrimmedBottom(16.f), juce::Justification::centred);
+        const bool record = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f;
+        const juce::String bars = proc.describe("recBars").toUpperCase();
+        const juce::String idle = record ? "PRESS LOOP TO RECORD_" : "LISTENING. PRESS LOOP TO KEEP THE LAST MOMENT_";
+        const juce::String text = proc.ui.recArmed.load() ? "WAITING FOR THE BAR LINE_"
+                                : led == 2 ? (record && bars != "FREE" ? "RECORDING " + bars + "_" : juce::String("RECORDING_")) : idle;
+        g.drawText(text, b.withTrimmedBottom(16.f), juce::Justification::centred);
         return;
     }
     int s = 0, e = 0;
@@ -672,6 +677,20 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     routing = std::make_unique<ThreeWay>(*proc.apvts.getParameter("routing"), juce::StringArray{"In", "In + Loop", "Loop"}, modeChanged("ROUTING", "routing"));
     loopMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("loopMode"), juce::StringArray{"Env", "Tape", "Stretch"}, modeChanged("LOOP MODE", "loopMode"));
     for (auto* t : {wetMode.get(), routing.get(), loopMode.get()}) addAndMakeVisible(*t);
+    recMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("recMode"), juce::StringArray{"Capture", "Record"}, [this] {
+        const bool record = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f;
+        showReadout("LOOP SWITCH", record ? "record: tap, play, tap. or hold while you play" : "capture: a tap keeps the recent past");
+    });
+    addAndMakeVisible(*recMode);
+    recBars = std::make_unique<Stepper>(*proc.apvts.getParameter("recBars"), "BARS",
+                                        juce::StringArray{"FREE", "1", "2", "3", "4", "6", "8", "12", "16"}, [this] {
+        showReadout("RECORD", proc.describe("recBars") + (proc.describe("recBars") == "free" ? ": until the next tap" : ", then it plays"));
+    });
+    addChildComponent(*recBars);
+    recAtTap.getProperties().set("plate", true);
+    recAtTap.onClick = [this] { showReadout("RECORD", recAtTap.getToggleState() ? "bars start at the tap" : "bars start on the next bar line"); };
+    addChildComponent(recAtTap);
+    recAtTapAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "recAtTap", recAtTap);
     fsWet = std::make_unique<Footswitch>(*proc.apvts.getParameter("wetSwitch"), "WET", "A");
     fsLoop = std::make_unique<Footswitch>(*proc.apvts.getParameter("loopSwitch"), "LOOP", "L");
     addAndMakeVisible(*fsWet); addAndMakeVisible(*fsLoop);
@@ -1148,8 +1167,11 @@ void BroodEditor::updateModeControls() {
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
     const int pre = proc.apvts.getRawParameterValue("wetPre")->load() > 0.5f ? 1 : 0;
     const int worn = proc.apvts.getRawParameterValue("character")->load() > 0.75f ? 1 : 0;
-    if (wm == lastModeWet && lm == lastModeLoop && pre == lastPre && worn == lastWorn) return;
-    lastModeWet = wm; lastModeLoop = lm; lastPre = pre; lastWorn = worn;
+    const int record = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f ? 1 : 0;
+    if (wm == lastModeWet && lm == lastModeLoop && pre == lastPre && worn == lastWorn && record == lastRec) return;
+    lastModeWet = wm; lastModeLoop = lm; lastPre = pre; lastWorn = worn; lastRec = record;
+    recBars->setVisible(record == 1);   // bars and the bar line are RECORD's alone
+    recAtTap.setVisible(record == 1);
     wearPost.setVisible(worn == 1);   // only WORN has anything to keep out of the loop
     // With the wet side before the loop it hears only the input, so ROUTING stands aside.
     routing->setEnabled(pre == 0);
@@ -1248,22 +1270,32 @@ void BroodEditor::resized() {
     auto side = juce::Rectangle<int>(864, 108, 312, 548);
     lcdArea = side.removeFromTop(112);
     side.removeFromTop(10);
-    loopArea = side.removeFromTop(100);
+    loopArea = side.removeFromTop(113);
     side.removeFromTop(10);
-    rampArea = side.removeFromTop(206);
+    rampArea = side.removeFromTop(194);
     side.removeFromTop(10);
     srcArea = side;
 
     // 01 LOOP: two rows of label / slider / figure on the same three columns so the figures line up.
     constexpr int labelW = 74, figureW = 44;
     auto inner = loopArea.withTrimmedTop(kit::panelHeadHeight).reduced(12, 6);
-    inner.removeFromTop(8);
+    inner.removeFromTop(4);
     auto trimRow = [&](juce::Rectangle<int>& out, juce::Slider& sl) {
         out = inner.removeFromTop(21).withTrimmedLeft(labelW).withTrimmedRight(figureW);
         place(sl, out);
+        inner.removeFromTop(4);
     };
     trimRow(memoryDesign, memory);
     trimRow(balanceDesign, balance);
+    auto recRow = inner.removeFromTop(21);
+    recModeDesign = recRow.removeFromLeft(120);
+    recRow.removeFromLeft(6);
+    recBarsDesign = recRow.removeFromLeft(104);
+    recRow.removeFromLeft(6);
+    recAtTapDesign = recRow;
+    place(*recMode, recModeDesign);
+    place(*recBars, recBarsDesign);
+    place(recAtTap, recAtTapDesign.withSizeKeepingCentre(recAtTapDesign.getWidth(), 18));
 
     // 02 MODULATION: the two sources and the route list, then the selected source's
     // shape, rate and switches.
@@ -1377,6 +1409,11 @@ void BroodEditor::rebuildHoverHelp() {
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left is the pedal's own buffer, which shrinks as CLOCK drops.");
     add(gainDesign, "LOOP GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
     add(loopViewDesign, "THE WINDOW", "drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.");
+    add(recModeDesign, "LOOP SWITCH", "capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.");
+    if (recBars->isVisible()) {
+        add(recBarsDesign, "BARS", "free records until the next tap. a number records that many bars, then plays. longer than MEMORY allows, MEMORY wins.");
+        add(recAtTapDesign, "AT TAP", "off: a bar count starts on the next bar line while the host plays, so loops land on the grid. on: it starts the moment you tap.");
+    }
     add(balanceDesign.expanded(0, 2), "WET / LOOP", "the loop keeps its level across the whole travel and the wet side is added on top. drop a source here: its bar is the swing, the small tab is where it is now.");
 
     add(sourceBoxDesign, "SOURCE", "what it listens to: the track, a phrase made here, or a file.");

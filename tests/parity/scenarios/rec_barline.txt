@@ -1,0 +1,15 @@
+# RECORD, 1 bar, waiting for the bar line: the host plays from the start at 120 bpm, the
+# tap lands mid-bar, recording starts on the next bar line and plays a bar later.
+rate 48000
+seconds 9
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param memory 1
+0 param bpm 120
+0 param hostPlaying 1
+0 param recMode 1
+0 param recBars 1
+480 fs loop down
+484 fs loop up

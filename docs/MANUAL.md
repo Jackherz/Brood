@@ -59,8 +59,21 @@ pedal this follows has none. It reads in three tiers:
    the loop, because the rough conversion on the way in is what a loop records. In the
    browser version it sits beside CLASSIC.
 2. **The side column**: the readout, then three numbered panels in the order you reach
-   for them while playing: `01 LOOP` (MEMORY, WET/LOOP), `02 MODULATION` and `03 INPUT`,
-   which is set once per session.
+   for them while playing: `01 LOOP` (MEMORY, WET/LOOP and the loop switch), `02 MODULATION`
+   and `03 INPUT`, which is set once per session.
+
+   **CAPTURE or RECORD** sets what the loop switch does with nothing playing. CAPTURE is
+   the pedal's way: a tap keeps the recent past, up to MEMORY. RECORD is a regular
+   looper: a tap starts recording what you play and a second tap plays it, or hold the
+   switch for as long as you play and let go to hear it. In RECORD, **BARS** chooses FREE
+   (until the next tap) or 1 to 16 bars, after which it plays by itself; a tap before
+   then still ends it early. With bars chosen and the host playing, recording waits for
+   the next bar line so the loop lands on the grid; **AT TAP** starts it the moment you
+   tap instead. With the host stopped, or in the browser version, it always starts at
+   the tap. Bars are counted at the host's tempo and bar length (the last tempo it sent,
+   else 120 bpm, in 4/4), so moving CLOCK while recording doesn't change them. If MEMORY
+   runs out first, the recording ends there and keeps what was played first. With a
+   loop playing, a tap stops it and a hold overdubs, in both modes.
 3. **Under the hood**: the six sliders along the bottom. The last, **NOISE**, sets how much
    of the worn clock's hiss is let through; it only does anything with WEAR on WORN.
 

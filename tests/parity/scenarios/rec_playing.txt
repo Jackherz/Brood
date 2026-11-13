@@ -1,0 +1,20 @@
+# RECORD with a loop playing: a tap stops it, a hold overdubs, as in CAPTURE. In between,
+# a hold with nothing playing records a new loop.
+rate 48000
+seconds 12
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param memory 0.8
+0 param recMode 1
+150 fs loop down
+154 fs loop up
+550 fs loop down
+554 fs loop up
+900 fs loop down
+1300 fs loop up
+1500 fs loop down
+1800 fs loop up
+2000 fs loop down
+2004 fs loop up

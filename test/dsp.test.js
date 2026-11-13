@@ -904,6 +904,58 @@ test('an old TAPE START comes back to the same place', () => {
   assert.equal(migrateTapeStart(1, 0.5, len), 0);
 });
 
+test('RECORD: the loop switch records what is played after it', () => {
+  const tap = (core) => { core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); };
+  const fresh = (extra = {}) => {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ recMode: 1, clock: 1, memory: 1, mix: 1, balance: 1, routing: 2, ...extra })) core.setParam(k, v);
+    return core;
+  };
+  const seconds = (core) => core.state().lsrc / core.state().clockHz;
+  {
+    const core = fresh();
+    render(core, 1, () => 0);
+    tap(core);
+    assert.equal(core.state().loop, 'rec', 'a tap starts recording');
+    render(core, 1, (t) => 0.4 * Math.sin(2 * Math.PI * 440 * t));
+    tap(core);
+    assert.equal(core.state().loop, 'play', 'a second tap plays it');
+    assert.ok(Math.abs(seconds(core) - 1) < 0.01, `the take is what was played (${seconds(core).toFixed(3)} s)`);
+  }
+  {
+    const core = fresh({ recBars: 2, recAtTap: 1, bpm: 120 });
+    render(core, 0.5, () => 0);
+    tap(core);
+    let closed = -1;
+    const at = {};
+    for (let b = 0; b < blk(5); b++) at[b] = (c) => { if (b === blk(2)) c.setParam('clock', 0.6); if (closed < 0 && c.state().loop === 'play') closed = b; };
+    render(core, 5, (t) => 0.3 * Math.sin(2 * Math.PI * 330 * t), at);
+    assert.ok(closed >= 0 && Math.abs(closed - blk(4)) <= 1, `2 bars close at 4 s (block ${closed})`);
+  }
+  {
+    const core = fresh({ recBars: 1, bpm: 120, hostPlaying: 1 });
+    const transport = (c, b) => { c.p.ppq = (b * BLOCK) / FS * 2; c.p.barStartPpq = Math.floor(c.p.ppq / 4) * 4; };
+    const at0 = {};
+    for (let b = 0; b < blk(1.3); b++) at0[b] = (c) => transport(c, b);
+    render(core, 1.3, () => 0, at0);
+    tap(core);
+    assert.ok(core.state().recArmed, 'a tap mid-bar waits for the bar line');
+    let started = -1;
+    const at = {};
+    for (let b = 0; b < blk(2); b++) at[b] = (c) => { transport(c, b + blk(1.3)); if (started < 0 && c.state().loop === 'rec') started = b + blk(1.3); };
+    render(core, 2, () => 0.2, at);
+    assert.ok(started >= 0 && Math.abs(started - blk(2)) <= 1, `it starts on the bar line (block ${started})`);
+  }
+  {
+    const core = fresh({ memory: Math.log(2) / Math.log(30) });
+    render(core, 0.5, () => 0);
+    tap(core);
+    render(core, 3, (t) => 0.3 * Math.sin(2 * Math.PI * (200 + 100 * t) * t));
+    assert.equal(core.state().loop, 'play', 'the ceiling closes the recording');
+    assert.ok(Math.abs(seconds(core) - 2) < 0.02, `at 2 s (${seconds(core).toFixed(3)})`);
+  }
+});
+
 // ─────────────────────────── the ramp engine ───────────────────────────
 
 // Sample the control the DSP actually reads, once per block.
