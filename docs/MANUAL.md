@@ -228,7 +228,11 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   at `1` the window is the whole take, reaching the very beginning of a 30 s
   capture; the travel is linear in the knob (each quarter turn moves the start a
   quarter of the way in), which is what makes a long take usable rather than a
-  long wait on the last few seconds. **END** is an end marker: it says where the
+  long wait on the last few seconds. When LENGTH moves, the playhead keeps its place
+  as a share of the window, and the window follows LENGTH at up to four times
+  playback speed, so even fast, deep LENGTH modulation bends the loop's pitch (two
+  octaves up at most) rather than jumping or clicking. On a long take a big turn of
+  LENGTH takes a moment to settle: about 8 s for a full turn on a 30 s take. **END** is an end marker: it says where the
   window stops playing, and dragging it moves the end marker and nothing else —
   the window grows or shrinks from the right while START stays where you put it.
   **START** says where that window begins inside the capture, which is what ENV and

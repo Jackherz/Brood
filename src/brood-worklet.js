@@ -28,6 +28,7 @@ const MAX_LOOP_SAMPLES = LOOP_SAMPLES * MAX_LOOP_SECONDS;
 const CLOCK_MIN_HZ = 2000;
 const CLOCK_MAX_HZ = 64000;
 const CORE_FS = 64000;       // buffer timings are defined at the pedal’s 64 kHz clock
+const LENGTH_FOLLOW = 3;     // TAPE window samples a LENGTH move may shift per tick
 const CLOCK_STEPS = [2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000];
 const DELAY_MAX_SEC = 2.1;
 const SLIP_BUF_SEC = 5.5;
@@ -548,6 +549,11 @@ class BroodCore {
     // Moving START moves the read head; see loopTick for the 25 ms crossfade these
     // four carry from where the loop was playing to where it now begins.
     this.startA = 0; this.startB = 0; this.startFade = 1; this.startLen = -1;
+    // LENGTH in TAPE sizes the window. When it moves, the playhead keeps its place as a
+    // share of the window (the way the Digitakt does it), and the window's start follows
+    // without a crossfade, since nothing jumps. These say what the last tick played.
+    this.lastW = -1; this.lastWant = 0; this.lastMode = -1; this.lastTrim = -1; this.lastWhere = -1;
+    this.lengthSlew = -1;
     this.tapeSpeed = 1;
     this.stretchSpeed = 0;
     this.env = 0;
@@ -786,12 +792,23 @@ class BroodCore {
     if (this.loopState === 'off' && this.loopGain < 1e-4) { this.loopGain = 0; return 0; }
     if (this.lsrc < 64) return 0;
 
-    const win = this.loopWindow();
+    // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
+    // which keeps its share of the window, never runs faster than four times normal
+    // (two octaves up). Faster, deep LENGTH modulation zipped through the take.
+    const len0 = Math.max(64, this.lsrc);
+    const maxL = LENGTH_FOLLOW / (0.98 * len0);
+    if (this.lengthSlew < 0 || this.lsrc !== this.startLen) this.lengthSlew = this.e.length;
+    else this.lengthSlew += clamp(this.e.length - this.lengthSlew, -maxL, maxL);
+    const win = this.p.loopMode === 1 ? this.loopWindowAt(this.lengthSlew) : this.loopWindow();
     const W = win.W, winStart = win.start;
     const buf = this.loopBuf;
     const len = Math.max(64, this.lsrc);
     const mode = this.p.loopMode;
     const m = this.e.modLoop;
+    const trimNow = clamp(this.p.loopEnd, 0.02, 1), whereNow = clamp(this.p.start, 0, 1);
+    // Only LENGTH moved the window: same mode, same END, same START, same take.
+    const lengthMoved = mode === 1 && this.lastMode === 1 && this.lsrc === this.startLen && trimNow === this.lastTrim && whereNow === this.lastWhere && this.lastW > 0 && W !== this.lastW;
+    if (lengthMoved) this.loopPos = this.loopPos * W / this.lastW;
     // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
     // loop plays back slower and lower and takes div times as long to come round.
     const ldiv = divMap(this.p.loopDiv);
@@ -805,6 +822,13 @@ class BroodCore {
     // of its own either. A capture or a restore resets it — there is a gain ramp
     // around both, so landing instantly there cannot be heard.
     if (this.lsrc !== this.startLen) { this.startLen = this.lsrc; this.startA = winStart; this.startB = winStart; this.startFade = 1; }
+    if (lengthMoved && winStart !== this.lastWant) {
+      // The window slid with LENGTH and the playhead slid with it: move both heads
+      // the same way, so any fade under way carries on and none starts.
+      this.startA += winStart - this.lastWant;
+      this.startB += winStart - this.lastWant;
+    }
+    this.lastW = W; this.lastWant = winStart; this.lastMode = mode; this.lastTrim = trimNow; this.lastWhere = whereNow;
     if (this.startFade >= 1) {
       this.startA = this.startB;                   // the last fade has landed
       if (winStart !== this.startA) { this.startB = winStart; this.startFade = 0; }
@@ -1222,7 +1246,9 @@ class BroodCore {
     let loop = this.loopState;
     if (fl && fl.held && !fl.playing) loop = 'rec';
     else if (this.overdub && this.loopState === 'play') loop = 'dub';
-    const win = this.lsrc > 0 ? this.loopWindow() : { W: 0, start: 0 };
+    // TAPE plays a window that follows LENGTH at a capped speed: report that one, so the
+    // playhead drawn is the playhead heard.
+    const win = this.lsrc <= 0 ? { W: 0, start: 0 } : this.p.loopMode === 1 && this.lengthSlew >= 0 ? this.loopWindowAt(this.lengthSlew) : this.loopWindow();
     return {
       wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
       mods: this.rampRaw.slice(), lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,

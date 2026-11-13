@@ -1,0 +1,27 @@
+# LENGTH moved fast by a modulation source while a loop plays, in TAPE (where LENGTH sizes
+# the window and the playhead keeps its share of it), then ENV and STRETCH, with an
+# overdub laid down while the window moves.
+rate 48000
+seconds 14
+0 param wetMode 0
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param memory 0.6
+0 param loopMode 1
+0 param length 0.5
+0 param modLoop 0.66
+0 param mod1On 1
+0 param mod1Rate 1
+0 param mod1Wave 0.3
+400 fs loop down
+404 fs loop up
+420 param mod1_length 1
+900 param mod1Wave 0
+1100 fs loop down
+1400 fs loop up
+1500 param loopMode 0
+1800 param loopMode 2
+2100 param mod1Wave 0.7
+2400 param mod1_length 0

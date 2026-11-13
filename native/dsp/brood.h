@@ -24,6 +24,7 @@ constexpr int kMaxLoopSamples = kLoopSamples * kMaxLoopSeconds;
 constexpr double kClockMinHz = 2000.0;
 constexpr double kClockMaxHz = 64000.0;
 constexpr double kCoreFs = 64000.0;
+constexpr double kLengthFollow = 3.0;      // TAPE window samples a LENGTH move may shift per tick
 // TONE is a hi-cut on the wet bus: a fixed 2.6 kHz one-pole, blended in by amount.
 constexpr double kToneHz = 2600.0;
 constexpr double kDelayMaxSec = 2.1;
@@ -749,7 +750,9 @@ public:
         LoopLed led = loopState == LoopState::Play ? LoopLed::Play : LoopLed::Off;
         if (fsLoop.active && fsLoop.held && !fsLoop.playing) led = LoopLed::Rec;
         else if (overdub && loopState == LoopState::Play) led = LoopLed::Dub;
-        const Window win = lsrc > 0 ? loopWindow() : Window{0, 0};
+        // TAPE plays a window that follows LENGTH at a capped speed: report that one, so the
+        // playhead drawn is the playhead heard.
+        const Window win = lsrc <= 0 ? Window{0, 0} : p.loopMode == 1 && lengthSlew >= 0 ? loopWindowAt(lengthSlew) : loopWindow();
         const bool heldNow = p.freezeLatch > 0.5;
         return State{wetOn || heldNow, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
                      static_cast<float>(peakIn), static_cast<float>(peakOut)};
@@ -881,6 +884,12 @@ private:
     int startA = 0, startB = 0;                // whole samples: never fractional
     double startFade = 1;
     int startLen = -1;
+    // LENGTH in TAPE sizes the window. When it moves, the playhead keeps its place as a
+    // share of the window (the way the Digitakt does it), and the window's start follows
+    // without a crossfade, since nothing jumps. These say what the last tick played.
+    int lastW = -1, lastWant = 0, lastMode = -1;
+    double lengthSlew = -1;
+    double lastTrim = -1, lastWhere = -1;
     double env = 0, envHold = 0, envMix = 0, sliceStart = 0, slicePh = 0;
     double softStart = 0, softPh = 0, softS = 0, softOldFade = 0, softOldS = 0;   // SOFT: the slice being let go
     bool envGate = false;
@@ -1046,11 +1055,22 @@ private:
         if (loopState == LoopState::Off && loopGain < 1e-4) { loopGain = 0; dubGain = 0; dubLast = -1; return 0; }
         if (lsrc < 64) return 0;
 
-        const Window win = loopWindow();
+        // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
+        // which keeps its share of the window, never runs faster than four times normal
+        // (two octaves up). Faster, deep LENGTH modulation zipped through the take.
+        const int len0 = std::max(64, lsrc);
+        const double maxL = kLengthFollow / (0.98 * len0);
+        if (lengthSlew < 0 || lsrc != startLen) lengthSlew = e.length;
+        else lengthSlew += clampd(e.length - lengthSlew, -maxL, maxL);
+        const Window win = p.loopMode == 1 ? loopWindowAt(lengthSlew) : loopWindow();
         const int W = win.W;
         const int len = std::max(64, lsrc);
         const double Wd = W;
         const int mode = p.loopMode;
+        const double trimNow = clampd(p.loopEnd, 0.02, 1), whereNow = clampd(p.start, 0, 1);
+        // Only LENGTH moved the window: same mode, same END, same START, same take.
+        const bool lengthMoved = mode == 1 && lastMode == 1 && lsrc == startLen && trimNow == lastTrim && whereNow == lastWhere && lastW > 0 && W != lastW;
+        if (lengthMoved) loopPos = loopPos * Wd / lastW;
         const double m = e.modLoop;
         // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
         // loop plays back slower and lower and takes div times as long to come round.
@@ -1066,6 +1086,13 @@ private:
         // around both, so landing instantly there cannot be heard.
         const int wantStart = win.start;   // ('target' is taken: the loop's gain target)
         if (lsrc != startLen) { startLen = lsrc; startA = startB = wantStart; startFade = 1; }
+        if (lengthMoved && wantStart != lastWant) {
+            // The window slid with LENGTH and the playhead slid with it: move both heads
+            // the same way, so any fade under way carries on and none starts.
+            startA += wantStart - lastWant;
+            startB += wantStart - lastWant;
+        }
+        lastW = W; lastWant = wantStart; lastMode = mode; lastTrim = trimNow; lastWhere = whereNow;
         if (startFade >= 1) {
             startA = startB;                          // the last fade has landed
             if (wantStart != startA) { startB = wantStart; startFade = 0; }

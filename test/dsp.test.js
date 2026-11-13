@@ -833,6 +833,29 @@ test('WORN after the loop keeps the take clean, and is still heard', () => {
   assert.ok(rms(L, 1, 2) > 1e-4, 'worn after the loop is still heard');
 });
 
+test('TAPE: deep, fast LENGTH modulation keeps the playhead moving through the window', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.5, mix: 1, balance: 1, routing: 2, modLoop: 0.66 })) core.setParam(k, v);
+  render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  for (const [k, v] of Object.entries({ mod1On: 1, mod1Rate: 1, mod1Wave: 0.3, mod1_length: 1 })) core.setParam(k, v);   // square, 8 Hz, full depth
+  let back = 0, last = -1;
+  const at = {};
+  for (let b = 0; b < blk(3); b++) at[b] = (c) => {
+    const st = c.state();
+    const f = st.winLen > 0 ? st.pos / st.winLen : 0;
+    if (b > blk(1) && last >= 0 && f < last - 0.1 && last < 0.9) back++;
+    last = f;
+  };
+  render(core, 3, () => 0, at);
+  const { L } = render(core, 1, () => 0);
+  let maxStep = 0;
+  for (let i = 1; i < L.length; i++) maxStep = Math.max(maxStep, Math.abs(L[i] - L[i - 1]));
+  assert.equal(back, 0, `LENGTH modulation throws the playhead back ${back} times`);
+  assert.ok(maxStep < 0.07, `LENGTH modulation steps by ${maxStep.toFixed(3)}`);
+  assert.ok(rms(L, 0, 1) > 0.1, 'and the loop keeps sounding');
+});
+
 // ─────────────────────────── the ramp engine ───────────────────────────
 
 // Sample the control the DSP actually reads, once per block.

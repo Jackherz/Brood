@@ -509,13 +509,15 @@ int main() {
         const double knob[] = {1.0, 0.95, 0.75, 0.5, 0.25};
         for (int i = 0; i < 5; ++i) {
             c.p.length = knob[i];
-            render(c, 0.6, [](double) { return 0.0; });   // let the smoothed knob settle
+            // Let the knob settle: in TAPE the window follows LENGTH at up to four times
+            // playback speed, so on a 30 s take a turn of a quarter takes a few seconds.
+            render(c, 4, [](double) { return 0.0; });
             const auto st = c.state();
             const double start = static_cast<double>(st.winStart) / len;
             CHECK(std::fabs(start - want[i]) < 0.02, "LENGTH %.2f starts at %.1f %% (want %.1f %%)", knob[i], start * 100, want[i] * 100);
         }
         c.p.length = 1;
-        render(c, 0.6, [](double) { return 0.0; });
+        render(c, 8, [](double) { return 0.0; });
         const auto all = c.state();
         CHECK(all.winStart == 0 && all.winLen > static_cast<int>(29 * FS), "LENGTH 1 is the whole take from the start");
     }
@@ -817,6 +819,29 @@ int main() {
             CHECK(std::fabs(after(knob, 0.02) - 1) < 1e-3, "SMOOTH on leaves the clock alone at once (knob %f)", knob);
             CHECK(std::fabs(after(knob, 3.0) - 1) < 1e-3, "and it stays there (knob %f)", knob);
         }
+    }
+    {   // TAPE: deep, fast LENGTH modulation keeps the playhead moving through the window. The
+        // playhead keeps its share of the window, and the window follows LENGTH at a capped
+        // speed, so it neither jumps back (as it did, every cycle) nor zips through the take.
+        brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.5; c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.p.modLoop = 0.66;
+        c.prepare(FS);
+        render(c, 4, [](double t) { return 0.4 * std::sin(2 * brood::kPi * 220 * t); });
+        tap(c, 1);
+        c.p.mods[0].on = true; c.p.mods[0].rate = 1; c.p.mods[0].wave = 0.3; c.p.mods[0].depth[2] = 1;   // square, 8 Hz, full depth
+        double maxStep = 0, last = -1; int back = 0; float prev = 0;
+        render(c, 3, [](double) { return 0.0; }, [&](brood::Core& cc, long b) {
+            const auto st = cc.state();
+            const double f = st.winLen > 0 ? st.pos / st.winLen : 0;
+            if (b > blk(1) && last >= 0 && f < last - 0.1 && last < 0.9) ++back;
+            last = f;
+        });
+        auto o = render(c, 1, [](double) { return 0.0; });
+        for (size_t i = 0; i < o.L.size(); ++i) { if (i > 0) maxStep = std::max(maxStep, static_cast<double>(std::fabs(o.L[i] - prev))); prev = o.L[i]; }
+        CHECK(back == 0, "LENGTH modulation throws the playhead back %d times", back);
+        // A 220 Hz sine at the loop's level steps by about 0.012 a sample; four times normal
+        // speed at most is about 0.05. Jumping back stepped by 0.165.
+        CHECK(maxStep < 0.07, "LENGTH modulation steps by %.3f", maxStep);
+        CHECK(rms(o.L, 0, 1) > 0.1, "and the loop keeps sounding (%.3f)", rms(o.L, 0, 1));
     }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
