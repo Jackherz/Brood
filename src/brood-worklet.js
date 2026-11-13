@@ -483,7 +483,7 @@ class BroodCore {
       wetMode: 0, routing: 0, loopMode: 0,
       trails: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
-      loopEnd: 1, start: 0, memory: 0,
+      loopEnd: 1, start: 1, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
       wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
@@ -694,10 +694,12 @@ class BroodCore {
     // Rounded, not floored: at 1 the window is exactly the whole take, so the
     // start is sample 0 rather than one sample late.
     const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(lengthNow))));
-    // TAPE takes its window from the newest audio, so START reaches back into
-    // the take; zero is the tail, as before.
-    const room = Math.max(0, len - W0);
-    return { W: Math.max(64, Math.floor(W0 * trim)), start: Math.round((1 - where) * room) };
+    // START means the same as in ENV and STRETCH: 0 is the oldest audio, 1 the newest.
+    // At 1 the window sits against the end of the take whatever LENGTH is, so TAPE
+    // still follows the newest audio as LENGTH turns; anywhere else START is a fixed
+    // point in the take that LENGTH grows and shrinks the window from.
+    const travel = Math.max(0, Math.round(where * Math.max(0, len - 64)));
+    return { W: Math.max(64, Math.floor(W0 * trim)), start: Math.min(travel, Math.max(0, len - W0)) };
   }
 
   // The widest the window can be: the whole take in ENV and STRETCH, LENGTH's
@@ -809,6 +811,16 @@ class BroodCore {
     // Only LENGTH moved the window: same mode, same END, same START, same take.
     const lengthMoved = mode === 1 && this.lastMode === 1 && this.lsrc === this.startLen && trimNow === this.lastTrim && whereNow === this.lastWhere && this.lastW > 0 && W !== this.lastW;
     if (lengthMoved) this.loopPos = this.loopPos * W / this.lastW;
+    // A change of loop mode keeps the playhead where it is in the take when the new
+    // window holds it; otherwise it crossfades from there to the new window's start.
+    const modeSwitched = this.lastMode >= 0 && mode !== this.lastMode && this.lsrc === this.startLen && this.lastW > 0;
+    let switchFrom = -1;
+    if (modeSwitched) {
+      const absNow = this.lastWant + this.loopPos;
+      const inNew = absNow - winStart;
+      if (inNew >= 0 && inNew < W) this.loopPos = inNew;
+      else { this.loopPos = 0; switchFrom = Math.floor(absNow); }
+    }
     // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
     // loop plays back slower and lower and takes div times as long to come round.
     const ldiv = divMap(this.p.loopDiv);
@@ -827,6 +839,10 @@ class BroodCore {
       // the same way, so any fade under way carries on and none starts.
       this.startA += winStart - this.lastWant;
       this.startB += winStart - this.lastWant;
+    }
+    if (modeSwitched) {
+      if (switchFrom >= 0) { this.startA = switchFrom; this.startB = winStart; this.startFade = 0; }
+      else { this.startA = winStart; this.startB = winStart; this.startFade = 1; }
     }
     this.lastW = W; this.lastWant = winStart; this.lastMode = mode; this.lastTrim = trimNow; this.lastWhere = whereNow;
     if (this.startFade >= 1) {
@@ -1351,6 +1367,18 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
   registerProcessor('brood-processor', BroodProcessor);
 }
 
+// Sets saved before START meant the same in every mode stored TAPE's START counted back
+// from the newest audio. The value that puts the window in the same place now, for the
+// LENGTH and take length that were saved (0 was the newest, so it becomes exactly 1).
+function migrateTapeStart(oldStart, length, takeLength) {
+  const len = Math.max(64, takeLength);
+  const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(length, 0, 1))));
+  const room = Math.max(0, len - W0);
+  const oldAt = Math.round((1 - clamp(oldStart, 0, 1)) * room);
+  if (oldAt >= room) return 1;
+  return clamp(oldAt / Math.max(1, len - 64), 0, 1);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BroodCore, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
 }

@@ -50,7 +50,7 @@ const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, smooth: 0, balance: 0.5,
-  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0, envSync: 0,
+  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
   wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
@@ -150,13 +150,11 @@ function describe(id, p) {
   if (id === 'modLoop' && p.loopMode === 2 && Math.abs(v - 0.5) < 0.03) return 'FROZEN';
   if (id === 'memory') return v <= 0.001 ? `PEDAL · ${timeText(64 / rate)}` : `UP TO ${timeText(expMap(v, 1, 30))}`;
   if (id === 'loopEnd') return v >= 0.999 ? 'TO THE END' : `PLAYS TO ${percent(v)}`;
-  // ENV and STRETCH play from the oldest audio, so START moves towards the present;
-  // TAPE plays the newest, so START reaches back. Same knob, two honest readouts.
+  // One meaning in every mode: 0 is the oldest audio, 1 the newest.
   if (id === 'start') {
-    // A percentage, not a duration: how far the window has moved into the room
-    // LENGTH and END leave is exact, whereas the take's length is not known here.
-    if (v <= 0.005) return p.loopMode === 1 ? 'THE NEWEST' : 'THE OLDEST';
-    return (p.loopMode === 1 ? 'REACHES BACK ' : 'SLIDES ON ') + percent(v);
+    if (v <= 0.005) return 'THE OLDEST';
+    if (v >= 0.995) return 'THE NEWEST';
+    return `${percent(v)} IN`;
   }
   if (id === 'tone') return v > 0.995 ? 'OPEN' : `HI-CUT ${percent(1 - v)}`;
   if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;   // per overdub pass
@@ -468,13 +466,15 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
       return;
     }
     const anchor = drag.current.anchorEnd;           // START moves under a fixed end
-    const room = tape ? len - span : len - 64;
     // START may not pass END, may not open the window wider than the span, and in
     // TAPE cannot leave the room LENGTH allows.
     const lo = Math.max(0, anchor - span);
     let xs = clamp(at, lo, Math.max(lo, anchor - minW));
-    if (tape) xs = Math.min(xs, Math.max(0, room));
-    onChange('start', room <= 0 ? 0 : clamp(tape ? 1 - xs / room : xs / room));
+    if (tape) xs = Math.min(xs, Math.max(0, len - span));
+    // START counts from the oldest audio in every mode; a window against the end of the
+    // take is START 1, so it keeps following the newest audio.
+    const tail = tape ? xs >= len - span - 0.5 : anchor >= len - 0.5;
+    onChange('start', tail ? 1 : clamp(xs / Math.max(1, len - 64)));
     onChange('loopEnd', clamp((anchor - xs) / span, 0.02, 1));
     onTouch('start');
   };
@@ -502,7 +502,7 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
     if (!d) { if (event.key === 'Home') { event.preventDefault(); reset(); } return; }
     event.preventDefault();
     const p = paramsRef.current;
-    if (event.shiftKey) { onChange('start', clamp(p.start + (p.loopMode === 1 ? -d : d))); onTouch('start'); }
+    if (event.shiftKey) { onChange('start', clamp(p.start + d)); onTouch('start'); }
     else { onChange('loopEnd', clamp(p.loopEnd + d, 0.02, 1)); onTouch('loopEnd'); }
   };
   const has = !!(wave && state?.lsrc);
@@ -677,16 +677,32 @@ function Dip({ label, checked, onClick, help }) {
   </button>;
 }
 
+// Settings and presets saved before START meant the same in every mode stored TAPE's START
+// counted back from the newest audio. No take is stored, so the pedal's length stands in.
+// Mirrors migrateTapeStart() in src/brood-worklet.js and native/dsp/brood.h.
+function migrateStart(p) {
+  if (!p || typeof p !== 'object' || p.loopMode !== 1 || !Number.isFinite(p.start)) return p;
+  const len = 64000;
+  const length = Number.isFinite(p.length) ? p.length : BASE.length;
+  const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(length))));
+  const room = Math.max(0, len - W0);
+  const oldAt = Math.round((1 - clamp(p.start)) * room);
+  return { ...p, start: oldAt >= room ? 1 : clamp(oldAt / (len - 64)) };
+}
+
 function App() {
-  const [params, setParams] = useState(() => sanitize(safeRead('brood-params-v1')));
+  const [params, setParams] = useState(() => {
+    const now = safeRead('brood-params-v2');
+    return sanitize(now ?? migrateStart(safeRead('brood-params-v1')));
+  });
   // User presets, named and filed. Anything saved in the old slots becomes a preset.
   const [userPatches, setUserPatches] = useState(() => {
     const saved = safeRead('brood-user-presets-v2');
-    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', params: sanitize(p.params) }));
+    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 2, params: sanitize(p.v >= 2 ? p.params : migrateStart(p.params)) }));
     const slots = safeRead('brood-user-patches-v1');
     const legacy = safeRead('brood-user-patch-v1');
     const old = Array.isArray(slots) ? slots : legacy ? [legacy] : [];
-    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', params: sanitize(p) } : null)).filter(Boolean);
+    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 2, params: sanitize(migrateStart(p)) } : null)).filter(Boolean);
   });
   const [favourites, setFavourites] = useState(() => { const f = safeRead('brood-favourites-v1'); return Array.isArray(f) ? f : []; });
   const [browsing, setBrowsing] = useState(null);   // the sound to go back to while the browser is open
@@ -715,7 +731,7 @@ function App() {
       if (message.type === 'wave') setWave(message);
     }, (message) => setNotice(message));
   }
-  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v1', params); }, [params]);
+  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v2', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
   const update = React.useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
   const help = React.useCallback((label, text) => ({
@@ -750,7 +766,8 @@ function App() {
   };
   const stepPatch = (d) => loadPatch(preset + d);
   const openBrowser = () => setBrowsing({ params, preset });
-  const storeUser = (next) => { setUserPatches(next); safeWrite('brood-user-presets-v2', next); };
+  // Every preset kept here is in today's form (v 2: START counts from the oldest audio in every mode).
+  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 2 })); setUserPatches(marked); safeWrite('brood-user-presets-v2', marked); };
   const savePatch = (category) => {
     const name = (window.prompt('A name for this sound:', currentPatch.factory ? '' : currentPatch.name) || '').trim().toUpperCase();
     if (!name) return;

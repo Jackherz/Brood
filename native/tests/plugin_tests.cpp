@@ -255,7 +255,8 @@ int main() {
                         CHECK(trim.firstSample + trim.width <= len + 1, "and the window stays in the take");
                     }
             }
-            // TAPE: turning LENGTH by hand leaves a moved START where it is.
+            // TAPE: turning LENGTH leaves a moved START where it is. START is a point in the
+            // take now, so nothing has to hold it.
             mode->setValueNotifyingHost(mode->convertTo0to1(1.f));
             run(4);
             const int len = catcher.ui.lsrc.load();
@@ -263,7 +264,6 @@ int main() {
             apply(hold);
             for (const double knob : {0.1, 0.4, 0.7}) {
                 hold.length = knob;
-                hold.start = loopStartHolding(hold.firstSample, len, knob);
                 apply(hold);
                 CHECK(std::abs(catcher.ui.winStart.load() - hold.firstSample) <= 2.0 + len / 400.0, "LENGTH leaves a moved START alone");
             }
@@ -411,6 +411,30 @@ int main() {
         };
         CHECK(timeHelp(0.f) == "how long the room keeps breathing.", "TIME explains itself in REVERB");
         CHECK(timeHelp(1.f) == "how far back the echo remembers.", "and again in DELAY");
+    }
+    {   // A set saved before START meant the same in every mode: TAPE's START is rewritten so the
+        // window comes back where it was; ENV's is left alone.
+        auto saved = [](float mode, float start) {
+            juce::ValueTree state("BROOD");
+            for (const auto& [id, value] : std::initializer_list<std::pair<const char*, float>>{{"loopMode", mode}, {"start", start}, {"length", 0.6f}}) {
+                juce::ValueTree param("PARAM");
+                param.setProperty("id", id, nullptr);
+                param.setProperty("value", value, nullptr);
+                state.appendChild(param, nullptr);
+            }
+            return state;
+        };
+        const int take = 4 * 64000;
+        auto tape = saved(1.f, 0.3f);
+        BroodProcessor::migrateStart(tape, take);
+        const double now = static_cast<double>(tape.getChildWithProperty("id", "start")["value"]);
+        CHECK(std::fabs(now - brood::migrateTapeStart(0.3, 0.6, take)) < 1e-6, "an old TAPE START is rewritten");
+        auto newest = saved(1.f, 0.f);
+        BroodProcessor::migrateStart(newest, take);
+        CHECK(static_cast<double>(newest.getChildWithProperty("id", "start")["value"]) == 1.0, "the old newest is the new 1");
+        auto env = saved(0.f, 0.3f);
+        BroodProcessor::migrateStart(env, take);
+        CHECK(std::fabs(static_cast<double>(env.getChildWithProperty("id", "start")["value"]) - 0.3) < 1e-6, "ENV keeps its START");
     }
     std::printf(failures ? "%d processor failure(s)\n" : "all processor integration tests passed\n", failures);
     return failures ? 1 : 0;

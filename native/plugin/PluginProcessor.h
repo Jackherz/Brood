@@ -37,6 +37,10 @@ public:
     void changeProgramName(int, const juce::String&) override {}
     void getStateInformation(juce::MemoryBlock& dest) override;
     void setStateInformation(const void* data, int size) override;
+    // 2: START counts from the oldest audio in every loop mode. Older sets and presets
+    // stored TAPE's START from the newest, and are rewritten when they load.
+    static constexpr int kStateVersion = 2;
+    static void migrateStart(juce::ValueTree& state, int takeLength);
 
     juce::AudioProcessorValueTreeState apvts;
 

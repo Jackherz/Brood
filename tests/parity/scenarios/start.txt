@@ -2,8 +2,11 @@
 # The capture is long on purpose — the whole point of START is reaching into it —
 # and it is swept while the loop plays, so the 25 ms crossfade that keeps moving
 # silent is exercised in ENV, TAPE and STRETCH, and against END at several widths.
+# START counts from the oldest audio in every mode; it starts at 0 so the ENV part
+# plays as it always has.
 rate 48000
 seconds 18
+0 param start 0
 0 param wetMode 0
 0 param clock 1
 0 param memory 0.6

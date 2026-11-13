@@ -68,8 +68,9 @@ pedal this follows has none. It reads in three tiers:
 either end of the take in every mode, or drag inside the window to slide it along
 the take; a press outside the window brings the nearer marker there. Moving START keeps
 the end where it is, END moves only itself, and a double-click opens the whole take
-again. In TAPE a marker that needs more room moves LENGTH with it, and once START has
-been moved, turning LENGTH by hand leaves START where it is. Each marker is a
+again. In TAPE a marker that needs more room moves LENGTH with it, and turning LENGTH
+leaves a moved START where it is. A window dragged against the end of the take keeps
+following the newest audio. Each marker is a
 full-height rule with a tab naming it — START's hangs from the top, END's from the
 bottom, so they stay readable even when the window is a sliver.
 
@@ -240,9 +241,14 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   take. It is measured against the take rather than against the room END leaves,
   so the two markers do not drag each other around; START only gives ground when
   the window would otherwise run past the end of the take (and a window that fills
-  the take cannot move at all, because there is nowhere to slide to). It reads `THE
-  OLDEST` / `THE NEWEST` at zero and a percentage after that; in TAPE, which plays
-  the newest audio, turning it *reaches back*. Moving it is **not** a jump: the read head crossfades from where the loop
+  the take cannot move at all, because there is nowhere to slide to). START means the
+  same in every loop mode: 0 is the oldest audio and 1 the newest, and it reads `THE
+  OLDEST`, a percentage, or `THE NEWEST`. Its default is 1, so TAPE plays the newest
+  audio as it always has, and at 1 the window keeps against the end of the take as
+  LENGTH turns. Switching loop mode keeps the playhead where it is in the take when the
+  new window holds it, and crossfades it in when it doesn't. Sets and presets saved
+  before START worked this way are rewritten when they load, so they sound as they
+  did. Moving it is **not** a jump: the read head crossfades from where the loop
   was playing to where it now begins over 25 ms, weighted by a raised cosine, and
   a knob still being dragged simply starts the next fade when the last one lands.
   A test sweeps the whole travel while the loop plays and checks the worst

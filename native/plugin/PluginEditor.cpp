@@ -718,23 +718,6 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         showReadout("INPUT LEVEL", juce::String(db, 1) + " dB" + (db > 0.05f ? ", into old tape" : ""));
     };
     addAndMakeVisible(inputGain);
-    // TAPE, with START moved off its default: turning LENGTH by hand leaves START where it is.
-    for (auto& knob : knobs)
-        if (juce::String(knob.id) == "length") {
-            auto* slider = knob.slider.get();
-            const auto touched = slider->onValueChange;
-            slider->onDragStart = [this] {
-                const bool tape = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load()) == 1;
-                lengthHolds = tape && proc.ui.lsrc.load() > 0 && proc.apvts.getRawParameterValue("start")->load() > 0.001f ? proc.ui.winStart.load() : -1;
-            };
-            slider->onDragEnd = [this] { lengthHolds = -1; };
-            slider->onValueChange = [this, slider, touched] {
-                if (touched) touched();
-                if (lengthHolds < 0) return;
-                if (auto* startP = proc.apvts.getParameter("start"))
-                    startP->setValueNotifyingHost(static_cast<float>(loopStartHolding(lengthHolds, proc.ui.lsrc.load(), slider->getValue())));
-            };
-        }
     balance.editor = this;
     balance.target = 6;
     balance.setSliderStyle(juce::Slider::LinearHorizontal);

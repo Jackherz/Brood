@@ -176,7 +176,6 @@ public:
 private:
     void timerCallback() override;
     int timerTick = 0;
-    int lengthHolds = -1;   // the sample START holds while LENGTH is turned in TAPE, -1 when it doesn't
     bool loopViewMoved = true;
     // `follows` marks a readout that belongs to the last touched parameter, so the
     // timer may keep its value current (automation, mode changes). Anything else —

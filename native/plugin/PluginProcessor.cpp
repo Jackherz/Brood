@@ -54,7 +54,8 @@ BroodProcessor::BroodProcessor()
               juce::AudioParameterFloatAttributes().withLabel("dB")));
           layout.add(loopParam("memory", "Memory", 0.f));
           layout.add(loopParam("loopEnd", "Loop End", 1.f));
-          layout.add(loopParam("start", "Loop Start", 0.f));
+          // 1 is the newest audio in every mode: a fresh TAPE loop plays the tail, as it always has.
+          layout.add(loopParam("start", "Loop Start", 1.f));
           // Hidden options: on the pedal these live behind holding both footswitches.
           layout.add(loopParam("tone", "Tone", 1.f));
           layout.add(loopParam("fade", "Fade", 0.f));
@@ -161,12 +162,10 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
     }
     if (id == "loopEnd") return v >= 0.999f ? "to the end" : "plays to " + pct(v);
     if (id == "start") {
-        // ENV and STRETCH play from the oldest audio, so START slides towards the
-        // present; TAPE plays the newest, so START reaches back. Same knob, two
-        // honest readouts. A percentage, because the room it moves through depends
-        // on LENGTH and END and the take's length is not known here.
-        if (v <= 0.005f) return loopMode == 1 ? "the newest" : "the oldest";
-        return (loopMode == 1 ? "reaches back " : "slides on ") + pct(v);
+        // One meaning in every mode: 0 is the oldest audio, 1 the newest.
+        if (v <= 0.005f) return "the oldest";
+        if (v >= 0.995f) return "the newest";
+        return pct(v) + " in";
     }
     if (id == "freeze") return v > 0.5f ? "held, ringing" : "moving";
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
@@ -557,6 +556,7 @@ void BroodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     state.setProperty("source", source.load(), nullptr);
     state.setProperty("inputGain", inputGain.load(), nullptr);
     state.setProperty("presetName", presetName, nullptr);
+    state.setProperty("stateVersion", kStateVersion, nullptr);
     // A host may render offline in a fresh instance, and a reloaded set starts
     // empty; without the take in here a bounce comes back as silence or as
     // something other than what was playing.
@@ -612,6 +612,14 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
                 pendingTake_[slot] = std::move(ready);
             }
         }
+        // Sets from before START meant the same in every mode stored TAPE's START counted
+        // back from the newest audio: put the window back where it was.
+        if (static_cast<int>(state.getProperty("stateVersion", 1)) < 2) {
+            int takeLength = brood::kLoopSamples;
+            if (const auto takes = state.getChildWithName("TAKES"); takes.isValid() && takes.getNumChildren() > 0)
+                takeLength = juce::jmax(64, static_cast<int>(takes.getChild(0)["samples"]));
+            migrateStart(state, takeLength);
+        }
         // The takes are ours, not parameters: keep them out of the parameter tree
         // (they were decoded above into the pending slots).
         for (auto takeTree = state.getChildWithName("TAKES"); takeTree.isValid(); takeTree = state.getChildWithName("TAKES"))
@@ -621,6 +629,19 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
         for (auto* id : {"wetSwitch", "loopSwitch"})
             if (auto* p = apvts.getParameter(id)) p->setValueNotifyingHost(0.f);
     }
+}
+
+// A saved TAPE START, from before START meant the same in every mode, rewritten in place.
+void BroodProcessor::migrateStart(juce::ValueTree& state, int takeLength) {
+    auto param = [&state](const char* id) {
+        for (auto child : state) if (child.hasType("PARAM") && child["id"].toString() == id) return child;
+        return juce::ValueTree();
+    };
+    auto mode = param("loopMode"), start = param("start"), length = param("length");
+    // A set with no START at all gets the new default, 1, which is the old default's place.
+    if (!mode.isValid() || !start.isValid() || juce::roundToInt(static_cast<float>(mode["value"])) != 1) return;
+    const double len = length.isValid() ? static_cast<double>(length["value"]) : 0.72;
+    start.setProperty("value", brood::migrateTapeStart(static_cast<double>(start["value"]), len, takeLength), nullptr);
 }
 
 juce::AudioProcessorEditor* BroodProcessor::createEditor() { return new BroodEditor(*this); }

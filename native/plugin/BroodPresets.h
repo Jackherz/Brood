@@ -55,6 +55,7 @@ public:
     std::unique_ptr<juce::XmlElement> capture(const juce::String& name) const override {
         auto xml = std::make_unique<juce::XmlElement>("BroodPreset");
         xml->setAttribute("name", name);
+        xml->setAttribute("version", BroodProcessor::kStateVersion);
         auto* values = xml->createNewChildElement("PARAMS");
         for (auto* prm : proc.getParameters())
             if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(prm))
@@ -64,6 +65,20 @@ public:
 
     void apply(const juce::XmlElement& xml, const juce::String& name) override {
         const auto* values = xml.getChildByName("PARAMS");
+        // A user preset saved before START meant the same in every mode: in TAPE its START
+        // counted back from the newest audio. Factory presets set no START, so they need nothing.
+        std::unique_ptr<juce::XmlElement> migrated;
+        if (values != nullptr && xml.getIntAttribute("version", 1) < 2 && values->hasAttribute("start")) {
+            auto* modeP = proc.apvts.getParameter("loopMode");
+            const float modeV = values->hasAttribute("loopMode") ? static_cast<float>(values->getDoubleAttribute("loopMode")) : modeP->getDefaultValue();
+            if (juce::roundToInt(modeP->convertFrom0to1(modeV)) == 1) {
+                migrated = std::make_unique<juce::XmlElement>(*values);
+                const double length = values->getDoubleAttribute("length", proc.apvts.getParameter("length")->getDefaultValue());
+                const int take = proc.ui.lsrc.load() > 0 ? proc.ui.lsrc.load() : brood::kLoopSamples;
+                migrated->setAttribute("start", brood::migrateTapeStart(values->getDoubleAttribute("start"), length, take));
+                values = migrated.get();
+            }
+        }
         for (auto* prm : proc.getParameters())
             if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(prm))
                 if (isSound(*ranged)) {

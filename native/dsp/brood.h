@@ -87,6 +87,18 @@ inline int rampWaveIndex(double k) { return rampIndexOfValue(k, kRampWaveCount);
 inline double rampHertz(double k) { return expMap(clampd(k, 0, 1), 0.05, 8); }   // one cycle every 20 s … eight a second
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles
 
+// Sets saved before START meant the same in every mode stored TAPE's START counted back
+// from the newest audio. The value that puts the window in the same place now, for the
+// LENGTH and take length that were saved (0 was the newest, so it becomes exactly 1).
+inline double migrateTapeStart(double oldStart, double length, int takeLength) {
+    const int len = std::max(64, takeLength);
+    const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * std::clamp(length, 0.0, 1.0)))));
+    const int room = std::max(0, len - W0);
+    const long oldAt = std::lround((1.0 - std::clamp(oldStart, 0.0, 1.0)) * room);
+    if (oldAt >= room) return 1.0;
+    return std::clamp(static_cast<double>(oldAt) / std::max(1, len - 64), 0.0, 1.0);
+}
+
 // Tempo sync for time-based effects. The knob becomes a musical division
 // instead of a free time; the host supplies the tempo in the plugin and the
 // front panel supplies it in the browser. Mirrors SYNC_DIVISIONS in the JS.
@@ -535,7 +547,7 @@ struct Params {
     bool sync = false;
     double balance = 0.5, bpm = 120.0;
     double loopEnd = 1, memory = 0;                 // playback trim + capture ceiling
-    double start = 0;                                // where the loop's window sits in the take
+    double start = 1;                                // where the loop's window sits in the take: 0 the oldest audio, 1 the newest
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
@@ -1039,10 +1051,12 @@ private:
         // curve spent 95% of the knob's travel on the last few seconds.
         // Rounded, not floored: at 1 the window is exactly the whole take.
         const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * clampd(lengthNow, 0, 1)))));
-        // TAPE takes its window from the newest audio, so START reaches back into
-        // the take; zero is the tail, as before.
-        const int room = std::max(0, len - W0);
-        return {std::max(64, static_cast<int>(std::floor(W0 * trim))), static_cast<int>(std::lround((1.0 - where) * room))};
+        // START means the same as in ENV and STRETCH: 0 is the oldest audio, 1 the newest.
+        // At 1 the window sits against the end of the take whatever LENGTH is, so TAPE
+        // still follows the newest audio as LENGTH turns; anywhere else START is a fixed
+        // point in the take that LENGTH grows and shrinks the window from.
+        const int travel = std::max(0, static_cast<int>(std::lround(where * std::max(0, len - 64))));
+        return {std::max(64, static_cast<int>(std::floor(W0 * trim))), std::min(travel, std::max(0, len - W0))};
     }
 
     // `x` is what the looper listens to; `rec` is what an overdub lays down.
@@ -1071,6 +1085,16 @@ private:
         // Only LENGTH moved the window: same mode, same END, same START, same take.
         const bool lengthMoved = mode == 1 && lastMode == 1 && lsrc == startLen && trimNow == lastTrim && whereNow == lastWhere && lastW > 0 && W != lastW;
         if (lengthMoved) loopPos = loopPos * Wd / lastW;
+        // A change of loop mode keeps the playhead where it is in the take when the new
+        // window holds it; otherwise it crossfades from there to the new window's start.
+        const bool modeSwitched = lastMode >= 0 && mode != lastMode && lsrc == startLen && lastW > 0;
+        int switchFrom = -1;
+        if (modeSwitched) {
+            const double absNow = lastWant + loopPos;
+            const double inNew = absNow - win.start;
+            if (inNew >= 0 && inNew < Wd) loopPos = inNew;
+            else { loopPos = 0; switchFrom = static_cast<int>(std::floor(absNow)); }
+        }
         const double m = e.modLoop;
         // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
         // loop plays back slower and lower and takes div times as long to come round.
@@ -1091,6 +1115,10 @@ private:
             // the same way, so any fade under way carries on and none starts.
             startA += wantStart - lastWant;
             startB += wantStart - lastWant;
+        }
+        if (modeSwitched) {
+            if (switchFrom >= 0) { startA = switchFrom; startB = wantStart; startFade = 0; }
+            else { startA = startB = wantStart; startFade = 1; }
         }
         lastW = W; lastWant = wantStart; lastMode = mode; lastTrim = trimNow; lastWhere = whereNow;
         if (startFade >= 1) {

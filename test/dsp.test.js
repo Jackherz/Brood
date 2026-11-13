@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { BroodCore, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/brood-worklet.js');
+const { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/brood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -504,15 +504,17 @@ test('END moves the end marker, not the start marker', () => {
     const narrow = core.loopWindow();
     assert.strictEqual(narrow.start, wide.start, `mode ${loopMode}: END moved START`);
     assert.ok(narrow.W < wide.W, `mode ${loopMode}: END did not shorten the window`);
-    // START still reaches the far end at the top of its travel — the take's end for
-    // ENV and STRETCH, the take's beginning for TAPE, which plays from the tail.
+    // START 1 is the newest audio in every mode: the window (TAPE: LENGTH's span) ends at
+    // the end of the take.
     core.setParam('start', 1);
     const atTop = core.loopWindow();
-    const edge = loopMode === 1 ? atTop.start : atTop.start + atTop.W;
-    assert.ok(loopMode === 1 ? edge === 0 : Math.abs(edge - core.lsrc) <= 1, `mode ${loopMode}: START 1 stops short`);
+    const reach = loopMode === 1 ? core.loopSpan() : atTop.W;
+    assert.ok(Math.abs(atTop.start + reach - core.lsrc) <= 1, `mode ${loopMode}: START 1 stops short`);
     // ...and cannot move a full-length window, because there is nowhere to slide to.
-    core.setParam('loopEnd', 1);
-    assert.strictEqual(core.loopWindow().start, 0, `mode ${loopMode}: a full window moved`);
+    if (loopMode !== 1) {
+      core.setParam('loopEnd', 1);
+      assert.strictEqual(core.loopWindow().start, 0, `mode ${loopMode}: a full window moved`);
+    }
   }
 });
 
@@ -540,6 +542,9 @@ test('END trims the end of the loop and never moves where it starts', () => {
     const core = new BroodCore(FS);
     core.setParam('loopMode', mode);
     core.setParam('length', 0.72);
+    // From the oldest audio in ENV and STRETCH; TAPE keeps its default, the newest. At 1
+    // an ENV window keeps against the end of the take, so trimming it moves its start.
+    core.setParam('start', mode === 1 ? 1 : 0);
     render(core, 3, () => 0.2);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
     const full = core.state();
@@ -587,6 +592,7 @@ test('START moves the loop window inside the take', () => {
   for (const [mode, name] of [[0, 'ENV'], [2, 'STRETCH']]) {
     const core = renderLoop(mode, 0.72);
     core.setParam('loopEnd', 0.5);
+    core.setParam('start', 0);
     render(core, 0.1, () => 0);
     const base = core.state();
     assert.strictEqual(base.winStart, 0, `${name}: START 0 opens on the oldest audio`);
@@ -603,16 +609,17 @@ test('START moves the loop window inside the take', () => {
     const expected = Math.min(Math.round(0.25 * (core.lsrc - 64)), room);
     assert.ok(Math.abs(core.state().winStart - expected) <= 1, `${name}: and stops anywhere between`);
   }
-  // TAPE takes its window from the newest audio, so START reaches back from the tail.
+  // TAPE: START counts from the oldest audio too. Its default, 1, is the tail.
   const tape = renderLoop(1, 0.72);
   render(tape, 0.1, () => 0);
   const tail = tape.state();
-  tape.setParam('start', 1);
-  render(tape, 0.1, () => 0);
-  assert.strictEqual(tape.state().winStart, 0, 'TAPE: START 1 reaches all the way back');
+  assert.ok(tail.winStart > 0, 'TAPE: the default plays the newest audio');
   tape.setParam('start', 0);
   render(tape, 0.1, () => 0);
-  assert.strictEqual(tape.state().winStart, tail.winStart, 'TAPE: and 0 is the tail, as it always was');
+  assert.strictEqual(tape.state().winStart, 0, 'TAPE: START 0 reaches all the way back');
+  tape.setParam('start', 1);
+  render(tape, 0.1, () => 0);
+  assert.strictEqual(tape.state().winStart, tail.winStart, 'TAPE: and 1 is the tail again');
   // With END wide open there is nothing to move into.
   const whole = renderLoop(0, 1);
   whole.setParam('start', 1);
@@ -854,6 +861,47 @@ test('TAPE: deep, fast LENGTH modulation keeps the playhead moving through the w
   assert.equal(back, 0, `LENGTH modulation throws the playhead back ${back} times`);
   assert.ok(maxStep < 0.07, `LENGTH modulation steps by ${maxStep.toFixed(3)}`);
   assert.ok(rms(L, 0, 1) > 0.1, 'and the loop keeps sounding');
+});
+
+test('START means the same in every loop mode', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ loopMode: 0, clock: 1, memory: 0.6, length: 0.5, loopEnd: 0.5, start: 0.3, mix: 1, balance: 1, routing: 2 })) core.setParam(k, v);
+  render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  const starts = [];
+  for (const m of [0, 1, 2]) { core.setParam('loopMode', m); render(core, 0.5, () => 0); starts.push(core.state().winStart); }
+  assert.ok(Math.abs(starts[1] - starts[0]) <= 1 && Math.abs(starts[2] - starts[0]) <= 1, `one place in every mode (${starts})`);
+  assert.ok(Math.abs(starts[0] - Math.round(0.3 * (core.state().lsrc - 64))) <= 1, 'measured from the oldest audio');
+});
+
+test('switching loop mode keeps the playhead where it is in the take', () => {
+  let lo = 0.5, hi = 1;
+  for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (speedMap(mid, 0.04) < 1) lo = mid; else hi = mid; }
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.6, loopEnd: 0.6, start: 0.2, modLoop: lo, mix: 1, balance: 1, routing: 2 })) core.setParam(k, v);
+  render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  render(core, 1.3, () => 0);
+  const before = core.state();
+  core.setParam('loopMode', 0);
+  render(core, BLOCK / FS, () => 0);
+  const after = core.state();
+  const moved = (after.winStart + after.pos) - (before.winStart + before.pos);
+  const perBlock = BLOCK * 64000 / FS;
+  assert.ok(moved >= -1 && moved <= 2 * perBlock, `the playhead stays put (moved ${moved.toFixed(0)}, one block is ${perBlock.toFixed(0)})`);
+});
+
+test('an old TAPE START comes back to the same place', () => {
+  const len = 4 * 64000;
+  for (const length of [0.2, 0.5, 0.9]) for (const old of [0, 0.1, 0.5, 0.8, 1]) {
+    const W0 = Math.max(64, Math.round(len * Math.min(1, 0.02 + 0.98 * length)));
+    const was = Math.round((1 - old) * (len - W0));
+    const now = migrateTapeStart(old, length, len);
+    const is = Math.min(Math.round(now * (len - 64)), len - W0);
+    assert.ok(Math.abs(is - was) <= 1, `old ${old} at LENGTH ${length}: ${is} vs ${was}`);
+  }
+  assert.equal(migrateTapeStart(0, 0.5, len), 1);
+  assert.equal(migrateTapeStart(1, 0.5, len), 0);
 });
 
 // ─────────────────────────── the ramp engine ───────────────────────────

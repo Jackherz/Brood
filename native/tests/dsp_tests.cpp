@@ -138,7 +138,9 @@ int main() {
     }
     {   // END trims the end of the loop and never moves where it starts
         for (int mode = 0; mode < 3; ++mode) {
-            brood::Core c; c.p.loopMode = mode; c.p.length = 0.72; c.prepare(FS); tap(c, 1);
+            // START at the oldest audio: at 1 (the newest) the window keeps against the end
+            // of the take, so trimming it moves where it starts by design.
+            brood::Core c; c.p.loopMode = mode; c.p.length = 0.72; c.p.start = 0; c.prepare(FS); tap(c, 1);
             render(c, 3, tone(330, 10), [&](brood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
             const auto full = c.state();
             c.p.loopEnd = 0.5;
@@ -723,7 +725,7 @@ int main() {
         };
         for (int mode : {0, 2}) {
             brood::Core c = captured(mode, 0.72);
-            c.p.loopEnd = 0.5;
+            c.p.loopEnd = 0.5; c.p.start = 0;
             render(c, 0.1, [](double) { return 0.0; });
             const auto base = c.state();
             CHECK(base.winStart == 0, "mode %d: START 0 opens on the oldest audio", mode);
@@ -733,16 +735,17 @@ int main() {
             CHECK(c.state().winLen == base.winLen, "mode %d: START leaves the length alone", mode);
             CHECK(std::abs(c.state().winStart - room) <= 1, "mode %d: START 1 slides the window to the end (%d of %d)", mode, c.state().winStart, room);
         }
-        {
+        {   // TAPE: START counts from the oldest audio too. Its default, 1, is the tail.
             brood::Core c = captured(1, 0.72);
             render(c, 0.1, [](double) { return 0.0; });
             const int tail = c.state().winStart;
-            c.p.start = 1;
-            render(c, 0.1, [](double) { return 0.0; });
-            CHECK(c.state().winStart == 0, "TAPE: START 1 reaches all the way back");
+            CHECK(tail > 0, "TAPE: the default plays the newest audio");
             c.p.start = 0;
             render(c, 0.1, [](double) { return 0.0; });
-            CHECK(c.state().winStart == tail, "TAPE: and 0 is the tail, as it always was");
+            CHECK(c.state().winStart == 0, "TAPE: START 0 reaches all the way back");
+            c.p.start = 1;
+            render(c, 0.1, [](double) { return 0.0; });
+            CHECK(c.state().winStart == tail, "TAPE: and 1 is the tail again");
         }
         {
             brood::Core c = captured(0, 1.0);
@@ -842,6 +845,43 @@ int main() {
         // speed at most is about 0.05. Jumping back stepped by 0.165.
         CHECK(maxStep < 0.07, "LENGTH modulation steps by %.3f", maxStep);
         CHECK(rms(o.L, 0, 1) > 0.1, "and the loop keeps sounding (%.3f)", rms(o.L, 0, 1));
+    }
+    {   // START means the same in every loop mode: the window starts at the same place in the take
+        brood::Core c; c.p.loopMode = 0; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.5; c.p.loopEnd = 0.5; c.p.start = 0.3;
+        c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.prepare(FS);
+        render(c, 4, tone(220, 10));
+        tap(c, 1);
+        int starts[3];
+        for (int m = 0; m < 3; ++m) { c.p.loopMode = m; render(c, 0.5, [](double) { return 0.0; }); starts[m] = c.state().winStart; }
+        CHECK(std::abs(starts[1] - starts[0]) <= 1 && std::abs(starts[2] - starts[0]) <= 1, "START lands in one place in ENV, TAPE and STRETCH (%d, %d, %d)", starts[0], starts[1], starts[2]);
+        CHECK(std::abs(starts[0] - static_cast<int>(std::lround(0.3 * (c.state().lsrc - 64)))) <= 1, "measured from the oldest audio");
+    }
+    {   // Switching loop mode keeps the playhead where it is in the take
+        auto speedOne = [] { double lo = 0.5, hi = 1; for (int i = 0; i < 60; ++i) { const double mid = (lo + hi) / 2; (brood::speedMap(mid, 0.04) < 1 ? lo : hi) = mid; } return lo; };
+        brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.6; c.p.loopEnd = 0.6; c.p.start = 0.2; c.p.modLoop = speedOne();
+        c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.prepare(FS);
+        render(c, 4, tone(220, 10));
+        tap(c, 1);
+        render(c, 1.3, [](double) { return 0.0; });
+        const auto before = c.state();
+        c.p.loopMode = 0;   // ENV, gate shut: it plays the window at normal speed
+        render(c, B / FS, [](double) { return 0.0; });
+        const auto after = c.state();
+        const double moved = (after.winStart + after.pos) - (before.winStart + before.pos);
+        const double perBlock = B * 64000.0 / FS;
+        CHECK(moved >= -1 && moved <= 2 * perBlock, "the playhead stays put across a mode switch (moved %.0f samples, one block is %.0f)", moved, perBlock);
+    }
+    {   // An old TAPE START comes back to the same place
+        const int len = 4 * 64000;
+        for (const double length : {0.2, 0.5, 0.9})
+            for (const double old : {0.0, 0.1, 0.5, 0.8, 1.0}) {
+                const int W0 = std::max(64, static_cast<int>(std::lround(len * std::min(1.0, 0.02 + 0.98 * length))));
+                const long was = std::lround((1.0 - old) * (len - W0));
+                const double now = brood::migrateTapeStart(old, length, len);
+                const long is = std::min(std::lround(now * (len - 64)), static_cast<long>(len - W0));
+                CHECK(std::labs(is - was) <= 1, "old TAPE START %.1f at LENGTH %.1f lands at %ld, was %ld", old, length, is, was);
+            }
+        CHECK(brood::migrateTapeStart(0, 0.5, len) == 1.0 && brood::migrateTapeStart(1, 0.5, len) == 0.0, "the newest becomes 1, the oldest 0");
     }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
