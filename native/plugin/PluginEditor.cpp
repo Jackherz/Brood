@@ -815,6 +815,12 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     };
     makeSyncSwitch(wetSync, "sync", "SYNC / WET", wetSyncAtt);
     makeSyncSwitch(envSync, "envSync", "SYNC / ENV", envSyncAtt);
+    // TAPE ECHO, beside SYNC in DELAY: TIME glides and bends the echo's pitch.
+    tapeDelay.setButtonText("TAPE");
+    tapeDelay.getProperties().set("plate", true);
+    tapeDelay.onClick = [this] { showReadout("TAPE / DELAY", tapeDelay.getToggleState() ? "tape echo: TIME bends the pitch" : "digital: TIME crossfades"); };
+    addChildComponent(tapeDelay);
+    tapeDelayAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "tapeDelay", tapeDelay);
     envSoft.setButtonText("SOFT");
     envSoft.getProperties().set("plate", true);
     envSoft.onClick = [this] { showReadout("SOFT / ENV", envSoft.getToggleState() ? "slices fade" : "slices cut"); };
@@ -1177,6 +1183,8 @@ void BroodEditor::updateModeControls() {
     routing->setEnabled(pre == 0);
     routing->setAlpha(pre == 0 ? 1.f : 0.35f);
     wetSync.setVisible(wm == 1 || wm == 3);
+    tapeDelay.setVisible(wm == 1);
+    resized();   // SYNC moves over to share its row with TAPE in DELAY
     dips[0].button->setVisible(wm != 2);   // TRAILS: SLIP has no tail to keep
     envSync.setVisible(lm == 0);
     envSoft.setVisible(lm == 0);
@@ -1239,7 +1247,11 @@ void BroodEditor::resized() {
         knobDesign[i] = juce::Rectangle<int>(knobSize, knobSize).withCentre({cx[i % 3], (i < 3 ? firstKnobTop : secondKnobTop) + knobSize / 2});
         place(*knobs[static_cast<size_t>(i)].slider, knobDesign[i]);
     }
-    wetSyncDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[0].getCentreX(), knobDesign[0].getBottom() + 26});
+    // In DELAY, SYNC shares the row with TAPE; in WEAVE it sits alone in the middle.
+    const bool delayRow = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load()) == 1;
+    wetSyncDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[0].getCentreX() - (delayRow ? 29 : 0), knobDesign[0].getBottom() + 26});
+    tapeDelayDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[0].getCentreX() + 29, knobDesign[0].getBottom() + 26});
+    place(tapeDelay, tapeDelayDesign);
     envSyncDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[2].getCentreX() - 29, knobDesign[2].getBottom() + 26});
     envSoftDesign = juce::Rectangle<int>(54, 19).withCentre({knobDesign[2].getCentreX() + 29, knobDesign[2].getBottom() + 26});
     place(wetSync, wetSyncDesign);
@@ -1383,6 +1395,8 @@ void BroodEditor::rebuildHoverHelp() {
         add(wearPostDesign, "AFTER LOOP", "worn is heard but not recorded: the loop keeps a clean take, so turning WEAR back gives it back clean. a little less grit than worn in the loop.");
     // These two are only in the table while their mode is on, so help never explains
     // a control that is not on the panel.
+    if (tapeDelay.isVisible())
+        add(tapeDelayDesign.expanded(4), "TAPE / DELAY", "a tape echo: turning TIME glides the head, so the echoes bend in pitch, with a little wow and flutter and saturation. off, TIME crossfades and the pitch stays put.");
     if (wetSync.isVisible())
         add(wetSyncDesign.expanded(4), "SYNC / WET", "TIME becomes a division of the beat: in DELAY the echo lands on the grid, in WEAVE so does how far back the threads reach.");
     if (envSync.isVisible())

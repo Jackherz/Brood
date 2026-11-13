@@ -261,6 +261,9 @@ private:
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
     juce::ToggleButton wetSync, envSync, envSoft;
+    juce::ToggleButton tapeDelay;   // TAPE ECHO, beside SYNC in DELAY
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> tapeDelayAtt;
+    juce::Rectangle<int> tapeDelayDesign;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt, envSoftAtt;
     juce::Rectangle<int> wetSyncDesign, envSyncDesign, envSoftDesign;
     int lastModeWet = -1, lastModeLoop = -1, lastPre = -1;

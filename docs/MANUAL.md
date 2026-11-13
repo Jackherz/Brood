@@ -215,6 +215,14 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   — chance you can return to, and no undo. Weaver's fixed capture window,
   Texture/Rhythm switch, root-aligned pitch set and per-element levels are the
   reference; its microphone, trigger outputs and CV are not modelled.
+- **TAPE**, beside SYNC under TIME in DELAY, makes the delay a tape echo. Off, a new TIME
+  crossfades between two fixed read heads and the pitch stays put. On, one head glides
+  to the new time, so the echoes bend in pitch the way a tape echo's do (an octave down
+  or a fifth up at most), with a little wow and flutter and a gentle saturation in the
+  repeats. While FREEZE holds the echo, TIME is ignored and the head reads whole
+  samples, so a frozen echo stays exactly as it was for as long as it's held; TIME
+  takes effect again when FREEZE lets go. Synced, the head glides between divisions and
+  lands on the beat. Switching TAPE under sound crossfades over 30 ms.
 - **TEMPO SYNC** is three switches, each under the knob it governs and each drawn
   only in the modes that can use it. `SYNC` under TIME turns the delay's TIME knob
   into a musical division — 1/32, 1/16T, 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/4D, 1/2,

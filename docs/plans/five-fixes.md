@@ -11,6 +11,14 @@ Repo: `~/Documents/AI/Brood-Source`, `main` only. Do not commit or push without 
 4. **No host tempo** (web version, standalone, or a host that sends none): bars use the tempo Brood already falls back to (`hostBpm_`, last seen, else 120; the web version's TEMPO field) and 4/4. Confirm.
 5. **Push 3 value length.** Nothing published says where Push 3 cuts a plug-in value string. Before step 5 starts, load Brood on the Push, look at TIME in REVERB (today "decay 2.31 s", 12 characters) and MEMORY (today "up to 12.0 s of 30.0 s", 22 characters) and report how much shows. The limit in step 5 is set from that.
 
+## Reported during execution (to investigate)
+
+- **ENV: LENGTH does nothing** (reported 2026-11-13, from a screenshot of the plug-in in Live). Settings: ENV loop mode, LENGTH synced (1/32, 83 ms) and also unsynced, SOFT off, CATCH (sensitivity) 0%, ROUTING LOOP, WET/LOOP 100%, MIX dry 0% / fx 100%, WEAR WORN with AFTER LOOP on, DELAY with TAPE on, CLOCK 16 kHz, MEMORY 30 s, RECORD with 4 bars, a 16 s take. Turning LENGTH, synced or not, changes nothing audible.
+  - First lead, not yet checked: in `loopTick` ENV slices only while the input's envelope is above `thr = expMap(1 - modLoop, 0.008, 0.35)`. CATCH at 0% puts the threshold at its highest (0.35), so the gate may never open, no slice plays, and LENGTH (the slice length) has nothing to act on. If so, the fix is a UI question (say so in the readout, or keep a floor on sensitivity), not the slicer.
+  - Also check: whether ENV's gate listens to the input when ROUTING is LOOP, and whether a RECORD take changes anything.
+  - Reproduce with a C++ test at these settings before changing anything.
+  - Update the same day: moving LENGTH did nothing, then it started working again with no change. Treat it as intermittent: if it comes back, note what was done just before (a new take, a mode switch, RECORD closing, a project reload) and try the lead above in a test then.
+
 ## Decisions
 
 One line each, with the reason.

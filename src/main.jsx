@@ -50,7 +50,7 @@ const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, smooth: 0, balance: 0.5,
-  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0, recMode: 0, recBars: 0,
+  sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0, recMode: 0, recBars: 0, tapeDelay: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
   wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
@@ -116,7 +116,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'envSync', 'wetPre', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'envSync', 'wetPre', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost', 'tapeDelay'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
     else if (key.includes('_')) out[key] = clamp(input[key], -1, 1);
     else if (key === 'loopDb') out[key] = clamp(input[key], -24, 12);
     else if (key === 'recMode') out[key] = input[key] ? 1 : 0;
@@ -886,7 +886,7 @@ function App() {
               <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)} help={help} hint="four ways of treating time: reverb, delay, slip, weave."/>
               <div className="knob-row">
                 <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch} modSource={modSource}
-                  toggle={(params.wetMode === 1 || params.wetMode === 3) ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }] : null}/>
+                  toggle={params.wetMode === 1 ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }, { id: 'tapeDelay', name: 'Tape echo: TIME bends the pitch', label: 'TAPE' }] : params.wetMode === 3 ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }] : null}/>
                 <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} modSource={modSource} dark/>
               </div>
               <button type="button" className={`wet-pre ${params.wetPre ? 'on' : ''}`} role="switch" aria-checked={!!params.wetPre} onClick={() => update('wetPre', params.wetPre ? 0 : 1)}

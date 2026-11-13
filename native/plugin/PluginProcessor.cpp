@@ -65,6 +65,7 @@ BroodProcessor::BroodProcessor()
           layout.add(loopParam("character", "Wear", 0.5f));
           layout.add(loopParam("wearNoise", "Noise", 1.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("wearPost", 1), "Wear Post", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("tapeDelay", 1), "Tape Echo", false));
           // RECORD: the loop switch records what's played after it, for FREE or a number of bars.
           layout.add(std::make_unique<APC>(juce::ParameterID("recMode", 1), "Rec Mode", juce::StringArray{"Capture", "Record"}, 0));
           layout.add(loopParam("recBars", "Rec Bars", 0.f));
@@ -290,6 +291,7 @@ void BroodProcessor::pullParams() {
     }
     p.envSync = param("envSync") > 0.5f;
     p.bpm = hostBpm_.load();
+    p.tapeDelay = param("tapeDelay") > 0.5f;
     p.recMode = juce::roundToInt(param("recMode"));
     p.recBars = recBarsFor(param("recBars"));
     p.recAtTap = param("recAtTap") > 0.5f;

@@ -952,6 +952,50 @@ int main() {
             CHECK(c.state().loop == brood::LoopLed::Play && seconds(c) > 2.5, "CAPTURE: a tap still keeps the recent past");
         }
     }
+    {   // TAPE ECHO
+        auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
+        const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };
+        auto maxStep = [](const std::vector<float>& a, double s) { double m = 0; for (size_t i = static_cast<size_t>(s * FS) + 1; i < a.size(); ++i) m = std::max(m, static_cast<double>(std::fabs(a[i] - a[i - 1]))); return m; };
+        {   // sweeping TIME bends the echo's pitch, without a step
+            brood::Core c = echo(true);
+            auto o = render(c, 4, tone1k, [](brood::Core& cc, long b) { const double t = b * B / FS; if (t > 1.5 && t < 2.5) cc.p.time = 0.3 + 0.4 * (t - 1.5); });
+            const double during = crossings(o.L, 1.6, 2.4);
+            CHECK(std::fabs(during - 1000) > 20, "TAPE ECHO: a TIME sweep bends the pitch (%.0f Hz from 1000)", during);
+            CHECK(maxStep(o.L, 1) < 0.12, "TAPE ECHO: and never steps (%.3f)", maxStep(o.L, 1));
+            brood::Core d = echo(false);
+            auto od = render(d, 4, tone1k, [](brood::Core& cc, long b) { const double t = b * B / FS; if (t > 1.5 && t < 2.5) cc.p.time = 0.3 + 0.4 * (t - 1.5); });
+            CHECK(std::fabs(crossings(od.L, 1.6, 2.4) - 1000) < 5, "DIGITAL: a TIME sweep keeps the pitch (%.0f Hz)", crossings(od.L, 1.6, 2.4));
+        }
+        {   // FREEZE during a sweep holds the echo steady for 20 s, and ignores TIME
+            brood::Core c = echo(true);
+            uint32_t s = 7;
+            render(c, 2, [&](double) { s = s * 1664525u + 1013904223u; return ((s >> 8) / 16777216.0 - 0.5) * 0.4; },
+                   [](brood::Core& cc, long b) { if (b > blk(1.5)) cc.p.time = 0.3 + 0.2 * (b - blk(1.5)) / static_cast<double>(blk(0.5)); });
+            c.p.freezeLatch = 1;
+            render(c, 1, [](double) { return 0.0; });
+            const Out first = render(c, 1, [](double) { return 0.0; });
+            c.p.time = 0.8;   // ignored while frozen
+            render(c, 17, [](double) { return 0.0; });
+            const Out last = render(c, 1, [](double) { return 0.0; });
+            const double level = 20 * std::log10(rms(last.L, 0, 1) / rms(first.L, 0, 1));
+            const double top = 20 * std::log10(hfEnergy(last.L, 0, 1) / hfEnergy(first.L, 0, 1));
+            CHECK(std::fabs(level) < 0.5, "TAPE ECHO: a 20 s freeze holds its level (%.2f dB)", level);
+            CHECK(std::fabs(top) < 1.0, "TAPE ECHO: and its top end (%.2f dB)", top);
+        }
+        {   // switching it under a steady tone doesn't click
+            brood::Core c = echo(false);
+            auto o = render(c, 4, tone1k, [](brood::Core& cc, long b) { if (b == blk(1.5)) cc.p.tapeDelay = true; if (b == blk(2.7)) cc.p.tapeDelay = false; });
+            CHECK(maxStep(o.L, 1) < 0.1, "TAPE ECHO: switching it on and off doesn't click (%.3f)", maxStep(o.L, 1));
+        }
+        {   // synced, the echo lands on the division once the head has glided there
+            brood::Core c = echo(true); c.p.sync = true; c.p.bpm = 120; c.p.modWet = 0;
+            render(c, 3, [](double) { return 0.0; });
+            const Out o = render(c, 2, [](double t) { return t < 0.001 ? 0.8 : 0.0; });
+            size_t peak = 0; for (size_t i = static_cast<size_t>(0.01 * FS); i < o.L.size(); ++i) if (std::fabs(o.L[i]) > std::fabs(o.L[peak])) peak = i;
+            const double want = brood::syncSeconds(120, c.p.time);
+            CHECK(std::fabs(peak / FS - want) < 0.002, "TAPE ECHO: synced, the echo lands on the division (%.4f s, want %.4f s)", peak / FS, want);
+        }
+    }
     std::printf(failures ? "%d failure(s)\n" : "all DSP tests passed\n", failures);
     return failures ? 1 : 0;
 }

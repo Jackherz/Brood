@@ -956,6 +956,31 @@ test('RECORD: the loop switch records what is played after it', () => {
   }
 });
 
+test('TAPE ECHO: a TIME sweep bends the pitch, and a long freeze holds', () => {
+  const echo = () => wetCore({ wetMode: 1, mix: 1, modWet: 0.5, time: 0.3, clock: 1, routing: 0, tapeDelay: 1 });
+  const tone = (t) => 0.3 * Math.sin(2 * Math.PI * 1000 * t);
+  const sweep = {};
+  for (let b = 0; b < blk(4); b++) { const t = (b * BLOCK) / FS; if (t > 1.5 && t < 2.5) sweep[b] = (c) => c.setParam('time', 0.3 + 0.4 * (t - 1.5)); }
+  const { L } = render(echo(), 4, tone, sweep);
+  let zc = 0;
+  for (let i = Math.floor(1.6 * FS) + 1; i < Math.floor(2.4 * FS); i++) if ((L[i - 1] <= 0) !== (L[i] <= 0)) zc++;
+  assert.ok(Math.abs(zc / 2 / 0.8 - 1000) > 20, `the pitch bends (${(zc / 1.6).toFixed(0)} Hz)`);
+  let step = 0;
+  for (let i = FS + 1; i < L.length; i++) step = Math.max(step, Math.abs(L[i] - L[i - 1]));
+  assert.ok(step < 0.12, `and never steps (${step.toFixed(3)})`);
+  const frozen = echo();
+  let s = 7;
+  render(frozen, 2, () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return ((s >>> 8) / 16777216 - 0.5) * 0.4; });
+  frozen.setParam('freeze', 1);
+  render(frozen, 1, () => 0);
+  const first = render(frozen, 1, () => 0).L;
+  frozen.setParam('time', 0.8);
+  render(frozen, 17, () => 0);
+  const last = render(frozen, 1, () => 0).L;
+  const level = 20 * Math.log10(rms(last, 0, 1) / rms(first, 0, 1));
+  assert.ok(Math.abs(level) < 0.5, `a 20 s freeze holds its level (${level.toFixed(2)} dB)`);
+});
+
 // ─────────────────────────── the ramp engine ───────────────────────────
 
 // Sample the control the DSP actually reads, once per block.

@@ -288,9 +288,12 @@ class Delay {
     // FREEZE, and repeating exactly (FREEZE or the top of MODIFY)
     this.hold = 0; this.full = 0;
     this.holdA = 1 - Math.exp(-1 / (WET_HOLD_SEC * fs));
+    // TAPE ECHO: one read head that glides to a new TIME, so the echo bends in pitch as a
+    // tape echo's does, with a little wow and flutter and a gentle saturation in the loop.
+    this.headD = -1; this.headV = 0; this.frozenD = -1; this.wowPh = 0; this.flutPh = 0; this.tapeMix = 0;
   }
   // At maximum feedback the delay repeats stably, like a looping delay.
-  tick(input, delaySamples, modify, freeze) {
+  tick(input, delaySamples, modify, freeze, tape) {
     if (this.d < 0) this.d = delaySamples;
     // MKII delay time changes crossfade between fixed read heads rather than
     // sweeping one head through the buffer (which would bend the pitch).
@@ -304,13 +307,39 @@ class Delay {
       this.fade += 1 / (this.fs * 0.03);
       if (this.fade >= 1) { this.d = this.nextD; this.fade = 1; }
     }
+    // TAPE ECHO, faded in and out over 30 ms so switching it under sound doesn't click.
+    this.tapeMix = clamp(this.tapeMix + (tape ? 1 : -1) / (this.fs * 0.03), 0, 1);
+    let tw = 0;   // how much of the tape head is heard
+    if (this.tapeMix > 0) {
+      // While frozen the line repeats exactly: TIME is ignored until FREEZE lets go.
+      if (this.hold > 0.5) { if (this.frozenD < 0) this.frozenD = this.headD; } else this.frozenD = -1;
+      const target = this.frozenD >= 0 ? this.frozenD : delaySamples;
+      if (this.headD < 0) this.headD = target;
+      // The head moves toward the new time no faster than half its own speed again,
+      // so pitch bends at most an octave down or a fifth up, and never past the write head.
+      const want = clamp((target - this.headD) / (0.1 * this.fs), -0.5, 0.5);
+      this.headV += (want - this.headV) * 0.002;
+      this.headD = clamp(this.headD + this.headV, 1, this.buf.length - 4);
+      this.wowPh += TAU * 0.5 / this.fs; if (this.wowPh > TAU) this.wowPh -= TAU;
+      this.flutPh += TAU * 6 / this.fs; if (this.flutPh > TAU) this.flutPh -= TAU;
+      const wobble = this.headD * (0.0015 * Math.sin(this.wowPh) + 0.0005 * Math.sin(this.flutPh)) * (1 - this.hold);
+      // Repeating exactly, the head reads whole samples: a fractional read written back
+      // every pass would dull the frozen sound a little more each time round.
+      const at = this.full > 0.999 ? Math.round(this.headD) : this.headD + wobble;
+      const yTape = readFrac(this.buf, this.w - at);
+      tw = 0.5 - 0.5 * Math.cos(Math.PI * this.tapeMix);
+      y += (yTape - y) * tw;
+    } else this.headD = delaySamples;   // off, the head waits where the knob is, ready to take over
     this.lp += this.lpA * (y - this.lp);
     this.hp += this.hpA * (this.lp - this.hp);
     // Glided, as what's written here comes back on every repeat: a hard switch would
     // leave a seam in the line that clicks each time round.
     this.hold += ((freeze ? 1 : 0) - this.hold) * this.holdA;
     this.full += ((freeze || modify > 0.985 ? 1 : 0) - this.full) * this.holdA;
-    const v = input * (1 - this.hold) + (this.lp - this.hp) * modify * (1 - this.full) + y * this.full;
+    let fb = (this.lp - this.hp) * modify;
+    // Tape saturates gently in the loop, not when repeating exactly.
+    if (tw > 0) fb += (Math.tanh(1.3 * fb) / Math.tanh(1.3) - fb) * tw * (1 - this.full);
+    const v = input * (1 - this.hold) + fb * (1 - this.full) + y * this.full;
     this.buf[this.w] = softClip(v);
     if (++this.w >= this.buf.length) this.w = 0;
     return y;
@@ -484,7 +513,7 @@ class BroodCore {
       trails: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
       loopEnd: 1, start: 1, memory: 0,
-      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
+      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0, tapeDelay: 0,
       // RECORD: the loop switch records what's played after it instead of keeping the recent
       // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
       // Bars start at the next bar line while the host plays, unless recAtTap.
@@ -1112,7 +1141,7 @@ class BroodCore {
       let delayTicks = expMap(e.time, 0.02 * fs, 2 * fs);
       if (p.sync) delayTicks = clamp(syncSeconds(p.bpm, e.time) * this.clockRatio * this.fs, 1, DELAY_MAX_SEC * fs * 0.95);
       delayTicks = clamp(delayTicks * wdiv, 1, DELAY_MAX_SEC * fs * 0.95);
-      mono += this.delay.tick(wIn, delayTicks, e.modWet, freeze) * this.modeGain[1];
+      mono += this.delay.tick(wIn, delayTicks, e.modWet, freeze, !!p.tapeDelay) * this.modeGain[1];
     }
     if (this.modeGain[2] > 1e-4) {
       mono += this.slip.tick(wIn, expMap(e.time, 0.05 * fs, 1.5 * fs) * wdiv, slipSpeedMap(e.modWet), freeze) * this.modeGain[2];

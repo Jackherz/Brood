@@ -42,6 +42,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     else if (n == "recMode") p.recMode = static_cast<int>(v); else if (n == "recBars") p.recBars = static_cast<int>(v);
     else if (n == "recAtTap") p.recAtTap = v != 0; else if (n == "barQuarters") p.barQuarters = v;
     else if (n == "hostPlaying") p.hostPlaying = v != 0;
+    else if (n == "tapeDelay") p.tapeDelay = v != 0;
     else { std::fprintf(stderr, "unknown param %s\n", n.c_str()); std::exit(2); }
 }
 

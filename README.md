@@ -13,7 +13,8 @@ calibrated against the hardware. It is not affiliated with or endorsed by Chase 
 
 - **Two channels on one clock.** A wet channel (REVERB, DELAY, SLIP or WEAVE) and a
   micro-looper (ENV, TAPE or STRETCH) share a CLOCK that sets the engine's own sample
-  rate, so slowing it darkens and lengthens everything together.
+  rate, so slowing it darkens and lengthens everything together. DELAY can be a tape
+  echo, where turning TIME bends the echoes' pitch.
 - **Always listening, or recording.** In CAPTURE, tap the looper to catch the last few
   seconds. In RECORD, tap to record what you play and tap again to loop it, or record a
   set number of bars that lands on the host's bar lines. Hold to overdub. Keep up to

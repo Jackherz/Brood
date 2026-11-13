@@ -362,15 +362,19 @@ struct Delay {
     std::vector<float> buf; int w = 0;
     double fs = 48000, d = -1, nextD = -1, fade = 1, lp = 0, hp = 0, lpA = 0, hpA = 0;
     double hold = 0, full = 0, holdA = 0;   // FREEZE, and repeating exactly (FREEZE or the top of MODIFY)
+    // TAPE ECHO: one read head that glides to a new TIME, so the echo bends in pitch as a
+    // tape echo's does, with a little wow and flutter and a gentle saturation in the loop.
+    double headD = -1, headV = 0, frozenD = -1, wowPh = 0, flutPh = 0, tapeMix = 0;
     void init(double sr) {
         fs = sr; hold = full = 0;
+        headD = -1; headV = 0; frozenD = -1; wowPh = flutPh = 0; tapeMix = 0;
         holdA = 1 - std::exp(-1 / (kWetHoldSec * fs));
         buf.assign(static_cast<size_t>(std::ceil(kDelayMaxSec * fs) + 8), 0.f);
         w = 0; d = -1; nextD = -1; fade = 1; lp = hp = 0;
         lpA = 1 - std::exp((-kTau * 6500) / fs);
         hpA = 1 - std::exp((-kTau * 70) / fs);
     }
-    double tick(double input, double delaySamples, double modify, bool freeze) {
+    double tick(double input, double delaySamples, double modify, bool freeze, bool tape) {
         if (d < 0) d = delaySamples;
         // Crossfade between fixed heads; changing TIME does not tape-glide pitch.
         if (fade >= 1 && std::fabs(delaySamples - d) > fs * 0.0005) {
@@ -383,13 +387,39 @@ struct Delay {
             fade += 1 / (fs * 0.03);
             if (fade >= 1) { d = nextD; fade = 1; }
         }
+        // TAPE ECHO, faded in and out over 30 ms so switching it under sound doesn't click.
+        tapeMix = std::clamp(tapeMix + (tape ? 1.0 : -1.0) / (fs * 0.03), 0.0, 1.0);
+        double tw = 0;   // how much of the tape head is heard
+        if (tapeMix > 0) {
+            // While frozen the line repeats exactly: TIME is ignored until FREEZE lets go.
+            if (hold > 0.5) { if (frozenD < 0) frozenD = headD; } else frozenD = -1;
+            const double target = frozenD >= 0 ? frozenD : delaySamples;
+            if (headD < 0) headD = target;
+            // The head moves toward the new time no faster than half its own speed again,
+            // so pitch bends at most an octave down or a fifth up, and never past the write head.
+            const double want = std::clamp((target - headD) / (0.1 * fs), -0.5, 0.5);
+            headV += (want - headV) * 0.002;
+            headD = std::clamp(headD + headV, 1.0, static_cast<double>(buf.size()) - 4);
+            wowPh += kTau * 0.5 / fs; if (wowPh > kTau) wowPh -= kTau;
+            flutPh += kTau * 6.0 / fs; if (flutPh > kTau) flutPh -= kTau;
+            const double wobble = headD * (0.0015 * std::sin(wowPh) + 0.0005 * std::sin(flutPh)) * (1 - hold);
+            // Repeating exactly, the head reads whole samples: a fractional read written back
+            // every pass would dull the frozen sound a little more each time round.
+            const double at = full > 0.999 ? std::round(headD) : headD + wobble;
+            const double yTape = readFrac(buf, w - at);
+            tw = 0.5 - 0.5 * std::cos(kPi * tapeMix);
+            y += (yTape - y) * tw;
+        } else headD = delaySamples;   // off, the head waits where the knob is, ready to take over
         lp += lpA * (y - lp);
         hp += hpA * (lp - hp);
         // Glided, as what's written here comes back on every repeat: a hard switch would
         // leave a seam in the line that clicks each time round.
         hold += ((freeze ? 1.0 : 0.0) - hold) * holdA;
         full += ((freeze || modify > 0.985 ? 1.0 : 0.0) - full) * holdA;
-        const double v = input * (1 - hold) + (lp - hp) * modify * (1 - full) + y * full;
+        double fb = (lp - hp) * modify;
+        // Tape saturates gently in the loop, not when repeating exactly.
+        if (tw > 0) fb += (std::tanh(1.3 * fb) / std::tanh(1.3) - fb) * tw * (1 - full);
+        const double v = input * (1 - hold) + fb * (1 - full) + y * full;
         buf[static_cast<size_t>(w)] = static_cast<float>(softClip(v));
         if (++w >= static_cast<int>(buf.size())) w = 0;
         return y;
@@ -556,6 +586,7 @@ struct Params {
     // wobble and the hiss stays out of what's recorded, so the take is as clean as PEDAL's
     // and only what's heard is worn.
     bool wearPost = false;
+    bool tapeDelay = false;                          // TAPE ECHO: the delay glides and bends pitch
     // RECORD: the loop switch records what's played after it instead of keeping the recent
     // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
     // Bars start at the next bar line while the host plays, unless recAtTap.
@@ -1394,7 +1425,7 @@ private:
             double delayTicks = expMap(e.time, 0.02 * kCoreFs, 2 * kCoreFs);
             if (p.sync) delayTicks = clampd(syncSeconds(p.bpm, e.time) * clockRatio * fs, 1.0, kDelayMaxSec * kCoreFs * 0.95);
             delayTicks = clampd(delayTicks * wdiv, 1.0, kDelayMaxSec * kCoreFs * 0.95);
-            mono += delay.tick(wIn, delayTicks, e.modWet, frozen) * modeGain[1];
+            mono += delay.tick(wIn, delayTicks, e.modWet, frozen, p.tapeDelay) * modeGain[1];
         }
         if (modeGain[2] > 1e-4) mono += slip.tick(wIn, expMap(e.time, 0.05 * kCoreFs, 1.5 * kCoreFs) * wdiv, slipSpeedMap(e.modWet), frozen) * modeGain[2];
         if (modeGain[3] > 1e-4) {

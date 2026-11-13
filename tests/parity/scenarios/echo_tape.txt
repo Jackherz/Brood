@@ -1,0 +1,28 @@
+# TAPE ECHO: the delay with one gliding head. TIME is swept so the echoes bend in pitch,
+# FREEZE engages mid-sweep and holds while TIME moves (ignored while frozen), the switch
+# is toggled under sound, and sync steps TIME between divisions.
+rate 48000
+seconds 16
+0 param wetMode 1
+0 param mix 0.8
+0 param routing 0
+0 param clock 1
+0 param time 0.3
+0 param modWet 0.6
+0 param tapeDelay 1
+0 fs wet down
+3 fs wet up
+400 param time 0.4
+450 param time 0.5
+500 param time 0.6
+550 param freeze 1
+650 param time 0.2
+900 param freeze 0
+1100 param tapeDelay 0
+1300 param tapeDelay 1
+1500 param sync 1
+1500 param bpm 120
+1700 param time 0.7
+1900 param time 0.35
+2100 param modWet 0.99
+2400 param modWet 0.5
