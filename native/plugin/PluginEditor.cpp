@@ -792,8 +792,15 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     character = std::make_unique<Stepper>(*proc.apvts.getParameter("character"), "WEAR", juce::StringArray { "CLEAN", "PEDAL", "WORN" }, [this] {
         const float v = proc.apvts.getRawParameterValue("character")->load();
         showReadout("WEAR", v < 0.25f ? "clean: fewer artifacts, wet a little later" : v > 0.75f ? "worn: a noisy clock, a restless loop, a longer reverb" : "the pedal as built");
+        repaintDesign(hoodArea);   // NOISE says a figure only while it's worn
     });
     addAndMakeVisible(*character);
+    wearPost.getProperties().set("plate", true);
+    wearPost.onClick = [this] {
+        showReadout("WORN", wearPost.getToggleState() ? "after the loop: heard worn, recorded clean" : "in the loop: recorded worn");
+    };
+    addChildComponent(wearPost);
+    wearPostAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "wearPost", wearPost);
     auto makeSyncSwitch = [this](juce::ToggleButton& button, const char* id, const char* readout,
                                  std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>& att) {
         button.setButtonText("SYNC");
@@ -881,7 +888,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
 
     // Under the hood, on the front page: the five options and the CLASSIC switch.
     const std::pair<const char*, const char*> hoodDefs[] = {
-        {"tone", "TONE"}, {"fade", "FADE"}, {"width", "WIDTH"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"}};
+        {"tone", "TONE"}, {"fade", "FADE"}, {"width", "WIDTH"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"}, {"wearNoise", "NOISE"}};
     for (size_t i = 0; i < hood.size(); ++i) {
         auto& h = hood[i];
         h.slider.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -929,7 +936,7 @@ void BroodEditor::touch(const juce::String& id) {
     // The readout's own names for the parameters, so it never shows a raw id.
     static const std::pair<const char*, const char*> names[] = {
         {"loopEnd", "END"}, {"start", "START"},
-        {"balance", "WET / LOOP"}, {"mod1Rate", "MOD 1 RATE"}, {"mod2Rate", "MOD 2 RATE"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"},
+        {"balance", "WET / LOOP"}, {"mod1Rate", "MOD 1 RATE"}, {"mod2Rate", "MOD 2 RATE"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"}, {"wearNoise", "NOISE"},
     };
     juce::String label = id.toUpperCase();
     for (const auto& [key, name] : names) if (id == key) label = name;
@@ -940,7 +947,7 @@ void BroodEditor::touch(const juce::String& id) {
     // editor rather than by the control, so they need a repaint to follow it.
     if (id == "memory" || id == "start" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
     if (id == "mod1Rate" || id == "mod2Rate") repaintDesign(rampArea);
-    if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv") repaintDesign(hoodArea);
+    if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv" || id == "wearNoise") repaintDesign(hoodArea);
 }
 
 void BroodEditor::showReadout(const juce::String& label, const juce::String& value, bool follows) {
@@ -1157,8 +1164,10 @@ void BroodEditor::updateModeControls() {
     const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
     const int pre = proc.apvts.getRawParameterValue("wetPre")->load() > 0.5f ? 1 : 0;
-    if (wm == lastModeWet && lm == lastModeLoop && pre == lastPre) return;
-    lastModeWet = wm; lastModeLoop = lm; lastPre = pre;
+    const int worn = proc.apvts.getRawParameterValue("character")->load() > 0.75f ? 1 : 0;
+    if (wm == lastModeWet && lm == lastModeLoop && pre == lastPre && worn == lastWorn) return;
+    lastModeWet = wm; lastModeLoop = lm; lastPre = pre; lastWorn = worn;
+    wearPost.setVisible(worn == 1);   // only WORN has anything to keep out of the loop
     // With the wet side before the loop it hears only the input, so ROUTING stands aside.
     routing->setEnabled(pre == 0);
     routing->setAlpha(pre == 0 ? 1.f : 0.35f);
@@ -1218,6 +1227,8 @@ void BroodEditor::resized() {
     // Between them, what's true of both sides: how worn the one clock is.
     characterDesign = juce::Rectangle<int>(130, 24).withCentre({cx[1], 234});
     place(*character, characterDesign);
+    wearPostDesign = juce::Rectangle<int>(96, 18).withCentre({cx[1], characterDesign.getCentreY() + 23});
+    place(wearPost, wearPostDesign);
     constexpr int knobSize = 104, firstKnobTop = 342, secondKnobTop = 510;
     for (int i = 0; i < 6; ++i) {
         knobDesign[i] = juce::Rectangle<int>(knobSize, knobSize).withCentre({cx[i % 3], (i < 3 ? firstKnobTop : secondKnobTop) + knobSize / 2});
@@ -1330,8 +1341,8 @@ void BroodEditor::resized() {
     // footswitches, in five even cells.
     hoodArea = {24, 668, 1152, 67};
     const int hoodLeft = hoodArea.getX() + 96;
-    const int cell = (hoodArea.getRight() - 12 - hoodLeft - 4 * 14) / 5;
-    for (int i = 0; i < 5; ++i) hoodCellDesign[i] = {hoodLeft + i * (cell + 14), hoodArea.getY() + 8, cell, 52};
+    const int cell = (hoodArea.getRight() - 12 - hoodLeft - 5 * 14) / 6;
+    for (int i = 0; i < 6; ++i) hoodCellDesign[i] = {hoodLeft + i * (cell + 14), hoodArea.getY() + 8, cell, 52};
     for (size_t i = 0; i < hood.size(); ++i) place(hood[i].slider, hoodCellDesign[i].withY(hoodArea.getY() + 30).withHeight(26));
     updateKnobValues();
     rebuildHoverHelp();
@@ -1353,6 +1364,8 @@ void BroodEditor::rebuildHoverHelp() {
     static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE"};
     add(characterDesign, "WEAR", "one line from clean to worn. clean: fuller top, far fewer artifacts, the wet side a little later. worn: the MK I in the room, a noisy clock, a restless loop and a longer reverb.");
     for (size_t i = 0; i < dips.size(); ++i) if (dips[i].button->isVisible()) add(dipCellDesign[i], dipNames[i], dipText[i]);
+    if (wearPost.isVisible())
+        add(wearPostDesign, "AFTER LOOP", "worn is heard but not recorded: the loop keeps a clean take, so turning WEAR back gives it back clean. a little less grit than worn in the loop.");
     // These two are only in the table while their mode is on, so help never explains
     // a control that is not on the panel.
     if (wetSync.isVisible())
@@ -1404,9 +1417,10 @@ void BroodEditor::rebuildHoverHelp() {
         "how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.",
         "the wet side runs on a divided clock, so the room and the echo stretch out.",
         "the loop runs on a divided clock: lower, longer, further from the other side.",
+        "how much of the worn clock's hiss is let through. only heard with WEAR on WORN; left is silent.",
     };
-    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV"};
-    for (int i = 0; i < 5; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
+    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV", "NOISE"};
+    for (int i = 0; i < 6; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
 
     // The knobs say what they do in the current mode, on hover and to a screen reader.
     // Last in the table, so a switch beside a knob explains itself first.
@@ -1450,7 +1464,7 @@ void BroodEditor::paint(juce::Graphics& g) {
         g.drawFittedText(touched ? activeKnobText.toUpperCase() : knobValues[i], valueRect(static_cast<int>(i)), juce::Justification::centred, 1, 0.7f);
     }
     g.setColour(kMuted); g.setFont(nameFont(15));
-    g.drawText("ONE CLOCK. TWO WORLDS.", characterDesign.withSizeKeepingCentre(pedalArea.getWidth() / 3, 16).translated(0, 21), juce::Justification::centred);
+    if (!wearPost.isVisible()) g.drawText("ONE CLOCK. TWO WORLDS.", characterDesign.withSizeKeepingCentre(pedalArea.getWidth() / 3, 16).translated(0, 21), juce::Justification::centred);
 
     // What the host gave us. The other heads have nothing to add to what's under them.
     const juce::String srcTail = juce::String(proc.getTotalNumInputChannels()) + " IN / "
@@ -1510,23 +1524,25 @@ void BroodEditor::paint(juce::Graphics& g) {
     g.drawText("THE HOOD", hoodArea.getX() + 12, hoodArea.getY() + 33, 80, 16, juce::Justification::centredLeft);
     g.setColour(kLine);
     g.drawVerticalLine(hoodCellDesign[0].getX() - 8, static_cast<float>(hoodArea.getY() + 8), static_cast<float>(hoodArea.getBottom() - 8));
-    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV"};
-    static const char* hoodIds[] = {"tone", "fade", "width", "wetDiv", "loopDiv"};
-    static const float hoodDefaults[] = {1.f, 0.f, 0.5f, 0.f, 0.f};
-    float hv[5];
-    for (int i = 0; i < 5; ++i) {
+    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "WET DIV", "LOOP DIV", "NOISE"};
+    static const char* hoodIds[] = {"tone", "fade", "width", "wetDiv", "loopDiv", "wearNoise"};
+    static const float hoodDefaults[] = {1.f, 0.f, 0.5f, 0.f, 0.f, 1.f};
+    float hv[6];
+    for (int i = 0; i < 6; ++i) {
         const auto* v = proc.apvts.getRawParameterValue(hoodIds[i]);
         hv[i] = v != nullptr ? v->load() : hoodDefaults[i];
     }
     auto percent = [](float v) { return juce::String(juce::roundToInt(v * 100.f)) + "%"; };
-    juce::String hoodText[5];
+    juce::String hoodText[6];
     hoodText[0] = hv[0] > 0.995f ? "open" : "cut " + percent(1.f - hv[0]);
     hoodText[1] = hv[1] <= 0.001f ? "pedal" : "keeps " + percent(1.f - hv[1]);
     hoodText[2] = hv[2] <= 0.005f ? "mono" : hv[2] < 0.49f ? "narrow " + percent(hv[2] * 2) :
                   hv[2] > 0.51f ? "wide " + percent((hv[2] - 0.5f) * 2) : "as built";
     hoodText[3] = juce::String(brood::divMap(hv[3])) + "x";
     hoodText[4] = juce::String(brood::divMap(hv[4])) + "x";
-    for (int i = 0; i < 5; ++i) {
+    // Only the worn clock hisses, so that's the only time this says a figure.
+    hoodText[5] = proc.apvts.getRawParameterValue("character")->load() > 0.75f ? (hv[5] <= 0.005f ? juce::String("off") : percent(hv[5])) : juce::String("when worn");
+    for (int i = 0; i < 6; ++i) {
         const auto cellRect = hoodCellDesign[i].withHeight(18);
         g.setColour(kInk); g.setFont(labelFont());
         const int nameW = kit::textWidth(g.getCurrentFont(), hoodNames[i]) + 2;

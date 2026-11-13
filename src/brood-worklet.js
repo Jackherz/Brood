@@ -483,7 +483,7 @@ class BroodCore {
       trails: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
       loopEnd: 1, start: 0, memory: 0,
-      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
+      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
       wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
       // 0 is no route) for each control it can move.
@@ -926,11 +926,16 @@ class BroodCore {
     }
 
     // CLASSIC: the MK I looper never sat still — a slow wow with a little flutter.
+    let wow = 0;
     if (this.p.classic) {
       this.wowPh += (TAU * 0.9) / CORE_FS;
       if (this.wowPh > TAU) this.wowPh -= TAU;
-      pos += 0.006 * Math.sin(this.wowPh) + 0.002 * Math.sin(this.wowPh * 5.7);
+      wow = 0.006 * Math.sin(this.wowPh) + 0.002 * Math.sin(this.wowPh * 5.7);
+      pos += wow;
     }
+    // WORN after the loop: the wobble is heard, not written. The overdub's head moves as
+    // if the playhead were steady, so what it lays down isn't smeared.
+    const dubWow = this.p.wearPost ? wow : 0;
 
     // Overdub fades in and out over about 8 ms, because a hard start or stop is a step
     // recorded into the take, there on every pass from then on. Its write head keeps its
@@ -948,7 +953,7 @@ class BroodCore {
         this.dubW = base.W; this.dubStart = base.start;
         this.dubPos = Math.round(this.startB) + (mode === 1 ? this.loopPos : pos) - this.dubStart;
       }
-      else this.dubPos += pos - posAtStart;
+      else this.dubPos += pos - posAtStart - dubWow;
       this.dubPos %= this.dubW; if (this.dubPos < 0) this.dubPos += this.dubW;
       const dubW = this.dubW;
       const q = Math.min(dubW - 1, Math.floor(this.dubPos));
@@ -1002,8 +1007,11 @@ class BroodCore {
     // constant on that side is div times longer.
     const wdiv = divMap(p.wetDiv);
     // CLASSIC: the MK I clock was noisy, most of all when it was slow.
-    const hiss = p.classic ? (this.rand() * 2 - 1) * (0.0006 + 0.01 * (1 - this.clockRatio)) : 0;
-    const wIn = wetSrc * this.wetIn + hiss;
+    const hiss = p.classic ? (this.rand() * 2 - 1) * (0.0006 + 0.01 * (1 - this.clockRatio)) * clamp(p.wearNoise, 0, 1) : 0;
+    // WORN after the loop, with the wet side ahead of the looper: hiss fed to the wet side
+    // would be recorded with it, so it joins the output after the looper instead.
+    const hissAfter = pre && !!p.wearPost;
+    const wIn = wetSrc * this.wetIn + (hissAfter ? 0 : hiss);
     let wl = 0, wr = 0;
     const fs = CORE_FS;
     if (this.modeGain[0] > 1e-4) {
@@ -1089,8 +1097,9 @@ class BroodCore {
     const wetLvl = Math.min(1, 2 * (1 - bal)), loopLvl = Math.min(1, 2 * bal);
     const ld = loopOut * loopLvl;
     for (const ch of this.ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
-    this.ticks[0][3] = wl * wetLvl + ld;
-    this.ticks[1][3] = wr * wetLvl + ld;
+    const hissOut = hissAfter ? hiss * this.wetOut : 0;
+    this.ticks[0][3] = (wl + hissOut) * wetLvl + ld;
+    this.ticks[1][3] = (wr + hissOut) * wetLvl + ld;
     this.ticksHi[0][this.ticksHiW] = this.ticks[0][3]; this.ticksHi[1][this.ticksHiW] = this.ticks[1][3];
     this.ticksHiW = (this.ticksHiW + 1) & 15;
   }
@@ -1131,11 +1140,12 @@ class BroodCore {
       if ((i & 31) === 0) {
         const c = clockHz(this.e.clock, !!p.smooth) / fs;
         this.clockRatio = c;
-        const classicNow = p.classic ? 1 : 0;
+        const classicNow = p.classic ? (p.wearPost ? 2 : 1) : 0;
+        const wornIn = p.classic && !p.wearPost;   // the worn conversion on the way in is what a loop records
         if (Math.abs(c - this.filterClock) > 0.002 * c || classicNow !== this.filterClassic) {
           this.filterClock = c; this.filterClassic = classicNow;
           const fc = Math.min(0.45 * c * fs, 0.45 * fs, 20000);
-          this.aa.set(fc, fs, !p.classic); this.reconL.set(fc, fs, !p.classic); this.reconR.set(fc, fs, !p.classic);
+          this.aa.set(fc, fs, !wornIn); this.reconL.set(fc, fs, !p.classic); this.reconR.set(fc, fs, !p.classic);
           // HI-Q's input: twice the filter, a little higher up, so more of the top survives
           // and less folds back.
           const fcHi = Math.min(0.48 * c * fs, 0.45 * fs, 20000);
@@ -1160,7 +1170,7 @@ class BroodCore {
         // four at 48 kHz, a stair-step jitter that was recorded into every loop.
         // CLASSIC keeps that hold as part of its grit.
         const u = 1 - this.phase / this.clockRatio;
-        let xt = p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
+        let xt = p.classic && !p.wearPost ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
         if (hi) xt += (sincRead(SINC_IN, 8, this.xinHi, this.xinHiW, u) - xt) * this.hiMix;
         this.coreTick(xt);
       }

@@ -222,6 +222,11 @@ private:
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
     std::array<Dip, 3> dips;
     std::unique_ptr<Stepper> character;
+    // WORN after the loop: shown under WEAR, in the caption's place, only while WEAR is WORN.
+    juce::ToggleButton wearPost { "AFTER LOOP" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wearPostAtt;
+    juce::Rectangle<int> wearPostDesign;
+    int lastWorn = -1;
     juce::String knobName(size_t knob) const;
     std::unique_ptr<juce::FileChooser> chooser;
     // Modulation: a chip per source, and the selected source's controls under them.
@@ -252,10 +257,10 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt, envSoftAtt;
     juce::Rectangle<int> wetSyncDesign, envSyncDesign, envSoftDesign;
     int lastModeWet = -1, lastModeLoop = -1, lastPre = -1;
-    // Under the hood: the five sliders the pedal hides behind both footswitches.
+    // Under the hood: the five sliders the pedal hides behind both footswitches, and NOISE.
     // They live along the bottom of the window, so there is no second page.
     struct HoodControl { juce::Slider slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
-    std::array<HoodControl, 5> hood;   // tone, fade, width, wet division, loop division
+    std::array<HoodControl, 6> hood;   // tone, fade, width, wet division, loop division, worn noise
 
     // All of these are in DESIGN coordinates (the 1200x820 panel); view maps them
     // into the real window. Paint and layout both work in that space.
@@ -269,7 +274,7 @@ private:
     juce::String activeKnobText;
     std::array<juce::String, 6> knobValues;
     void updateKnobValues();
-    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[6], dipCellDesign[5];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains

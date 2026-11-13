@@ -52,10 +52,17 @@ pedal this follows has none. It reads in three tiers:
    two footswitches, the six knobs under three column names (WET CHANNEL, SHARED,
    MICRO-LOOPER) and the mode selectors. FREEZE, TRAILS and PRE-LOOP / POST-LOOP sit
    under the wet column, SMOOTH under CLOCK, and WEAR between the two footswitches.
+   With WEAR on WORN, an **AFTER LOOP** switch appears under it. Off, worn is recorded into
+   the loop as it always was. On, worn is heard but not recorded: the loop keeps a take as
+   clean as PEDAL's (overdubs don't follow the wobble, and the hiss stays out of the take),
+   so turning WEAR back gives the loop back clean. It has a little less grit than worn in
+   the loop, because the rough conversion on the way in is what a loop records. In the
+   browser version it sits beside CLASSIC.
 2. **The side column**: the readout, then three numbered panels in the order you reach
    for them while playing: `01 LOOP` (MEMORY, WET/LOOP), `02 MODULATION` and `03 INPUT`,
    which is set once per session.
-3. **Under the hood**: the five sliders along the bottom.
+3. **Under the hood**: the six sliders along the bottom. The last, **NOISE**, sets how much
+   of the worn clock's hiss is let through; it only does anything with WEAR on WORN.
 
 **START and END are markers on the waveform.** Grab one and drag it, all the way to
 either end of the take in every mode, or drag inside the window to slide it along
@@ -122,6 +129,7 @@ the effect. Changes are applied at audio-block boundaries:
 | 53, 54 | Wet and loop clock division |
 | 71 | Classic mode (`0` off, `1–127` on) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
+| 28 | WET/LOOP balance (the pedal's LEVEL BALANCE) |
 | 75, 78 | Trails, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
 | 105 | Wet freeze — same as the FREEZE switch (`0` off, `1–127` on) |
@@ -132,7 +140,7 @@ by automating the `wetMode` parameter (value 3) instead. CC 20 is the sources' r
 66/67 are BOUNCE and SWEEP, on both sources. CC 73, 74 and 76 used to carry
 SPREAD, DRY KILL and LATCH; those controls are gone (WIDTH does the first, MIX the
 second, the FREEZE switch the third), so the pedal's controllers for them do
-nothing now. Routes and depths have no CC: automate the `mod1_time`-style depth parameters instead. Loop memory and END are host-only parameters too.
+nothing now. Routes and depths have no CC: automate the `mod1_time`-style depth parameters instead. NOISE has no CC either. Loop memory and END are host-only parameters too.
 
 Tempo sync has no CC in the pedal's map; automate the `sync` parameter, or switch
 it on in the editor.

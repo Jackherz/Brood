@@ -538,6 +538,11 @@ struct Params {
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
     double wetDiv = 0, loopDiv = 0;                  // hidden: per-side clock division
     bool classic = false;                            // hidden: MK I quirks
+    double wearNoise = 1;                            // how much of the worn clock's hiss is let through, 0..1
+    // WORN after the loop: the input is converted as the pedal's, overdubs don't follow the
+    // wobble and the hiss stays out of what's recorded, so the take is as clean as PEDAL's
+    // and only what's heard is worn.
+    bool wearPost = false;
     double freezeLatch = 0;                          // the FREEZE switch: wet up, held
     // The two modulation sources. Each can move any of the seven controls below by its
     // own depth (-1..1, 0 is no route), and runs at its own rate and shape.
@@ -670,11 +675,12 @@ public:
             if ((i & 31) == 0) {
                 const double c = clockHz(e.clock, p.smooth) / fs;
                 clockRatio = c;
-                const int classicNow = p.classic ? 1 : 0;
+                const int classicNow = p.classic ? (p.wearPost ? 2 : 1) : 0;
+                const bool wornIn = p.classic && ! p.wearPost;   // the worn conversion on the way in is what a loop records
                 if (std::fabs(c - filterClock) > 0.002 * c || classicNow != filterClassic) {
                     filterClock = c; filterClassic = classicNow;
                     const double fc = std::min({0.45 * c * fs, 0.45 * fs, 20000.0});
-                    aa.set(fc, fs, !p.classic); reconL.set(fc, fs, !p.classic); reconR.set(fc, fs, !p.classic);
+                    aa.set(fc, fs, !wornIn); reconL.set(fc, fs, !p.classic); reconR.set(fc, fs, !p.classic);
                     // HI-Q's input: twice the filter, a little higher up, so more of the top
                     // survives and less folds back.
                     const double fcHi = std::min({0.48 * c * fs, 0.45 * fs, 20000.0});
@@ -697,7 +703,7 @@ public:
                 // repeated one sample in four at 48 kHz, a stair-step jitter that was
                 // recorded into every loop. CLASSIC keeps that hold as part of its grit.
                 const double u = 1 - phase / clockRatio;
-                double xt = p.classic ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
+                double xt = p.classic && ! p.wearPost ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
                 if (hi) xt += (sincIn().read([this](int k) { return xinHi[(xinHiW + k) & 7]; }, u) - xt) * hiMix;
                 coreTick(xt);
             }
@@ -1173,11 +1179,16 @@ private:
         }
 
         // CLASSIC: the MK I looper never sat still — a slow wow with a little flutter.
+        double wow = 0;
         if (p.classic) {
             wowPh += (kTau * 0.9) / kCoreFs;
             if (wowPh > kTau) wowPh -= kTau;
-            pos += 0.006 * std::sin(wowPh) + 0.002 * std::sin(wowPh * 5.7);
+            wow = 0.006 * std::sin(wowPh) + 0.002 * std::sin(wowPh * 5.7);
+            pos += wow;
         }
+        // WORN after the loop: the wobble is heard, not written. The overdub's head moves as
+        // if the playhead were steady, so what it lays down isn't smeared.
+        const double dubWow = p.wearPost ? wow : 0.0;
 
         // Overdub fades in and out over about 8 ms, because a hard start or stop is a step
         // recorded into the take, there on every pass from then on. Its write head keeps
@@ -1195,7 +1206,7 @@ private:
                 dubW = base.W; dubStart = base.start;
                 dubPos = startB + (mode == 1 ? loopPos : pos) - dubStart;
             }
-            else dubPos += pos - posAtStart;
+            else dubPos += pos - posAtStart - dubWow;
             dubPos = jsMod(dubPos, dubW); if (dubPos < 0) dubPos += dubW;
             const int q = std::min(dubW - 1, static_cast<int>(std::floor(dubPos)));
             // FADE: how much of the old loop survives each overdub pass. 0 keeps
@@ -1247,8 +1258,11 @@ private:
         // time constant on that side is div times longer.
         const double wdiv = divMap(p.wetDiv);
         // CLASSIC: the MK I clock was noisy, most of all when it was slow.
-        const double hiss = p.classic ? (rand01() * 2 - 1) * (0.0006 + 0.01 * (1 - clockRatio)) : 0.0;
-        const double wIn = wetSrc * wetIn + hiss;
+        const double hiss = p.classic ? (rand01() * 2 - 1) * (0.0006 + 0.01 * (1 - clockRatio)) * clampd(p.wearNoise, 0, 1) : 0.0;
+        // WORN after the loop, with the wet side ahead of the looper: hiss fed to the wet side
+        // would be recorded with it, so it joins the output after the looper instead.
+        const bool hissAfter = pre && p.wearPost;
+        const double wIn = wetSrc * wetIn + (hissAfter ? 0.0 : hiss);
         double wl = 0, wr = 0;
         if (modeGain[0] > 1e-4) {
             // CLASSIC: the MK I reverb rings far longer than the MK II's.
@@ -1328,8 +1342,9 @@ private:
         const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
         const double ld = loopOut * loopLvl;
         for (auto& ch : ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
-        ticks[0][3] = wl * wetLvl + ld;
-        ticks[1][3] = wr * wetLvl + ld;
+        const double hissOut = hissAfter ? hiss * wetOut : 0.0;
+        ticks[0][3] = (wl + hissOut) * wetLvl + ld;
+        ticks[1][3] = (wr + hissOut) * wetLvl + ld;
         ticksHi[0][ticksHiW] = ticks[0][3]; ticksHi[1][ticksHiW] = ticks[1][3];
         ticksHiW = (ticksHiW + 1) & 15;
     }

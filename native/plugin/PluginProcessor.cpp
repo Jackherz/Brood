@@ -20,8 +20,8 @@ juce::String pct(double x) { return juce::String(juce::roundToInt(x * 100)) + "%
 struct FloatDef { const char* id; const char* name; float def; };
 const FloatDef kKnobs[] = {
     {"time", "Time", 0.55f}, {"mix", "Mix", 0.5f}, {"length", "Length", 0.72f},
-    {"modWet", "Modify (wet)", 0.58f}, {"clock", "Clock", 0.9f}, {"modLoop", "Modify (loop)", 0.66f},
-    {"balance", "Balance (wet/loop)", 0.5f},
+    {"modWet", "Wet Mod", 0.58f}, {"clock", "Clock", 0.9f}, {"modLoop", "Loop Mod", 0.66f},
+    {"balance", "Wet/Loop", 0.5f},
 };
 }  // namespace
 
@@ -36,12 +36,12 @@ BroodProcessor::BroodProcessor()
                   juce::AudioParameterFloatAttributes().withStringFromValueFunction(
                       [this, id](float v, int) { return describe(id, v); })));
           }
-          layout.add(std::make_unique<APC>(juce::ParameterID("wetMode", 1), "Wet mode", juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, 0));
+          layout.add(std::make_unique<APC>(juce::ParameterID("wetMode", 1), "Wet Mode", juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, 0));
           layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In + Loop", "Loop"}, 1));
-          layout.add(std::make_unique<APC>(juce::ParameterID("loopMode", 1), "Loop mode", juce::StringArray{"Env", "Tape", "Stretch"}, 1));
-          layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Dip: Trails", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Dip: Smooth clock", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Dip: Tempo sync", false));
+          layout.add(std::make_unique<APC>(juce::ParameterID("loopMode", 1), "Loop Mode", juce::StringArray{"Env", "Tape", "Stretch"}, 1));
+          layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Trails", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Smooth", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("sync", 1), "Wet Sync", false));
           auto loopParam = [this](const juce::String& id, const juce::String& name, float def) {
               // The capture gets its own name: reusing "id" here shadows the
               // parameter of the same name (clang's -Wshadow-uncaptured-local).
@@ -50,41 +50,45 @@ BroodProcessor::BroodProcessor()
                   juce::AudioParameterFloatAttributes().withStringFromValueFunction(
                       [this, paramId](float v, int) { return describe(paramId, v); }));
           };
-          layout.add(std::make_unique<APF>(juce::ParameterID("loopDb", 1), "Loop gain", juce::NormalisableRange<float>(-24.f, 12.f), 0.f,
+          layout.add(std::make_unique<APF>(juce::ParameterID("loopDb", 1), "Loop Gain", juce::NormalisableRange<float>(-24.f, 12.f), 0.f,
               juce::AudioParameterFloatAttributes().withLabel("dB")));
-          layout.add(loopParam("memory", "Loop memory", 0.f));
-          layout.add(loopParam("loopEnd", "Loop end", 1.f));
-          layout.add(loopParam("start", "Loop start", 0.f));
+          layout.add(loopParam("memory", "Memory", 0.f));
+          layout.add(loopParam("loopEnd", "Loop End", 1.f));
+          layout.add(loopParam("start", "Loop Start", 0.f));
           // Hidden options: on the pedal these live behind holding both footswitches.
-          layout.add(loopParam("tone", "Wet tone (hi-cut)", 1.f));
-          layout.add(loopParam("fade", "Overdub fade", 0.f));
-          layout.add(loopParam("width", "Stereo width", 0.5f));
-          layout.add(loopParam("wetDiv", "Wet clock division", 0.f));
-          layout.add(loopParam("loopDiv", "Loop clock division", 0.f));
-          layout.add(loopParam("character", "Wear (clean, pedal, worn)", 0.5f));
-          layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Wet before the loop", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze (hold the wet side)", false));
+          layout.add(loopParam("tone", "Tone", 1.f));
+          layout.add(loopParam("fade", "Fade", 0.f));
+          layout.add(loopParam("width", "Width", 0.5f));
+          layout.add(loopParam("wetDiv", "Wet Div", 0.f));
+          layout.add(loopParam("loopDiv", "Loop Div", 0.f));
+          layout.add(loopParam("character", "Wear", 0.5f));
+          layout.add(loopParam("wearNoise", "Noise", 1.f));
+          layout.add(std::make_unique<APB>(juce::ParameterID("wearPost", 1), "Wear Post", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Pre-Loop", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze", false));
           // The ramp engine: two generators, one per channel.
           // The two modulation sources: a rate, a shape and five switches each, and a
           // depth for each control it can move (0 is no route).
           for (int n = 1; n <= 2; ++n) {
-              const juce::String m = "mod" + juce::String(n), name = "Mod " + juce::String(n) + " ";
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "On", 1), name + "on", true));
-              layout.add(loopParam(m + "Rate", name + "rate", 0.45f));
-              layout.add(loopParam(m + "Wave", name + "shape", 0.f));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Uni", 1), name + "unipolar", false));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Bounce", 1), name + "bounce", false));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sweep", 1), name + "sweep", false));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sync", 1), name + "follows the tempo", false));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Hold", 1), name + "held", false));
+              // Short enough for a controller's display: the names a host shows are these.
+              static const char* const shortTarget[brood::kModTargets] = {"Time", "Mix", "Length", "Wet Mod", "Clock", "Loop Mod", "Wet/Loop"};
+              const juce::String m = "mod" + juce::String(n), name = "M" + juce::String(n) + " ";
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "On", 1), name + "On", true));
+              layout.add(loopParam(m + "Rate", name + "Rate", 0.45f));
+              layout.add(loopParam(m + "Wave", name + "Shape", 0.f));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Uni", 1), name + "Uni", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Bounce", 1), name + "Bounce", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sweep", 1), name + "Sweep", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sync", 1), name + "Sync", false));
+              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Hold", 1), name + "Hold", false));
               for (int t = 0; t < brood::kModTargets; ++t)
                   layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID(m + "_" + brood::kModTargetIds[t], 1),
-                      name + "to " + juce::String(brood::kModTargetNames[t]).toLowerCase(), juce::NormalisableRange<float>(-1.f, 1.f), 0.f));
+                      "M" + juce::String(n) + ">" + shortTarget[t], juce::NormalisableRange<float>(-1.f, 1.f), 0.f));
           }
-          layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV slice follows the tempo", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV slices fade", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet footswitch (hold = freeze)", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop footswitch (tap/hold)", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV Sync", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV Soft", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet Switch", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop Switch", false));
           return layout;
       }()) {
     formats_.registerBasicFormats();
@@ -166,6 +170,7 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
     }
     if (id == "freeze") return v > 0.5f ? "held, ringing" : "moving";
     if (id == "tone") return v > 0.995f ? "open" : "hi-cut " + pct(1 - v);
+    if (id == "wearNoise") return v <= 0.005f ? juce::String("worn hiss off") : "worn hiss " + pct(v);
     if (id == "fade") return v <= 0.001f ? "pedal decay" : "overdub keeps " + pct(1 - v);
     // WIDTH is where the removed SPREAD lives now: hard left is mono.
     if (id == "width") return v <= 0.005f ? "mono" : v < 0.49f ? "narrow " + pct(v * 2) :
@@ -264,6 +269,8 @@ void BroodProcessor::pullParams() {
     // WEAR is one line from clean to worn: HI-Q conversion, the pedal, the MK I's noisy manners.
     p.classic = param("character") > 0.75f;
     p.hiQ = param("character") < 0.25f;
+    p.wearNoise = param("wearNoise");
+    p.wearPost = param("wearPost") > 0.5f;
     p.wetPre = param("wetPre") > 0.5f;
     p.loopDb = param("loopDb");
     p.envSoft = param("envSoft") > 0.5f;
@@ -373,6 +380,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 71) id = "character";
+            else if (cc == 28) { if (auto* parameter = apvts.getParameter("balance")) parameter->setValueNotifyingHost(value / 127.f); }   // the pedal's LEVEL BALANCE
             else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }

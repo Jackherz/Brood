@@ -798,14 +798,39 @@ test('FADE decides how much of the old loop survives an overdub', () => {
 });
 
 test('CLASSIC makes the slow clock noisy and the reverb ring', () => {
-  const noiseFloor = (classic) => {
-    const core = wetCore({ wetMode: 0, mix: 1, time: 0.6, clock: 0, classic: classic ? 1 : 0 });
+  const noiseFloor = (classic, wearNoise = 1) => {
+    const core = wetCore({ wetMode: 0, mix: 1, time: 0.6, clock: 0, classic: classic ? 1 : 0, wearNoise });
     const { L } = render(core, 2, () => 0);
     return rms(L, 1, 2);
   };
   const clean = noiseFloor(false), noisy = noiseFloor(true);
   assert.ok(clean < 1e-6, 'without CLASSIC a silent input stays silent');
   assert.ok(noisy > 1e-4, `CLASSIC adds clock noise (${noisy.toFixed(5)})`);
+  const half = noiseFloor(true, 0.5), none = noiseFloor(true, 0);
+  assert.ok(half > noisy * 0.4 && half < noisy * 0.6, `NOISE at half halves it (${half.toFixed(5)})`);
+  assert.ok(none < 1e-6, 'NOISE at 0 leaves worn silent');
+});
+
+test('WORN after the loop keeps the take clean, and is still heard', () => {
+  const tap = (core, which) => { core.footswitch(which, 'down'); core.footswitch(which, 'up'); };
+  const worn = { wetMode: 0, mix: 1, time: 0.6, clock: 0, classic: 1, wetPre: 1 };
+  const kept = (post) => {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ ...worn, wearPost: post ? 1 : 0, balance: 1, loopMode: 1 })) core.setParam(k, v);
+    tap(core, 'wet'); tap(core, 'loop');
+    render(core, 3, () => 0, { [blk(2.0)]: (c) => tap(c, 'loop') });
+    core.setParam('classic', 0); tap(core, 'wet');   // wear off and wet off: only the loop is left to hear
+    const { L } = render(core, 3, () => 0);
+    return rms(L, 1, 3);
+  };
+  const inLoop = kept(false), after = kept(true);
+  assert.ok(inLoop > 1e-5, `worn in the loop records its hiss (${inLoop.toFixed(6)})`);
+  assert.ok(after < inLoop * 0.05, `worn after the loop keeps the take clean (${after.toFixed(6)} of ${inLoop.toFixed(6)})`);
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ ...worn, wearPost: 1 })) core.setParam(k, v);
+  tap(core, 'wet');
+  const { L } = render(core, 2, () => 0);
+  assert.ok(rms(L, 1, 2) > 1e-4, 'worn after the loop is still heard');
 });
 
 // ─────────────────────────── the ramp engine ───────────────────────────

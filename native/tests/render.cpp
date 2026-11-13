@@ -24,7 +24,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     else if (n == "memory") p.memory = v;
     else if (n == "tone") p.tone = v; else if (n == "fade") p.fade = v; else if (n == "width") p.width = v;
     else if (n == "wetDiv") p.wetDiv = v; else if (n == "loopDiv") p.loopDiv = v;
-    else if (n == "classic") p.classic = v != 0;
+    else if (n == "classic") p.classic = v != 0; else if (n == "wearNoise") p.wearNoise = v; else if (n == "wearPost") p.wearPost = v != 0;
     else if (n == "freeze") p.freezeLatch = v;
     else if (n.rfind("mod1", 0) == 0 || n.rfind("mod2", 0) == 0) {
         auto& m = p.mods[n[3] - '1'];

@@ -33,6 +33,7 @@ seconds 14
 1350 param loopMode 2
 1450 param loopMode 0
 1500 param classic 1
+1600 param wearNoise 0.3
 1700 param tone 1
 1800 param width 0.5
 1900 param classic 0

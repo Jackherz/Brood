@@ -51,7 +51,7 @@ const BASE = {
   wetMode: 0, routing: 1, loopMode: 1,
   trails: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 0, envSync: 0,
-  tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, freeze: 0,
+  tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
   wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
     [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Bounce`, 0], [`mod${n}Sweep`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
@@ -116,7 +116,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'envSync', 'wetPre', 'envSoft', 'hiQ', 'freeze', 'classic'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'envSync', 'wetPre', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
     else if (key.includes('_')) out[key] = clamp(input[key], -1, 1);
     else if (key === 'loopDb') out[key] = clamp(input[key], -24, 12);
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
@@ -907,6 +907,7 @@ function App() {
               {[['trails', 'TRAILS', 'the tails keep falling after you switch the wet side off.'],
               ['smooth', 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.'],
               ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.'],
+              ...(params.classic ? [['wearPost', 'AFTER LOOP', 'CLASSIC is heard but not recorded: the loop keeps a clean take, so switching CLASSIC off gives it back clean. a little less grit.']] : []),
               ['hiQ', 'HI-Q', 'cleaner conversion in and out of CLOCK: far fewer artifacts and a fuller top. the wet side runs a little later; dry is not delayed. CLASSIC ignores it.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
             </div>
             <label className={`level-row tempo-row ${params.sync || params.envSync || params.rampSync ? 'live' : ''}`}>

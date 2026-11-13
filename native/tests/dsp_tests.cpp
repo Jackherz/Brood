@@ -326,8 +326,8 @@ int main() {
         CHECK(gone < keep * 0.05, "fade 1 wipes it (%.5f vs %.4f)", gone, keep);
     }
     {   // CLASSIC: the slow clock is noisy
-        auto noise = [](bool classic) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic;
+        auto noise = [](bool classic, double level = 1) {
+            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic; c.p.wearNoise = level;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 2, [](double) { return 0.0; });
             return rms(o.L, 1, 2);
@@ -335,6 +335,27 @@ int main() {
         const double clean = noise(false), noisy = noise(true);
         CHECK(clean < 1e-6, "silence stays silent (%.6f)", clean);
         CHECK(noisy > 1e-4, "classic clock noise (%.5f)", noisy);
+        const double half = noise(true, 0.5), none = noise(true, 0);
+        CHECK(half > noisy * 0.4 && half < noisy * 0.6, "NOISE at half halves it (%.5f of %.5f)", half, noisy);
+        CHECK(none < 1e-6, "NOISE at 0 leaves worn silent (%.6f)", none);
+    }
+    {   // WORN after the loop: the take is free of the worn hiss, even with the wet side ahead of the looper
+        auto kept = [](bool post) {
+            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = true; c.p.wearPost = post;
+            c.p.wetPre = true; c.p.balance = 1; c.p.loopMode = 1; c.prepare(FS); tap(c, 0); tap(c, 1);
+            render(c, 3, [](double) { return 0.0; }, [&](brood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
+            c.p.classic = false; tap(c, 0);   // wear off and wet off: only the loop is left to hear
+            auto o = render(c, 3, [](double) { return 0.0; });
+            return rms(o.L, 1, 3);
+        };
+        const double inLoop = kept(false), after = kept(true);
+        CHECK(inLoop > 1e-5, "worn in the loop records its hiss (%.6f)", inLoop);
+        CHECK(after < inLoop * 0.05, "worn after the loop keeps the take clean (%.6f of %.6f)", after, inLoop);
+        // And while it's on, it's still heard as worn: the hiss is in the output.
+        brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = true; c.p.wearPost = true; c.p.wetPre = true;
+        c.prepare(FS); tap(c, 0);
+        auto o = render(c, 2, [](double) { return 0.0; });
+        CHECK(rms(o.L, 1, 2) > 1e-4, "worn after the loop is still heard (%.5f)", rms(o.L, 1, 2));
     }
 
     {   // The wet side doesn't click: a steady two-note drone through every mode, knobs moving and FREEZE
