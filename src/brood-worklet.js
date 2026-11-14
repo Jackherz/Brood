@@ -218,6 +218,7 @@ class Allpass {
 function readFrac(buf, pos) {
   const n = buf.length;
   let p = pos % n; if (p < 0) p += n;
+  if (p >= n) p -= n;   // a hair below zero wraps to exactly n (see brood.h)
   const i0 = Math.floor(p), f = p - i0;
   const im1 = i0 === 0 ? n - 1 : i0 - 1;
   const i1 = i0 + 1 >= n ? i0 + 1 - n : i0 + 1;
@@ -398,11 +399,13 @@ class Slip {
     this.count = 1e9;
     this.speed = 1;
     this.writer = new WetWriter();
+    this.filled = 0;   // how much of the buffer has been written since it was made
   }
   tick(input, sliceLen, speedTarget, freeze) {
     const n = this.buf.length;
     const freezing = freeze && !this.writer.wasFrozen;
     this.w = this.writer.write(this.buf, this.w, input, freeze);
+    if (!freeze && this.filled < n) this.filled++;
     this.speed += (speedTarget - this.speed) * 0.002;
     const s = this.speed;
     const xf = Math.max(32, Math.min(0.25 * sliceLen, 0.03 * this.fs));
@@ -410,11 +413,13 @@ class Slip {
     // once: start a slice now, from far enough back. The head being replaced has to have
     // finished fading, or its restart would be a step.
     if (freezing) this.count = 1e9;
-    if (++this.count >= sliceLen && this.heads[this.cur ^ 1].g <= 0) {
+    // A slice also ends when its head has had to bow out (see brood.h).
+    if ((++this.count >= sliceLen || (this.heads[this.cur].dying && this.count >= xf)) && this.heads[this.cur ^ 1].g <= 0) {
       this.count = 0;
       const margin = xf + 64;
       const behind = margin + Math.max(0, freeze ? s : s - 1) * (sliceLen + xf);
-      const start = this.w - Math.min(behind, n - 2 * margin);
+      // Never further back than has been written (see brood.h).
+      const start = this.w - Math.min(behind, n - 2 * margin, Math.max(margin, this.filled - margin));
       this.cur ^= 1;
       const h = this.heads[this.cur];
       h.pos = start; h.g = 0; h.dir = 1; h.level = 1; h.dying = false;
@@ -1767,5 +1772,5 @@ function migrateTapeStart(oldStart, length, takeLength) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES };
+  module.exports = { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES, readFrac };
 }

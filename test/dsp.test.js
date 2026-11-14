@@ -1805,3 +1805,27 @@ test('ENV synced with the host playing: slices land on the host grid', () => {
   assert.ok(dips.length >= 3, `slices repeat (${dips.length})`);
   assert.ok(dips.every((t) => off(t) < 0.004), `every slice starts on the grid (${dips.map((t) => off(t).toFixed(4))})`);
 });
+
+test('readFrac a hair below zero reads the first sample, not past the end (a NaN)', () => {
+  const { readFrac } = require('../src/brood-worklet.js');
+  const buf = new Float32Array(352000);
+  for (let i = 0; i < buf.length; i++) buf[i] = 0.25 + 0.5 * Math.sin(0.001 * i);
+  for (const pos of [-1.1e-11, -1e-14, -352000 - 1e-10]) {
+    const v = readFrac(buf, pos);
+    assert.ok(Number.isFinite(v) && Math.abs(v - buf[0]) < 1e-3, `readFrac(${pos}) = ${v}`);
+  }
+});
+
+test('SLIP at 2x with WET DIV 4x and a low CLOCK never goes quiet, and stays finite', () => {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ wetMode: 2, modWet: 1, time: 1, clock: 0.7, smooth: 1, wetDiv: 1, routing: 0, balance: 0, mix: 1, mod1On: 0, mod2On: 0 })) core.setParam(k, v);
+  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  const { L } = render(core, 30, (t) => 0.3 * Math.sin(2 * Math.PI * 220 * t));
+  assert.ok(L.every(Number.isFinite), 'finite');
+  let run = 0, longest = 0;
+  for (let i = 1 * FS; i + 960 < L.length; i += 960) {   // from just after the wet side came on
+    let pk = 0; for (let k = 0; k < 960; k++) pk = Math.max(pk, Math.abs(L[i + k]));
+    if (pk < 0.01) { run += 960; longest = Math.max(longest, run); } else run = 0;
+  }
+  assert.ok(longest < FS * 0.1, `longest quiet ${(longest / FS).toFixed(2)} s`);
+});

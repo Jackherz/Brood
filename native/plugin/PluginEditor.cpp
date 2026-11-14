@@ -1063,6 +1063,7 @@ void BroodEditor::touch(const juce::String& id) {
     if (id == "memory" || id == "start" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
     if (id == "mod1Rate" || id == "mod2Rate") repaintDesign(rampArea);
     if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv" || id == "wearNoise") repaintDesign(hoodArea);
+    if (id == "wetDiv") repaintDesign(pedalArea);   // TIME's readout counts WET DIV in
 }
 
 void BroodEditor::showReadout(const juce::String& label, const juce::String& value, bool follows) {

@@ -51,3 +51,26 @@ unmodulated worst case peaks at 0.0002 there.
 - `native/tests/dsp_tests.cpp` checks the six worst cases against limits well under what
   they used to reach. All six fail on the code before this change.
 - `tests/parity/scenarios/mod_fast.txt` runs every fixed case through both engines.
+
+## SLIP cutting out, and a read past the end of a buffer (14 November, from the user's set)
+
+Reported with SLIP at SPEED 2x, WET DIV 4x, CLOCK 24.3 kHz (SMOOTH), WORN after the loop and
+the wet side alone: moving TIME cut the wet side out for too long, it sometimes cut out
+with nothing moving, and there were occasional clicks in the left ear.
+
+- **Cut-outs.** At 2x, a slice starts far enough back that its head reaches the newest
+  audio just as the slice ends. If TIME grew under a slice, or the slice was longer than
+  the buffer can feed at that speed (WET DIV multiplies it), the head reached the newest
+  audio early and bowed out, and the wet side was silent until the slice was up: 2 s when
+  TIME moved, up to 7.8 s at the top of TIME. A slice now ends as soon as its head bows
+  out. And until the buffer has filled (after loading or switching the wet side on), a
+  slice never starts further back than has been written, which was another few seconds
+  of silence.
+- **The readout.** REFRESH (and the reverb's DECAY, the delay's time and WEAVE's reach)
+  left WET DIV out: at 4x, "1.94 s" was a 7.8 s slice. They count it in now, in the
+  editor, the host's display and the browser.
+- **Clicks.** `readFrac` wrapped a position a hair below zero to exactly the buffer's
+  length, one past the end. In the plug-in that read memory beyond the buffer
+  (AddressSanitizer: a heap buffer overflow), in the browser it made a NaN. It's rare and
+  depends on where each channel's read head is, which would fit clicks in one ear. Every
+  wet mode reads through it. It now wraps that case to the start.

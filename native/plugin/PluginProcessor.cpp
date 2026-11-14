@@ -149,20 +149,25 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
     const double hz = brood::clockHz(ck->load(), smooth);
     const double c = hz / brood::kCoreFs;
     if (id == "time") {
-        if (wetMode == 0) return v > 0.985f ? juce::String("decay infinite") : "decay " + fmtTime(brood::expMap(v, 0.4, 25) / c);
+        // WET DIV runs the wet side slower, so every time on it is that many times longer.
+        const auto* wd = apvts.getRawParameterValue("wetDiv");
+        const int div = brood::divMap(wd != nullptr ? wd->load() : 0.f);
+        const juce::String times = div > 1 ? " x" + juce::String(div) : juce::String();
+        const double delayMost = brood::kDelayMaxSec * 0.95;   // the delay line's length
+        if (wetMode == 0) return v > 0.985f ? juce::String("decay infinite") : "decay " + fmtTime(brood::expMap(v, 0.4, 25) * div / c);
         if (wetMode == 1) {
             const auto* sy = apvts.getRawParameterValue("sync");
             if (sy != nullptr && sy->load() > 0.5f)
-                return juce::String(brood::syncLabel(v)) + " · " + fmtTime(brood::syncSeconds(hostBpm_.load(), v));
-            return "delay " + fmtTime(brood::expMap(v, 0.02, 2) / c);
+                return juce::String(brood::syncLabel(v)) + times + " · " + fmtTime(std::min(brood::syncSeconds(hostBpm_.load(), v) * div, delayMost * brood::kCoreFs / hz));
+            return "delay " + fmtTime(std::min(brood::expMap(v, 0.02, 2) * div, delayMost) / c);
         }
         if (wetMode == 3) {
             const auto* sy = apvts.getRawParameterValue("sync");
             if (sy != nullptr && sy->load() > 0.5f)
-                return juce::String(brood::syncLabel(v)) + " back · " + fmtTime(brood::syncSecondsRaw(hostBpm_.load(), v));
-            return "memory " + fmtTime(0.2 + v * 2.6);
+                return juce::String(brood::syncLabel(v)) + times + " back · " + fmtTime(std::min(brood::syncSecondsRaw(hostBpm_.load(), v) * div, brood::kWeaveBufSec * 0.85));
+            return "memory " + fmtTime(std::min(2.8, (0.2 + v * 2.6) * div));
         }
-        return "refresh " + fmtTime(brood::expMap(v, 0.05, 1.5) / c);
+        return "refresh " + fmtTime(brood::expMap(v, 0.05, 1.5) * div / c);
     }
     if (id == "mix") return "dry " + pct(v > 0.995f ? 0.0 : std::min(1.0, 2.0 * (1 - v))) + " / fx " + pct(std::min(1.0, 2.0 * v));
     if (id == "length") {
@@ -245,11 +250,13 @@ juce::String BroodProcessor::hostValue(const juce::String& id, float v) const {
     const double hz = brood::clockHz(ck->load(), smooth);
     const double c = hz / brood::kCoreFs;
     if (id == "time") {
-        if (wetMode == 0) return v > 0.985f ? juce::String("Inf") : shortTime(brood::expMap(v, 0.4, 25) / c);
-        if ((wetMode == 1 || wetMode == 3) && on("sync")) return brood::syncLabel(v);
-        if (wetMode == 1) return shortTime(brood::expMap(v, 0.02, 2) / c);
-        if (wetMode == 3) return shortTime(0.2 + v * 2.6);
-        return shortTime(brood::expMap(v, 0.05, 1.5) / c);
+        const auto* wd = apvts.getRawParameterValue("wetDiv");
+        const int div = brood::divMap(wd != nullptr ? wd->load() : 0.f);   // WET DIV: times that many times longer
+        if (wetMode == 0) return v > 0.985f ? juce::String("Inf") : shortTime(brood::expMap(v, 0.4, 25) * div / c);
+        if ((wetMode == 1 || wetMode == 3) && on("sync")) return juce::String(brood::syncLabel(v)) + (div > 1 ? "x" + juce::String(div) : juce::String());
+        if (wetMode == 1) return shortTime(std::min(brood::expMap(v, 0.02, 2) * div, brood::kDelayMaxSec * 0.95) / c);
+        if (wetMode == 3) return shortTime(std::min(2.8, (0.2 + v * 2.6) * div));
+        return shortTime(brood::expMap(v, 0.05, 1.5) * div / c);
     }
     if (id == "length") {
         if (loopMode == 1) return shortTime(brood::kLoopSamples / hz * brood::expMap(v, 0.02, 1));

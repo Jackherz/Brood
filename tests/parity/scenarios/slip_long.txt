@@ -1,0 +1,21 @@
+# SLIP at 2x with WET DIV 4x and a low CLOCK: slices longer than the buffer can feed end
+# when the head bows out, and TIME moved under a slice ends it early, instead of silence.
+rate 48000
+seconds 24
+0 param wetMode 2
+0 param modWet 1
+0 param time 1
+0 param clock 0.7
+0 param smooth 1
+0 param wetDiv 1
+0 param routing 0
+0 param balance 0
+0 param mix 1
+0 param mod1On 0
+0 param mod2On 0
+10 fs wet down
+14 fs wet up
+3000 param time 0.6
+3600 param time 0.95
+4200 param time 0.7
+5000 param time 1

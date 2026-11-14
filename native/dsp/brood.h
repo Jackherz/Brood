@@ -304,6 +304,9 @@ inline double readFrac(const std::vector<float>& buf, double pos) {
     const int N = static_cast<int>(buf.size());
     const double n = static_cast<double>(N);
     double p = jsMod(pos, n); if (p < 0) p += n;
+    // A position a hair below zero wraps to exactly n in floating point, one past the end:
+    // in the plug-in that read memory beyond the buffer (a click), in the browser a NaN.
+    if (p >= n) p -= n;
     const int i0 = static_cast<int>(std::floor(p)); const double f = p - i0;
     const int im1 = i0 == 0 ? N - 1 : i0 - 1;
     const int i1 = i0 + 1 >= N ? i0 + 1 - N : i0 + 1;
@@ -457,16 +460,18 @@ struct Slip {
     std::vector<float> buf; int w = 0;
     Head heads[2]; int cur = 0;
     double fs = 48000, count = 1e9, speed = 1;
+    int filled = 0;   // how much of the buffer has been written since it was made
     WetWriter writer;
     void init(double sr) {
         fs = sr;
         buf.assign(static_cast<size_t>(std::ceil(kSlipBufSec * fs)), 0.f);
-        w = 0; heads[0] = heads[1] = Head{}; cur = 0; count = 1e9; speed = 1; writer = WetWriter{};
+        w = 0; heads[0] = heads[1] = Head{}; cur = 0; count = 1e9; speed = 1; writer = WetWriter{}; filled = 0;
     }
     double tick(double input, double sliceLen, double speedTarget, bool freeze) {
         const int n = static_cast<int>(buf.size());
         const bool freezing = freeze && !writer.wasFrozen;
         writer.write(buf, w, input, freeze);
+        if (!freeze && filled < n) ++filled;
         speed += (speedTarget - speed) * 0.002;
         const double s = speed;
         const double xf = std::max(32.0, std::min(0.25 * sliceLen, 0.03 * fs));
@@ -474,11 +479,18 @@ struct Slip {
         // at once: start a slice now, from far enough back. The head being replaced has to
         // have finished fading, or its restart would be a step.
         if (freezing) count = 1e9;
-        if (++count >= sliceLen && heads[cur ^ 1].g <= 0) {
+        // A slice also ends when its head has had to bow out (below): it caught the write point
+        // before the slice was up, because TIME grew under it or the slice is longer than the
+        // buffer can feed at this speed. Waiting out the rest left the wet side silent for
+        // seconds. It must have played for a crossfade first, so a head that starts close
+        // can't set off a run of tiny slices.
+        if ((++count >= sliceLen || (heads[cur].dying && count >= xf)) && heads[cur ^ 1].g <= 0) {
             count = 0;
             const double margin = xf + 64;
             const double behind = margin + std::max(0.0, freeze ? s : s - 1) * (sliceLen + xf);
-            const double start = w - std::min(behind, n - 2 * margin);
+            // Never further back than has been written: until the buffer fills, a long slice
+            // starting in the empty part played seconds of silence.
+            const double start = w - std::min({behind, n - 2 * margin, std::max(margin, filled - margin)});
             cur ^= 1;
             heads[cur].pos = start; heads[cur].g = 0; heads[cur].dir = 1; heads[cur].level = 1; heads[cur].dying = false;
             heads[cur ^ 1].dir = -1;

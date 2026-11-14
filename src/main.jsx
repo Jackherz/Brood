@@ -132,10 +132,13 @@ function describe(id, p) {
   const ratio = rate / 64;
   if (id === 'clock') return `${rate.toFixed(rate < 10 && p.smooth ? 1 : 0)} kHz`;
   if (id === 'time') {
-    if (p.sync && p.wetMode === 1) return `${syncLabel(v)} · ${timeText(syncSeconds(p.bpm, v))}`;
-    if (p.wetMode === 3) return p.sync ? `${syncLabel(v)} BACK · ${timeText(syncSecondsRaw(p.bpm, v))}` : `${timeText(0.2 + v * 2.6)} BACK`;
-    if (p.wetMode === 0) return v > 0.985 ? 'INFINITE' : timeText(expMap(v, 0.4, 25) / ratio);
-    return timeText(expMap(v, p.wetMode === 1 ? 0.02 : 0.05, p.wetMode === 1 ? 2 : 1.5) / ratio);
+    // WET DIV runs the wet side slower, so every time on it is that many times longer.
+    const div = DIV_STEPS[divIndex(p.wetDiv)], times = div > 1 ? ` ×${div}` : '';
+    if (p.sync && p.wetMode === 1) return `${syncLabel(v)}${times} · ${timeText(Math.min(syncSeconds(p.bpm, v) * div, 2.1 * 0.95 / ratio))}`;
+    if (p.wetMode === 3) return p.sync ? `${syncLabel(v)}${times} BACK · ${timeText(Math.min(syncSecondsRaw(p.bpm, v) * div, 3 * 0.85))}` : `${timeText(Math.min(2.8, (0.2 + v * 2.6) * div))} BACK`;
+    if (p.wetMode === 0) return v > 0.985 ? 'INFINITE' : timeText(expMap(v, 0.4, 25) * div / ratio);
+    if (p.wetMode === 1) return timeText(Math.min(expMap(v, 0.02, 2) * div, 2.1 * 0.95) / ratio);
+    return timeText(expMap(v, 0.05, 1.5) * div / ratio);
   }
   if (id === 'length' && p.loopMode === 1) return timeText((64 / rate) * expMap(v, 0.02, 1));
   if (id === 'length' && p.loopMode === 0 && p.envSync) return `${syncLabel(v)} SLICE · ${timeText(syncSecondsRaw(p.bpm, v))}`;

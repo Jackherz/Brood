@@ -1339,6 +1339,38 @@ int main() {
             CHECK(peak < k.most, "fast modulation: %s, artefacts above 8 kHz peak at %.4f (most %.4f)", k.name, peak, k.most);
         }
     }
+    {   // SLIP at 2x with WET DIV 4x and a low CLOCK: slices longer than the buffer can feed, or
+        // a TIME that grows under a slice, end the slice early rather than leaving seconds of silence
+        for (int move = 0; move < 2; ++move) {
+            brood::Core c; c.p.wetMode = 2; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.7; c.p.smooth = true;
+            c.p.wetDiv = 1; c.p.routing = 0; c.p.balance = 0; c.p.mix = 1;
+            c.p.mods[0].on = c.p.mods[1].on = false;
+            c.prepare(FS);
+            tap(c, 0);
+            const Out o = render(c, 40, [](double t) { return 0.3 * std::sin(2 * brood::kPi * 220 * t); },
+                                 [&](brood::Core& cc, long b) {
+                                     const double t = static_cast<double>(b * B) / FS;
+                                     if (move && t > 10) cc.p.time = 0.75 + 0.25 * std::sin(2 * brood::kPi * 0.2 * (t - 10));   // TIME moved by hand
+                                 });
+            const int W = 960;   // 20 ms
+            long run = 0, longest = 0;
+            for (size_t i = static_cast<size_t>(1 * FS); i + W < o.L.size(); i += W) {   // from just after the wet side came on
+                float pk = 0;
+                for (int k = 0; k < W; ++k) pk = std::max(pk, std::fabs(o.L[i + static_cast<size_t>(k)]));
+                if (pk < 0.01f) { run += W; longest = std::max(longest, run); } else run = 0;
+            }
+            CHECK(longest < FS * 0.1, "SLIP 2x, WET DIV 4x, TIME %s: the wet side never goes quiet (longest %.2f s)", move ? "moving" : "at the top", longest / FS);
+        }
+    }
+    {   // readFrac at a position a hair below zero: it wrapped to exactly n, one past the end (a read
+        // beyond the buffer, heard as a click in the plug-in and a NaN in the browser)
+        std::vector<float> buf(352000);
+        for (size_t i = 0; i < buf.size(); ++i) buf[i] = static_cast<float>(0.25 + 0.5 * std::sin(0.001 * static_cast<double>(i)));
+        for (double pos : {-1.1e-11, -1e-14, -352000.0 - 1e-10}) {
+            const double v = brood::readFrac(buf, pos);
+            CHECK(std::isfinite(v) && std::fabs(v - buf[0]) < 1e-3, "readFrac(%g) reads the first sample (%.4f, want %.4f)", pos, v, buf[0]);
+        }
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };
