@@ -418,6 +418,31 @@ bool BroodProcessor::loadFile(const juce::File& f) {
     return true;
 }
 
+// Audio thread, after each block: the columns of the history written since last time, the
+// louder of the two sides, for the take strip's live view.
+void BroodProcessor::publishLive() {
+    const int64_t total = core_.histWritten();
+    const int N = brood::kMaxLoopSamples, C = brood::kLiveCols;
+    const int pos = core_.histWritePos();
+    const float* l = core_.liveColumns();
+    const float* r = coreRight_.liveColumns();
+    auto copy = [&](int c) { live_[static_cast<size_t>(c)].store(std::max(l[c], r[c]), std::memory_order_relaxed); };
+    if (liveSeen_ < 0 || total < liveSeen_ || total - liveSeen_ >= N) {
+        for (int c = 0; c < C; ++c) copy(c);
+    } else {
+        // From the column the last block ended in to the one being written now.
+        const int was = static_cast<int>(((pos - (total - liveSeen_)) % N + N) % N);
+        for (int c = was / brood::kLiveColTicks, k = 0; k <= C; c = (c + 1) % C, ++k) {
+            copy(c);
+            if (c == pos / brood::kLiveColTicks) break;
+        }
+    }
+    liveSeen_ = total;
+    ui.histPos = pos;
+    ui.memTicks = core_.memoryTicks();
+    ui.takeSoFar = core_.takeSoFar();
+}
+
 bool BroodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
     const juce::SpinLock::ScopedTryLockType lock(waveLock_);
     if (!lock.isLocked()) return false;
@@ -592,16 +617,27 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     ui.peakIn = std::max(st.peakIn, rightState.peakIn); ui.peakOut = std::max(st.peakOut, rightState.peakOut);
 
     const bool leftDirty = core_.takeLoopWaveDirty(), rightDirty = coreRight_.takeLoopWaveDirty();
-    bool wantWave = leftDirty || rightDirty || pendingWave_;
-    if (st.loop == brood::LoopLed::Dub && ++dubBlocks_ % 40 == 0) wantWave = true;
-    if (wantWave) {
+    const bool wantWave = leftDirty || rightDirty || pendingWave_;
+    // An overdub redraws only the bins it wrote, every block, so the strip keeps up with it.
+    int dubLo = 0, dubHi = -1, lo = 0, hi = 0;
+    if (core_.takeDubDirty(lo, hi)) { dubLo = lo; dubHi = hi; }
+    if (coreRight_.takeDubDirty(lo, hi)) { dubLo = dubHi < 0 ? lo : std::min(dubLo, lo); dubHi = std::max(dubHi, hi); }
+    if (wantWave || (dubHi >= 0 && st.lsrc > 0)) {
         const juce::SpinLock::ScopedTryLockType lock(waveLock_);
-        if (lock.isLocked()) {
+        if (!lock.isLocked()) pendingWave_ = true;   // the dirty cells are lost, so redraw the lot
+        else if (wantWave) {
             core_.loopPeaks(wave_.data(), kWaveBins); coreRight_.loopPeaks(waveRight_.data(), kWaveBins);
             for (size_t i = 0; i < wave_.size(); ++i) wave_[i] = std::max(wave_[i], waveRight_[i]);
             ui.waveVersion.fetch_add(1); pendingWave_ = false;
-        } else pendingWave_ = true;
+        } else {
+            const auto bin = [&](int cell) { return static_cast<int>(static_cast<int64_t>(cell) * kWaveBins / st.lsrc); };
+            const int b0 = std::max(0, bin(dubLo)), b1 = std::min(kWaveBins - 1, bin(dubHi));
+            core_.loopPeaksRange(wave_.data(), kWaveBins, b0, b1); coreRight_.loopPeaksRange(waveRight_.data(), kWaveBins, b0, b1);
+            for (int i = b0; i <= b1; ++i) wave_[static_cast<size_t>(i)] = std::max(wave_[static_cast<size_t>(i)], waveRight_[static_cast<size_t>(i)]);
+            ui.waveVersion.fetch_add(1);
+        }
     }
+    publishLive();
     const double secs = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
     ui.load = static_cast<float>(100.0 * secs / (n / getSampleRate()));
 }

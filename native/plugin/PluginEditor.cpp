@@ -584,14 +584,68 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
     const int lsrc = proc.ui.lsrc.load();
     const int led = proc.ui.loopLed.load();   // 0 off, 1 play, 2 rec, 3 dub
     if (lsrc <= 0) {
-        g.setColour(dimmed); g.fillRect(b.getX() + 12.f, mid + 14.f, b.getWidth() - 24.f, 1.f);
-        g.setColour(k.onSunk); g.setFont(font(18));
         const bool record = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f;
+        const bool armed = proc.ui.recArmed.load();
         const juce::String bars = proc.describe("recBars").toUpperCase();
-        const juce::String idle = record ? "PRESS LOOP TO RECORD_" : "LISTENING. PRESS LOOP TO KEEP THE LAST MOMENT_";
-        const juce::String text = proc.ui.recArmed.load() ? "WAITING FOR THE BAR LINE_"
-                                : led == 2 ? (record && bars != "FREE" ? "RECORDING " + bars + "_" : juce::String("RECORDING_")) : idle;
-        g.drawText(text, b.withTrimmedBottom(16.f), juce::Justification::centred);
+        // Nothing caught: the history scrolls past, newest at the right, over the window a tap
+        // keeps. It's what the looper hears (the wet side too, when it's PRE), so it's what a
+        // take would hold. In CAPTURE all of it is bright, since a tap keeps it; in RECORD only
+        // what is being kept.
+        constexpr int N = brood::kMaxLoopSamples, T = brood::kLiveColTicks;
+        const int pos = proc.ui.histPos.load(), win = juce::jmax(T, proc.ui.memTicks.load()), kept = proc.ui.takeSoFar.load();
+        const int px = juce::jmax(1, juce::roundToInt(b.getWidth()));
+        const float rise = b.getHeight() / 2 - 10.f;
+        const juce::Colour bright = k.onSunk;
+        float loudest = 0;
+        cols.resize(static_cast<size_t>(px));
+        for (int x = 0; x < px; ++x) {
+            const int64_t from = pos - static_cast<int64_t>(px - x) * win / px, to = pos - static_cast<int64_t>(px - x - 1) * win / px;
+            float pk = 0;
+            for (int64_t t = from; t < juce::jmax(to, from + 1); t += T) {
+                const int at = static_cast<int>(((t % N) + N) % N);
+                pk = std::max(pk, proc.livePeak(at / T));
+            }
+            loudest = std::max(loudest, pk);
+            const int64_t age = pos - to;   // ticks back to this pixel's newest edge
+            cols[static_cast<size_t>(x)] = {pk, kept >= 0 ? age < kept : !record};
+        }
+        const double clock = juce::jmax(1.f, proc.ui.clockHz.load());
+        const juce::String keptText = juce::String(juce::jmax(0, kept) / clock, 2) + " S";
+        if (loudest < 0.001f) {
+            // Silence: the words where the waveform would be, as before.
+            g.setColour(dimmed); g.fillRect(b.getX() + 12.f, mid + 14.f, b.getWidth() - 24.f, 1.f);
+            g.setColour(k.onSunk); g.setFont(font(18));
+            const juce::String idle = record ? "PRESS LOOP TO RECORD_" : "LISTENING. PRESS LOOP TO KEEP THE LAST MOMENT_";
+            const juce::String text = armed ? "WAITING FOR THE BAR LINE_"
+                                    : led == 2 ? (record && bars != "FREE" ? "RECORDING " + bars + "_" : juce::String("RECORDING_")) : idle;
+            g.drawText(text, b.withTrimmedBottom(16.f), juce::Justification::centred);
+            return;
+        }
+        // A tick a second along the foot, as on a take.
+        const double seconds = win / clock, every = seconds > 16.0 ? 5.0 : 1.0;
+        g.setColour(k.sunk.interpolatedWith(k.onSunk, 0.6f));
+        for (double t = every; t < seconds; t += every)
+            g.fillRect(b.getRight() - b.getWidth() * static_cast<float>(t / seconds), b.getBottom() - 6.f, 1.f, 6.f);
+        for (int x = 0; x < px; ++x) {
+            const auto [pk, lit] = cols[static_cast<size_t>(x)];
+            const float a = std::min(1.f, pk * 1.6f) * rise;
+            g.setColour(lit ? bright : dimmed);
+            g.fillRect(b.getX() + static_cast<float>(x), mid - a, 1.f, 2 * a + 1);
+        }
+        // Where the take being kept begins: it rides left as the take grows.
+        if (kept >= 0) {
+            const float sx = b.getRight() - b.getWidth() * static_cast<float>(kept) / static_cast<float>(win);
+            g.setColour(k.lit); g.fillRect(juce::jlimit(2.f, b.getRight() - 4.f, sx - 1.f), b.getY(), 2.f, b.getHeight());
+        }
+        // The now line, at the right edge.
+        g.setColour(k.lit); g.fillRect(b.getRight() - 1.f, b.getY(), 1.f, b.getHeight());
+        const juce::String heading = armed ? juce::String("WAITING FOR THE BAR LINE")
+                                   : led == 2 ? "RECORDING" + (record && bars != "FREE" ? " " + bars : juce::String()) + "  " + keptText
+                                   : record ? juce::String("PRESS LOOP TO RECORD")
+                                   : "LISTENING  A TAP KEEPS " + juce::String(seconds, 2) + " S";
+        g.setFont(capFont());
+        g.setColour(led == 2 || armed ? k.lit : k.onSunk);
+        g.drawText(heading, all.withHeight(16.f).withTrimmedLeft(6.f), juce::Justification::centredLeft);
         return;
     }
     int s = 0, e = 0;
@@ -1707,11 +1761,9 @@ void BroodEditor::timerCallback() {
     }
     if (modulationTick) updateBench();
     else {
-        // The play head moves every frame; paint() fetches new peaks. With nothing caught
-        // and nothing recording, the view holds still.
-        const bool loopMoves = ui.lsrc.load() > 0 || led != 0;
-        if (loopMoves || loopViewMoved) loopView.repaint();
-        loopViewMoved = loopMoves;
+        // Every frame: the play head moves over a take, and with nothing caught the input
+        // scrolls past. paint() fetches new peaks.
+        loopView.repaint();
     }
     if (!slowTick) return;
     const float mi = ui.peakIn.load(), mo = ui.peakOut.load();

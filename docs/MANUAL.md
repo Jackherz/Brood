@@ -77,6 +77,16 @@ pedal this follows has none. It reads in three tiers:
 3. **Under the hood**: the six sliders along the bottom. The last, **NOISE**, sets how much
    of the worn clock's hiss is let through; it only does anything with WEAR on WORN.
 
+**Before there's a take, the strip shows what's coming in.** The input scrolls past with
+the newest audio at the right edge, over the window a tap would keep (MEMORY's length,
+so a slow CLOCK scrolls more slowly and holds more). It shows what the looper hears: the
+wet side too when it's PRE-LOOP, and WEAR's worn sound when WEAR is before the loop, but
+nothing that comes after the looper. In CAPTURE all of it is bright, since a tap keeps
+it. In RECORD it stays dim until you tap. While a recording or a CAPTURE hold runs, a
+START rule marks where the take begins and rides left as it grows, and the heading
+counts the seconds kept. With a loop playing, the strip shows the take, and an overdub
+redraws as you lay it down.
+
 **START and END are markers on the waveform.** Grab one and drag it, all the way to
 either end of the take in every mode, or drag inside the window to slide it along
 the take; a press outside the window brings the nearer marker there. Moving START keeps

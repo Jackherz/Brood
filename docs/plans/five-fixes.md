@@ -264,3 +264,11 @@ To work out before building: which source the handle drives (Brood has two, so a
 picker or one handle per source, with colours to tell them apart), how this replaces
 dragging a source onto a knob, and whether the same handle goes into the kit so Silt
 gets it too.
+
+## Later: OVERDUB on its own control (from the Push 3 check)
+
+Checked on 14 November 2026: the short host names fit the Push 3 and everything is visible.
+A Push knob can't act as a momentary switch, so holding LOOP to overdub isn't possible
+from it. For a future build: separate overdub from the main loop recorder, as its own
+parameter (and CC) that a Push button or knob can latch on and off. Planned to follow the
+live waveform work.

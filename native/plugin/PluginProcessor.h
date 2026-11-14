@@ -88,7 +88,14 @@ public:
         std::atomic<float> bpm { 120.f };
         std::atomic<uint32_t> histCycles { 0 };
         std::atomic<uint32_t> waveVersion { 0 };
+        // The take strip's live view: where the history is being written (in ticks of the ring),
+        // how much a tap keeps, and how much a recording or a hold has kept so far (-1: none).
+        std::atomic<int> histPos { 0 }, memTicks { 64000 }, takeSoFar { -1 };
     } ui;
+    // Peak of each brood::kLiveColTicks of the history ring, both sides; any thread may read.
+    float livePeak(int column) const {
+        return live_[static_cast<size_t>(juce::jlimit(0, brood::kLiveCols - 1, column))].load(std::memory_order_relaxed);
+    }
     static constexpr int kWaveBins = 400;
     // copy of the loop's peak envelope; returns false if the audio thread holds the lock
     bool copyWave(std::array<float, kWaveBins>& out) const;
@@ -115,8 +122,11 @@ private:
     std::vector<float> inputLeft_, inputRight_, scratchLeft_, scratchRight_;
     float inputGainNow_ = 1.f;   // audio thread: ramped across a block so moving it can't click
     kit::TapeInput tape_;
-    int dubBlocks_ = 0;
     bool pendingWave_ = false;
+    // The live view's columns, copied from the cores as they're written (audio thread writes).
+    std::unique_ptr<std::atomic<float>[]> live_ { new std::atomic<float>[brood::kLiveCols]() };
+    int64_t liveSeen_ = -1;   // core_.histWritten() when last copied; -1 copies the lot
+    void publishLive();
 
     juce::AudioBuffer<float> demo_;
     double demoPos_ = 0;

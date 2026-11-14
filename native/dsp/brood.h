@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace brood {
@@ -21,6 +22,9 @@ constexpr int kLoopSamples = 64000;        // pedal capacity: CLOCK sets loop le
 // cores (stereo) therefore hold about 33 MB of loop memory.
 constexpr int kMaxLoopSeconds = 32;
 constexpr int kMaxLoopSamples = kLoopSamples * kMaxLoopSeconds;
+// The take strip's live view: a peak for every this many ticks of history, kept as it's written.
+constexpr int kLiveColTicks = 128;
+constexpr int kLiveCols = kMaxLoopSamples / kLiveColTicks;
 constexpr double kClockMinHz = 2000.0;
 constexpr double kClockMaxHz = 64000.0;
 constexpr double kCoreFs = 64000.0;
@@ -645,6 +649,7 @@ public:
         // core-clock ticks (kCoreFs), not host samples, so it stays valid as it is.
         if (hist.size() != static_cast<size_t>(kMaxLoopSamples)) {
             hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f);
+            liveCols.assign(kLiveCols, 0.f); histTotal = 0;
             histW = histCount = 0; lsrc = 0; loopPos = 0; loopState = LoopState::Off;
         }
         histCycles = 0;
@@ -851,7 +856,13 @@ public:
     void loopPeaks(float* out, int bins) const {
         for (int b = 0; b < bins; ++b) out[b] = 0;
         if (!lsrc) return;
-        for (int b = 0; b < bins; ++b) {
+        loopPeaksRange(out, bins, 0, bins - 1);
+    }
+    // The same for bins first..last only, so an overdub redraws just what it wrote.
+    void loopPeaksRange(float* out, int bins, int first, int last) const {
+        if (!lsrc) return;
+        first = std::max(0, first); last = std::min(bins - 1, last);
+        for (int b = first; b <= last; ++b) {
             const int a0 = static_cast<int>((static_cast<int64_t>(b) * lsrc) / bins);
             const int z = std::max(a0 + 1, static_cast<int>((static_cast<int64_t>(b + 1) * lsrc) / bins));
             float pk = 0;
@@ -903,6 +914,33 @@ public:
     }
 
     bool takeLoopWaveDirty() { const bool d = loopWaveDirty; loopWaveDirty = false; return d; }
+    // Cells of the take an overdub wrote since the last call; false if none.
+    bool takeDubDirty(int& lo, int& hi) {
+        if (dubHi < 0) return false;
+        lo = dubLo; hi = dubHi; dubLo = std::numeric_limits<int>::max(); dubHi = -1;
+        return true;
+    }
+
+    // ── the history, for the take strip's live view (read only) ──
+    // Peaks of each kLiveColTicks of history, by position in the ring; histW / kLiveColTicks
+    // is the column being written now.
+    const float* liveColumns() const { return liveCols.data(); }
+    // Ticks written since the buffer was made: what is new since a reader last looked.
+    int64_t histWritten() const { return histTotal; }
+    int histWritePos() const { return histW; }
+    // The most a tap keeps, in ticks: the strip's window.
+    int memoryTicks() const { return maxCaptureSamples(); }
+    // Ticks kept so far by a RECORD take, or by a CAPTURE hold; -1 when nothing is.
+    int takeSoFar() const {
+        auto since = [&](int idx, uint32_t cycle) {
+            const auto cycles = static_cast<uint32_t>(histCycles - cycle);
+            const int64_t n = static_cast<int64_t>(cycles) * static_cast<int64_t>(hist.size()) + histW - idx;
+            return static_cast<int>(std::min<int64_t>(maxCaptureSamples(), std::max<int64_t>(0, n)));
+        };
+        if (rec.phase == RecPhase::Recording) return since(rec.histIdx, rec.histCycle);
+        if (fsLoop.active && fsLoop.held && !fsLoop.playing && p.recMode == 0) return since(fsLoop.histIdx, fsLoop.histCycle);
+        return -1;
+    }
     // Raw generator output (0..1), for the UI and the ramp tests.
     double rampValue(int which) const { return rampRaw[which & 1]; }
     // What the DSP is using right now (knob + any ramp), in RAMP_KEYS order:
@@ -960,7 +998,8 @@ private:
     double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
     Allpass decor[2];
 
-    std::vector<float> hist, loopBuf;
+    std::vector<float> hist, loopBuf, liveCols;
+    int64_t histTotal = 0;
     int histW = 0, histCount = 0, lsrc = 0;
     uint32_t histCycles = 0;
     LoopState loopState = LoopState::Off;
@@ -969,6 +1008,7 @@ private:
     int dubW = 64, dubStart = 0;
     double loopDbSeen = 0, loopLevelTarget = 1, loopLevel = 1;
     int dubLast = -1;
+    int dubLo = std::numeric_limits<int>::max(), dubHi = -1;   // cells written since the strip looked
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
     // Moving START moves the read head, and a jump is a click. These three carry a
     // short crossfade from where the loop was playing to where it now begins.
@@ -1364,6 +1404,7 @@ private:
             auto write = [&](int cellQ, double v) {
                 const double amount = dubGain * std::min({1.0, cellQ / dubF, (dubW - cellQ) / dubF});
                 const int wi = std::min(len - 1, std::max(0, dubStart + cellQ));
+                dubLo = std::min(dubLo, wi); dubHi = std::max(dubHi, wi);   // for the strip's redraw
                 float& cell = loopBuf[static_cast<size_t>(wi)];
                 cell = static_cast<float>(cell * (1 - loss * amount) + v * amount);
             };
@@ -1476,7 +1517,13 @@ private:
         // left a splice in the buffer and every extra tap stitched in another one,
         // which is what put clicks inside the next loop. It's clean unless PRE puts the
         // wet side ahead of the looper.
-        hist[static_cast<size_t>(histW)] = static_cast<float>(softClip(x + (pre ? (wl + wr) * 0.5 : 0)));
+        const float kept = static_cast<float>(softClip(x + (pre ? (wl + wr) * 0.5 : 0)));
+        hist[static_cast<size_t>(histW)] = kept;
+        // The strip's picture of it: read only, never heard.
+        float& col = liveCols[static_cast<size_t>(histW / kLiveColTicks)];
+        if (histW % kLiveColTicks == 0) col = 0;
+        col = std::max(col, std::fabs(kept));
+        ++histTotal;
         if (++histW >= static_cast<int>(hist.size())) { histW = 0; ++histCycles; }
         if (histCount < static_cast<int>(hist.size())) ++histCount;
         // RECORD at the MEMORY ceiling: it closes, keeping what was played first.

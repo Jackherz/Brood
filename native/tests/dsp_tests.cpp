@@ -952,6 +952,83 @@ int main() {
             CHECK(c.state().loop == brood::LoopLed::Play && seconds(c) > 2.5, "CAPTURE: a tap still keeps the recent past");
         }
     }
+    {   // The strip's live view: peaks of the history as it's written, read only
+        const auto sine = [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); };
+        const auto silence = [](double) { return 0.0; };
+        // The column holding the tick written `ago` seconds back.
+        const auto colAgo = [](const brood::Core& c, double ago) {
+            const int N = brood::kMaxLoopSamples;
+            int at = c.histWritePos() - static_cast<int>(ago * c.state().clockHz);
+            at = ((at % N) + N) % N;
+            return c.liveColumns()[at / brood::kLiveColTicks];
+        };
+        {
+            brood::Core c; c.p.clock = 1; c.prepare(FS);
+            render(c, 1, silence);
+            const int64_t before = c.histWritten();
+            render(c, 1, sine);
+            const double ticks = static_cast<double>(c.histWritten() - before);
+            CHECK(std::fabs(ticks - c.state().clockHz) < 64, "live: histWritten counts the ticks (%.0f in 1 s at %.0f Hz)", ticks, c.state().clockHz);
+            CHECK(std::fabs(colAgo(c, 0.5) - 0.4f) < 0.02f, "live: a column of the tone reads its peak (%.3f)", colAgo(c, 0.5));
+            CHECK(colAgo(c, 1.5) < 1e-6f, "live: a column of the silence before reads nothing (%.6f)", colAgo(c, 1.5));
+            CHECK(c.takeSoFar() == -1, "live: nothing kept while listening (%d)", c.takeSoFar());
+            CHECK(c.memoryTicks() > 0, "live: the window is MEMORY long");
+        }
+        {   // WET set to PRE is in what the looper keeps, so it shows; POST isn't, so it doesn't
+            auto tail = [&](bool pre) {
+                brood::Core c; c.p.clock = 1; c.p.wetPre = pre; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.8; c.prepare(FS);
+                tap(c, 0);
+                render(c, 0.3, sine);
+                render(c, 0.6, silence);
+                return colAgo(c, 0.2);
+            };
+            const float pre = tail(true), post = tail(false);
+            CHECK(pre > 1e-3f, "live: PRE's reverb tail shows after the input stops (%.5f)", pre);
+            CHECK(post < 1e-6f, "live: POST's doesn't (%.6f)", post);
+        }
+        {   // RECORD: what's kept so far
+            brood::Core c; c.p.recMode = 1; c.p.clock = 1; c.p.memory = 1; c.prepare(FS);
+            render(c, 0.5, silence);
+            tap(c, 1);
+            render(c, 1, sine);
+            const double kept = c.takeSoFar() / c.state().clockHz;
+            CHECK(std::fabs(kept - 1.0) < 0.01, "live: RECORD counts what it has kept (%.3f s)", kept);
+            tap(c, 1);
+            CHECK(c.takeSoFar() == -1, "live: and stops counting once it plays (%d)", c.takeSoFar());
+        }
+        {   // CAPTURE: a hold keeps from the press, once it is a hold
+            brood::Core c; c.p.clock = 1; c.p.memory = 1; c.prepare(FS);
+            render(c, 1, sine);
+            c.footswitch(1, true);
+            render(c, 0.1, sine);
+            CHECK(c.takeSoFar() == -1, "live: a press isn't a hold yet (%d)", c.takeSoFar());
+            render(c, 0.9, sine);
+            const double kept = c.takeSoFar() / c.state().clockHz;
+            CHECK(std::fabs(kept - 1.0) < 0.01, "live: a CAPTURE hold counts from the press (%.3f s)", kept);
+            c.footswitch(1, false);
+            CHECK(c.takeSoFar() == -1, "live: and stops when it plays (%d)", c.takeSoFar());
+        }
+        {   // Overdub: the cells it wrote, and peaks for just those bins match the whole picture
+            brood::Core c; c.p.clock = 1; c.p.memory = 0.3; c.prepare(FS);
+            render(c, 2, sine);
+            tap(c, 1);
+            render(c, 0.5, silence);
+            int lo = 0, hi = 0;
+            c.takeDubDirty(lo, hi);   // clear anything from before
+            CHECK(!c.takeDubDirty(lo, hi), "live: nothing dirty without an overdub");
+            c.footswitch(1, true);
+            render(c, 1, [](double t) { return 0.8 * std::sin(2 * brood::kPi * 220 * t); });
+            const bool dirty = c.takeDubDirty(lo, hi);
+            CHECK(dirty && lo >= 0 && hi >= lo && hi < c.capturedLength(), "live: an overdub reports the cells it wrote (%d..%d of %d)", lo, hi, c.capturedLength());
+            c.footswitch(1, false);
+            std::vector<float> whole(400), part(400, -1.f);
+            c.loopPeaks(whole.data(), 400);
+            c.loopPeaksRange(part.data(), 400, 100, 199);
+            bool same = true;
+            for (int b = 0; b < 400; ++b) same = same && (b >= 100 && b <= 199 ? part[static_cast<size_t>(b)] == whole[static_cast<size_t>(b)] : part[static_cast<size_t>(b)] == -1.f);
+            CHECK(same, "live: a range of bins matches the whole picture and leaves the rest alone");
+        }
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };

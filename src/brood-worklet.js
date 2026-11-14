@@ -25,6 +25,9 @@ const LOOP_SAMPLES = 64000;      // pedal capacity, in core samples (1 s @ 64 kH
 // much of it a capture may use, so the pedal default still applies at 0.
 const MAX_LOOP_SECONDS = 32;
 const MAX_LOOP_SAMPLES = LOOP_SAMPLES * MAX_LOOP_SECONDS;
+// The take strip's live view: a peak for every this many ticks of history, kept as it's written.
+const LIVE_COL_TICKS = 128;
+const LIVE_COLS = MAX_LOOP_SAMPLES / LIVE_COL_TICKS;
 const CLOCK_MIN_HZ = 2000;
 const CLOCK_MAX_HZ = 64000;
 const CORE_FS = 64000;       // buffer timings are defined at the pedal’s 64 kHz clock
@@ -573,6 +576,9 @@ class BroodCore {
     this.hist = new Float32Array(nLoop);
     this.histW = 0;
     this.histCount = 0;
+    this.liveCols = new Float32Array(LIVE_COLS);
+    this.histTotal = 0;
+    this.dubLo = Infinity; this.dubHi = -1;   // cells an overdub wrote since the strip looked
     this.loopBuf = new Float32Array(nLoop);
     this.lsrc = 0;
     this.loopState = 'off';                     // off | play
@@ -1078,6 +1084,8 @@ class BroodCore {
       const write = (cellQ, v) => {
         const amount = this.dubGain * Math.min(1, cellQ / dubF, (dubW - cellQ) / dubF);
         const wi = Math.min(len - 1, Math.max(0, this.dubStart + cellQ));
+        if (wi < this.dubLo) this.dubLo = wi;
+        if (wi > this.dubHi) this.dubHi = wi;
         buf[wi] = buf[wi] * (1 - loss * amount) + v * amount;
       };
       if (starting) write(q, rec);
@@ -1195,7 +1203,14 @@ class BroodCore {
     // dry input is recorded — feeding the loop back would be a feedback path —
     // and while listening the live wet channel is caught as well, as before.
     const listening = this.loopState === 'off';
-    this.hist[this.histW] = softClip(x + (pre ? (wl + wr) * 0.5 : 0));
+    const kept = softClip(x + (pre ? (wl + wr) * 0.5 : 0));
+    this.hist[this.histW] = kept;
+    // The strip's picture of it: read only, never heard. (Float32, as the C++ keeps it.)
+    const col = Math.floor(this.histW / LIVE_COL_TICKS);
+    if (this.histW % LIVE_COL_TICKS === 0) this.liveCols[col] = 0;
+    const mag = Math.abs(Math.fround(kept));
+    if (mag > this.liveCols[col]) this.liveCols[col] = mag;
+    this.histTotal++;
     if (++this.histW >= this.hist.length) { this.histW = 0; this.histCycles++; }
     if (this.histCount < this.hist.length) this.histCount++;
     // RECORD at the MEMORY ceiling: it closes, keeping what was played first.
@@ -1366,15 +1381,43 @@ class BroodCore {
 
   loopPeaks(nBins) {
     const out = new Float32Array(nBins);
+    this.loopPeaksRange(out, nBins, 0, nBins - 1);
+    return out;
+  }
+
+  // The same for bins first..last only, so an overdub redraws just what it wrote.
+  loopPeaksRange(out, nBins, first, last) {
     const n = this.lsrc;
-    if (!n) return out;
-    for (let b = 0; b < nBins; b++) {
+    if (!n) return;
+    first = Math.max(0, first); last = Math.min(nBins - 1, last);
+    for (let b = first; b <= last; b++) {
       const a = Math.floor((b * n) / nBins), z = Math.max(a + 1, Math.floor(((b + 1) * n) / nBins));
       let pk = 0;
       for (let i = a; i < z; i += 4) { const v = Math.abs(this.loopBuf[i]); if (v > pk) pk = v; }
       out[b] = pk;
     }
-    return out;
+  }
+
+  // Cells of the take an overdub wrote since the last call, or null.
+  takeDubDirty() {
+    if (this.dubHi < 0) return null;
+    const r = { lo: this.dubLo, hi: this.dubHi };
+    this.dubLo = Infinity; this.dubHi = -1;
+    return r;
+  }
+
+  // ── the history, for the take strip's live view (read only) ──
+  liveColumns() { return this.liveCols; }
+  histWritten() { return this.histTotal; }
+  histWritePos() { return this.histW; }
+  memoryTicks() { return this.maxCaptureSamples(); }
+  // Ticks kept so far by a RECORD take, or by a CAPTURE hold; -1 when nothing is.
+  takeSoFar() {
+    const since = (idx, cycle) => Math.min(this.maxCaptureSamples(), Math.max(0, (this.histCycles - cycle) * this.hist.length + this.histW - idx));
+    if (this.rec.phase === 'recording') return since(this.rec.histIdx, this.rec.histCycle);
+    const fl = this.fsDown.loop;
+    if (fl && fl.held && !fl.playing && this.p.recMode === 0) return since(fl.histIdx, fl.histCycle);
+    return -1;
   }
 }
 
@@ -1472,5 +1515,5 @@ function migrateTapeStart(oldStart, length, takeLength) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC };
+  module.exports = { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES };
 }

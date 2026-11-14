@@ -169,6 +169,7 @@ public:
         juce::String windowText;
         std::array<float, BroodProcessor::kWaveBins> wave {};
         uint32_t version = 0;
+        std::vector<std::pair<float, bool>> cols;   // the live view's pixels: peak, and whether it's kept
         int dragging = -1, hot = -1, anchorStart = 0, anchorEnd = 0;
         double grabOffset = 0;   // from where it was pressed to the thing it holds, in samples
     };
@@ -176,7 +177,6 @@ public:
 private:
     void timerCallback() override;
     int timerTick = 0;
-    bool loopViewMoved = true;
     // `follows` marks a readout that belongs to the last touched parameter, so the
     // timer may keep its value current (automation, mode changes). Anything else —
     // a switch, the loop state, a patch name — is left alone until replaced.

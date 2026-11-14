@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS } = require('../src/brood-worklet.js');
+const { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS, LIVE_COL_TICKS, MAX_LOOP_SAMPLES } = require('../src/brood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -1569,4 +1569,78 @@ test('SLIP does not click when MODIFY swings its speed', () => {
     if (t > 1.5 * FS) for (let i = 0; i < BLOCK; i++) { if (seen++ >= 2) worst = Math.max(worst, Math.abs(L[i] - 2 * a + b)); b = a; a = L[i]; }
   }
   assert.ok(worst < 0.05, `worst corner ${worst.toFixed(4)}`);
+});
+
+test('the strip\'s live view: peaks of the history as it is written, read only', () => {
+  const sine = (t) => 0.4 * Math.sin(2 * Math.PI * 440 * t);
+  const silence = () => 0;
+  const make = (extra = {}) => {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ clock: 1, ...extra })) core.setParam(k, v);
+    return core;
+  };
+  // The column holding the tick written `ago` seconds back.
+  const colAgo = (core, ago) => {
+    const N = MAX_LOOP_SAMPLES;
+    const at = (((core.histWritePos() - Math.floor(ago * core.state().clockHz)) % N) + N) % N;
+    return core.liveColumns()[Math.floor(at / LIVE_COL_TICKS)];
+  };
+  {
+    const core = make();
+    render(core, 1, silence);
+    const before = core.histWritten();
+    render(core, 1, sine);
+    const ticks = core.histWritten() - before;
+    assert.ok(Math.abs(ticks - core.state().clockHz) < 64, `histWritten counts the ticks (${ticks})`);
+    assert.ok(Math.abs(colAgo(core, 0.5) - 0.4) < 0.02, `a column of the tone reads its peak (${colAgo(core, 0.5)})`);
+    assert.ok(colAgo(core, 1.5) < 1e-6, 'a column of the silence before reads nothing');
+    assert.equal(core.takeSoFar(), -1, 'nothing kept while listening');
+  }
+  {
+    const tail = (pre) => {
+      const core = make({ wetPre: pre ? 1 : 0, wetMode: 0, mix: 1, time: 0.8 });
+      core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+      render(core, 0.3, sine);
+      render(core, 0.6, silence);
+      return colAgo(core, 0.2);
+    };
+    assert.ok(tail(true) > 1e-3, `PRE's reverb tail shows (${tail(true)})`);
+    assert.ok(tail(false) < 1e-6, `POST's doesn't (${tail(false)})`);
+  }
+  {
+    const core = make({ recMode: 1, memory: 1 });
+    render(core, 0.5, silence);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    render(core, 1, sine);
+    assert.ok(Math.abs(core.takeSoFar() / core.state().clockHz - 1) < 0.01, 'RECORD counts what it has kept');
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    assert.equal(core.takeSoFar(), -1, 'and stops counting once it plays');
+  }
+  {
+    const core = make({ memory: 1 });
+    render(core, 1, sine);
+    core.footswitch('loop', 'down');
+    render(core, 0.1, sine);
+    assert.equal(core.takeSoFar(), -1, 'a press is not a hold yet');
+    render(core, 0.9, sine);
+    assert.ok(Math.abs(core.takeSoFar() / core.state().clockHz - 1) < 0.01, 'a CAPTURE hold counts from the press');
+    core.footswitch('loop', 'up');
+    assert.equal(core.takeSoFar(), -1, 'and stops when it plays');
+  }
+  {
+    const core = make({ memory: 0.3 });
+    render(core, 2, sine);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    render(core, 0.5, silence);
+    core.takeDubDirty();
+    assert.equal(core.takeDubDirty(), null, 'nothing dirty without an overdub');
+    core.footswitch('loop', 'down');
+    render(core, 1, (t) => 0.8 * Math.sin(2 * Math.PI * 220 * t));
+    const d = core.takeDubDirty();
+    assert.ok(d && d.lo >= 0 && d.hi >= d.lo && d.hi < core.lsrc, 'an overdub reports the cells it wrote');
+    core.footswitch('loop', 'up');
+    const whole = core.loopPeaks(400), part = new Float32Array(400).fill(-1);
+    core.loopPeaksRange(part, 400, 100, 199);
+    for (let b = 0; b < 400; b++) assert.equal(part[b], b >= 100 && b <= 199 ? whole[b] : -1, `bin ${b}`);
+  }
 });
