@@ -10,13 +10,14 @@ seconds 14
 0 param clock 1
 0 param memory 0.6
 0 param loopMode 1
-0 param length 0.5
 0 param modLoop 0.66
 0 param mod1On 1
 0 param mod1Rate 1
 0 param mod1Wave 0.3
 400 fs loop down
 404 fs loop up
+# A new take sets LENGTH full; set it back to the middle for the sweep.
+410 param length 0.5
 420 param mod1_length 1
 900 param mod1Wave 0
 1100 fs loop down

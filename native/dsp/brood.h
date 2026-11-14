@@ -760,6 +760,13 @@ public:
         runOp(LoopOp::Undo);
     }
     bool overdubLatched() const { return dubLatched; }
+    // True once after a take arrived and fitted the window (see fitWindow), with TAPE's
+    // LENGTH moved too when `lengthToo`.
+    bool takeFitted(bool& lengthToo) {
+        if (!fitted) return false;
+        fitted = false; lengthToo = p.loopMode == 1;
+        return true;
+    }
 
     // Explicit freeze for MIDI CC; footswitch gestures remain momentary/latching.
     void setFreeze(bool active) { freeze = active && wetOn; }
@@ -977,8 +984,15 @@ public:
     // Ticks written since the buffer was made: what is new since a reader last looked.
     int64_t histWritten() const { return histTotal; }
     int histWritePos() const { return histW; }
-    // The most a tap keeps, in ticks: the strip's window.
-    int memoryTicks() const { return maxCaptureSamples(); }
+    // The strip's window, in ticks. In CAPTURE, the most a tap keeps. In RECORD, the chosen
+    // bars, so the whole take fits as it records; with FREE, 8 s, widening as the take grows.
+    int memoryTicks() const {
+        if (p.recMode != 1) return maxCaptureSamples();
+        const double clock = clockHz(e.clock, p.smooth);
+        double want = p.recBars > 0 ? p.recBars * std::max(0.25, p.barQuarters) * 60.0 / std::max(5.0, p.bpm) * clock : 8.0 * clock;
+        if (p.recBars == 0) want = std::max(want, takeSoFar() + clock);
+        return static_cast<int>(std::min<double>(maxCaptureSamples(), std::max(64.0, want)));
+    }
     // Ticks kept so far by a RECORD take, or by a CAPTURE hold; -1 when nothing is.
     int takeSoFar() const {
         auto since = [&](int idx, uint32_t cycle) {
@@ -1059,6 +1073,7 @@ private:
     LoopOp pendingOp = LoopOp::None;   // waiting for the loop to fade out
     bool resumeAfterOp = false;
     bool dubLatched = false, latchSeen = false;
+    bool fitted = false;
     int64_t histTotal = 0;
     int histW = 0, histCount = 0, lsrc = 0;
     uint32_t histCycles = 0;
@@ -1177,12 +1192,15 @@ private:
         return c;
     }
 
-    // How much history a capture may use, in core samples. MEMORY 0 keeps the
-    // pedal's clock-derived capacity; above that it is 1–30 s of real time.
+    // How much history a take may use, in core samples. In CAPTURE it's MEMORY: 0 keeps the
+    // pedal's clock-derived capacity, above that 1–30 s of real time. RECORD ignores MEMORY:
+    // the bars, or the second tap, decide, up to all the buffer holds (32 s).
     int maxCaptureSamples() const {
         const double clock = clockHz(e.clock, p.smooth);
+        const double most = std::min<double>(kMaxLoopSamples - 1, kMaxLoopSeconds * clock);
+        if (p.recMode == 1) return static_cast<int>(std::max(64.0, most));
         const double user = p.memory > 0.001 ? expMap(clampd(p.memory, 0, 1), 1, 30) * clock : kLoopSamples;
-        return static_cast<int>(std::min<double>(kMaxLoopSamples - 1, std::max(64.0, std::min(user, kMaxLoopSeconds * clock))));
+        return static_cast<int>(std::max(64.0, std::min(user, most)));
     }
 
     // RECORD: from here, for the chosen bars (from the next bar line, when `atBar`).
@@ -1209,7 +1227,10 @@ private:
         if (op == LoopOp::Clear) { doClear(); return; }
         std::swap(loopBuf, undoBuf); std::swap(lsrc, undoLen);
         undoRedo = !undoRedo;
-        if (undoKind != UndoKind::Dub) { loopPos = 0; grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1}; }
+        if (undoKind != UndoKind::Dub) {
+            loopPos = 0; grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
+            if (lsrc >= 64) fitWindow();   // another take: it plays all of itself, as a new one does
+        }
         loopWaveDirty = true;
     }
     // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
@@ -1245,6 +1266,17 @@ private:
         grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
         loopState = LoopState::Play;
         loopWaveDirty = true;
+        fitWindow();
+    }
+
+    // A new take plays all of itself: END at the end, START out of the way and, in TAPE,
+    // LENGTH full, so 2 bars recorded is 2 bars heard. The core sets its own copy at once,
+    // so not one tick plays the old window; takeFitted() tells the host to move its knobs.
+    void fitWindow() {
+        p.loopEnd = 1; p.start = 1;
+        if (p.loopMode == 1) { p.length = 1; s.length = 1; }
+        lengthSlew = -1; startLen = -1;   // the window starts afresh, not gliding from the old one
+        fitted = true;
     }
 
     // Playback region of the captured loop. LENGTH decides how big the window is

@@ -191,12 +191,13 @@ int main() {
         juce::TemporaryFile folderFile;
         const auto folder = folderFile.getFile();
         kit::bench::folderForTests = folder;
-        CHECK(!kit::bench::latest("I-01").has_value(), "an empty bench");
+        CHECK(!kit::bench::latest().has_value(), "an empty bench");
         CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", "BROOD"), "send");
-        CHECK(!kit::bench::latest("E-01").has_value(), "your own moment isn't offered back to you");
-        const auto got = kit::bench::latest("I-01");
+        // Offered back to who sent it too: TAKE after SEND resamples, and another Brood can take it.
+        const auto got = kit::bench::latest();
         CHECK(got.has_value() && got->fromChip == "E-01" && got->audio.existsAsFile()
               && std::fabs(got->seconds - moment.getNumSamples() / momentRate) < 1e-3, "the note matches the audio");
+        CHECK(got.has_value() && catcher.takeMoment(got->audio), "and the Brood that sent it can take it back");
         juce::Thread::sleep(1100);   // files are named to the second
         CHECK(kit::bench::send(moment, momentRate, "E-01", "BROOD", "BROOD"), "send again");
         CHECK(folder.findChildFiles(juce::File::findFiles, false, "*.wav").size() == 2, "everything sent stays, for the Finder");
@@ -220,7 +221,7 @@ int main() {
         for (int n = 0; n < fromSilt.getNumSamples(); ++n) for (int c = 0; c < 2; ++c) fromSilt.setSample(c, n, 0.25f * std::sin(static_cast<float>(n) * 0.03f));
         CHECK(kit::bench::send(fromSilt, 44100.0, "I-01", "SILT", "SILT"), "an instrument sends");
         CHECK(siltFolder.findChildFiles(juce::File::findFiles, false, "*.wav").size() == 1, "into its own folder");
-        const auto incoming = kit::bench::latest("E-01");
+        const auto incoming = kit::bench::latest();   // the newest: Silt's
         CHECK(incoming.has_value() && incoming->fromName == "SILT", "and the effect sees it");
         if (incoming.has_value()) {
             const double clock = catcher.ui.clockHz.load();
@@ -508,6 +509,30 @@ int main() {
             for (int k = 0; k < 4; ++k) r.processBlock(rb, m);
             CHECK(r.apvts.getRawParameterValue("clear")->load() < 0.5f && r.ui.lsrc.load() > 64, "a saved CLEAR doesn't clear the reopened take");
         }
+    }
+    {   // A new take fits the window and moves the knobs to match
+        BroodProcessor q;
+        q.setPlayConfigDetails(2, 2, rate, size);
+        q.prepareToPlay(rate, size);
+        auto set = [&](const char* id, float v) { q.apvts.getParameter(id)->setValueNotifyingHost(v); };
+        auto value = [&](const char* id) { return q.apvts.getParameter(id)->getValue(); };
+        auto run = [&](int blocks) {
+            for (int block = 0; block < blocks; ++block) {
+                for (int i = 0; i < size; ++i) { const auto x = static_cast<float>(0.2 * std::sin(0.03 * (block * size + i))); b.setSample(0, i, x); b.setSample(1, i, x); }
+                process(q, b, m);
+            }
+        };
+        set("loopMode", 0.5f);   // TAPE
+        set("length", 0.3f); set("loopEnd", 0.4f); set("start", 0.2f);
+        run(200);
+        set("loopSwitch", 1.f); run(1); set("loopSwitch", 0.f); run(1);
+        CHECK(q.ui.winLen.load() == q.ui.lsrc.load(), "the new take plays all of itself straight away");
+        run(3);
+        CHECK(q.ui.winLen.load() == q.ui.lsrc.load(), "and still does before the knobs have moved");
+        q.settleControls(); run(2);
+        CHECK(value("start") > 0.999f && value("loopEnd") > 0.999f && value("length") > 0.999f, "START, END and LENGTH moved to the whole take");
+        set("loopEnd", 0.5f); run(20);
+        CHECK(q.ui.winLen.load() < q.ui.lsrc.load(), "and END trims it again afterwards");
     }
     return failures ? 1 : 0;
 }

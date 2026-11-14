@@ -541,12 +541,14 @@ test('END trims the end of the loop and never moves where it starts', () => {
   for (const [mode, name] of [[0, 'ENV'], [1, 'TAPE'], [2, 'STRETCH']]) {
     const core = new BroodCore(FS);
     core.setParam('loopMode', mode);
-    core.setParam('length', 0.72);
-    // From the oldest audio in ENV and STRETCH; TAPE keeps its default, the newest. At 1
-    // an ENV window keeps against the end of the take, so trimming it moves its start.
-    core.setParam('start', mode === 1 ? 1 : 0);
     render(core, 3, () => 0.2);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    // A new take opens fully; trim it once caught. From the oldest audio in ENV and
+    // STRETCH; TAPE keeps its default, the newest. At 1 an ENV window keeps against the
+    // end of the take, so trimming it moves its start.
+    core.setParam('length', 0.72);
+    core.setParam('start', mode === 1 ? 1 : 0);
+    render(core, 0.5, () => 0);
     const full = core.state();
     if (mode === 1) assert.ok(full.winStart > 0 && full.winLen < core.lsrc, `${name}: LENGTH sets the window`);
     else assert.ok(full.winStart === 0 && full.winLen === core.lsrc, `${name}: the whole capture plays`);
@@ -584,9 +586,10 @@ test('START moves the loop window inside the take', () => {
   const renderLoop = (mode, length) => {
     const core = new BroodCore(FS);
     core.setParam('loopMode', mode);
-    core.setParam('length', length);
     render(core, 4, () => 0.2);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    core.setParam('length', length);   // a new take sets LENGTH full in TAPE; put it back
+    render(core, 0.5, () => 0);        // and let it settle there
     return core;
   };
   for (const [mode, name] of [[0, 'ENV'], [2, 'STRETCH']]) {
@@ -865,9 +868,10 @@ test('TAPE: deep, fast LENGTH modulation keeps the playhead moving through the w
 
 test('START means the same in every loop mode', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ loopMode: 0, clock: 1, memory: 0.6, length: 0.5, loopEnd: 0.5, start: 0.3, mix: 1, balance: 1, routing: 2 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ loopMode: 0, clock: 1, memory: 0.6, mix: 1, balance: 1, routing: 2 })) core.setParam(k, v);
   render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  for (const [k, v] of Object.entries({ length: 0.5, loopEnd: 0.5, start: 0.3 })) core.setParam(k, v);   // trimmed once caught
   const starts = [];
   for (const m of [0, 1, 2]) { core.setParam('loopMode', m); render(core, 0.5, () => 0); starts.push(core.state().winStart); }
   assert.ok(Math.abs(starts[1] - starts[0]) <= 1 && Math.abs(starts[2] - starts[0]) <= 1, `one place in every mode (${starts})`);
@@ -951,8 +955,16 @@ test('RECORD: the loop switch records what is played after it', () => {
     render(core, 0.5, () => 0);
     tap(core);
     render(core, 3, (t) => 0.3 * Math.sin(2 * Math.PI * (200 + 100 * t) * t));
-    assert.equal(core.state().loop, 'play', 'the ceiling closes the recording');
-    assert.ok(Math.abs(seconds(core) - 2) < 0.02, `at 2 s (${seconds(core).toFixed(3)})`);
+    assert.equal(core.state().loop, 'rec', 'RECORD ignores MEMORY: a 2 s MEMORY does not close it');
+    tap(core);
+    assert.ok(Math.abs(seconds(core) - 3) < 0.02, `the second tap does, at 3 s (${seconds(core).toFixed(3)})`);
+  }
+  {
+    const core = fresh({ memory: 0, recBars: 4, recAtTap: 1, bpm: 120 });
+    render(core, 0.5, () => 0);
+    tap(core);
+    render(core, 8.3, () => 0.2);
+    assert.ok(core.state().loop === 'play' && Math.abs(seconds(core) - 8) < 0.02, `4 bars with MEMORY at PEDAL are 8 s (${seconds(core).toFixed(3)})`);
   }
 });
 
@@ -1718,4 +1730,27 @@ test('OVERDUB latched, CLEAR and UNDO', () => {
     core.undoLoop(); render(core, 0.2, sine);
     assert.equal(core.lsrc, 0, 'nothing to undo: nothing happens');
   }
+});
+
+test('a new take plays all of itself: START and END around it, LENGTH full in TAPE', () => {
+  const sine = (t) => 0.4 * Math.sin(2 * Math.PI * 440 * t);
+  for (const mode of [0, 1, 2]) {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ loopMode: mode, clock: 1, memory: 0.3, length: 0.3, loopEnd: 0.4, start: 0.2 })) core.setParam(k, v);
+    render(core, 2, sine);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    const fit = core.takeFitted();
+    assert.ok(fit && fit.length === (mode === 1), `mode ${mode}: a new take reports the fit`);
+    assert.equal(core.takeFitted(), null, 'once');
+    render(core, 0.02, () => 0);
+    assert.equal(core.state().winLen, core.lsrc, `mode ${mode}: the window is the whole take`);
+    assert.equal(core.state().winStart, 0);
+  }
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ loopMode: 1, recMode: 1, recBars: 2, recAtTap: 1, bpm: 120, clock: 1, memory: 1, length: 0.4, loopEnd: 0.6 })) core.setParam(k, v);
+  render(core, 0.5, sine);
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  render(core, 4.2, sine);
+  const plays = core.state().winLen / core.state().clockHz;
+  assert.ok(Math.abs(plays - 4) < 0.02, `RECORD: 2 bars plays 2 bars (${plays.toFixed(3)} s)`);
 });

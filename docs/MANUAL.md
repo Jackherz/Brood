@@ -22,7 +22,8 @@ The looper is always listening: tap **MICRO-LOOPER** to capture the recent past,
 tap again to stop, or hold while playing to overdub. Holding while listening
 records a new loop for the duration of the hold, up to the buffer capacity.
 The **LOOP TRIM** row under the waveform sets how much past the looper may keep
-(**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour), where the window
+(**MEMORY**, up to 30 s; `PEDAL` is the hardware behaviour; CAPTURE only, so it greys
+out in RECORD), where the window
 stops (**END**) and where it begins (**START**). END is an end marker and START a
 start marker: each moves itself, so the window can be trimmed from either side.
 The waveform dims whatever the trim has left outside. (In the plug-in, START and
@@ -71,8 +72,10 @@ pedal this follows has none. It reads in three tiers:
    the next bar line so the loop lands on the grid; **AT TAP** starts it the moment you
    tap instead. With the host stopped, or in the browser version, it always starts at
    the tap. Bars are counted at the host's tempo and bar length (the last tempo it sent,
-   else 120 bpm, in 4/4), so moving CLOCK while recording doesn't change them. If MEMORY
-   runs out first, the recording ends there and keeps what was played first. With a
+   else 120 bpm, in 4/4), so moving CLOCK while recording doesn't change them. RECORD
+   ignores MEMORY, which is CAPTURE's: the bars, or your second tap, decide the length,
+   up to the 32 s the buffer holds. A recording that reaches 32 s ends there and keeps
+   what was played first. With a
    loop playing, a tap stops it and a hold overdubs, in both modes.
 
    **OVERDUB**, beside the LOOP switch, latches: switched on, it layers into the playing
@@ -105,6 +108,13 @@ while a new one records over it (RECORD recording or waiting for the bar line, o
 CAPTURE hold), and comes back after CLEAR. Otherwise, with a take caught, the strip
 shows the take, so START and END can still be edited, and an overdub redraws as you lay
 it down.
+
+**A new take plays all of itself.** Whenever a take arrives, from CAPTURE or RECORD,
+or when UNDO or REDO brings back a different take, START and END open to the whole take
+and, in TAPE, LENGTH goes to full. So 15 s of MEMORY caught is 15 s heard, and 2 bars
+recorded is 2 bars heard. The knobs move to match, and from there you trim as usual.
+Undoing an overdub layer keeps the same take, so it leaves the window where it was. A
+loop taken from the Bench or dropped in as a file keeps the window as it was.
 
 **START and END are markers on the waveform.** Grab one and drag it, all the way to
 either end of the take in every mode, or drag inside the window to slide it along
@@ -148,7 +158,9 @@ engages a channel.
 
 **The Bench** along the bottom passes a moment between plug-ins, either way: SEND writes
 what the loop is playing to Brood's own folder (`~/Music/Glyph Audio/Brood/` until you choose another), an instrument in the range (Silt) shows it
-and takes it as its sample, and TAKE makes what Silt sent the loop here. FOLDER opens it in
+and takes it as its sample, and TAKE makes the newest moment on the Bench the loop here:
+what Silt sent, what another Brood sent, or what this Brood just sent, so SEND then TAKE
+resamples the output into the loop. FOLDER opens it in
 the Finder, chooses another folder, or picks a category, which is a folder inside it (make a
 Guitar one, and what you send goes there until you change it). Each plug-in has its own
 folder and categories, sending between them works whichever you choose, and everything sent

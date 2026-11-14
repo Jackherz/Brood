@@ -523,11 +523,12 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
 const REC_BARS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
 
 function TrimStrip({ params, onChange, help }) {
-  const hint = 'how much of the recent past the looper may keep';
+  const hint = 'in CAPTURE, how much of the recent past a tap keeps. RECORD ignores it: the bars or your second tap decide, up to 32 s';
+  const record = params.recMode === 1;   // MEMORY is CAPTURE's
   return <div className="trim-strip" role="group" aria-label="Loop trim">
-    <label className="trim-control" {...help('MEMORY', hint)}>
+    <label className={`trim-control ${record ? 'trim-off' : ''}`} {...help('MEMORY', hint)}>
       <span>MEMORY</span>
-      <input type="range" min="0" max="1" step="0.005" value={params.memory} aria-label={`MEMORY: ${hint}`} onChange={(event) => onChange('memory', Number(event.target.value))}/>
+      <input type="range" min="0" max="1" step="0.005" value={params.memory} disabled={record} aria-label={`MEMORY: ${hint}`} onChange={(event) => onChange('memory', Number(event.target.value))}/>
       <b>{memoryText(params.memory)}</b>
     </label>
     <label className="trim-control trim-gain" {...help('LOOP GAIN', 'the loop\u2019s own level.')}>
@@ -765,6 +766,8 @@ function App() {
     engineRef.current = new AudioEngine((message) => {
       if (message.type === 'state') setState(message.st);
       if (message.type === 'wave') setWave(message);
+      // A new take plays all of itself: the knobs follow what the engine has already done.
+      if (message.type === 'fit') setParams((previous) => ({ ...previous, start: 1, loopEnd: 1, ...(message.length ? { length: 1 } : {}) }));
     }, (message) => setNotice(message));
   }
   useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v2', params); }, [params]);

@@ -589,6 +589,7 @@ class BroodCore {
     this.pendingOp = null;                      // 'clear' | 'undo', waiting for the loop to fade out
     this.resumeAfterOp = false;
     this.dubLatched = false; this.latchSeen = false;
+    this.fitted = false;
     this.lsrc = 0;
     this.loopState = 'off';                     // off | play
     this.overdub = false;
@@ -755,6 +756,7 @@ class BroodCore {
       this.grain[0].ph = 0; this.grain[1].ph = 0.5;
       this.grain[0].start = 0; this.grain[1].start = 0;
       this.grain[0].dir = 1; this.grain[1].dir = 1;
+      if (this.lsrc >= 64) this.fitWindow();   // another take: it plays all of itself, as a new one does
     }
     this.events.push('loop-wave');
   }
@@ -775,10 +777,14 @@ class BroodCore {
   // Floored to a whole sample: MEMORY is a real-time ceiling, so its sample count
   // is fractional, and a fractional capture length made histW - n fractional,
   // which read undefined out of the ring and filled the loop buffer with NaN.
+  // In CAPTURE it's MEMORY; RECORD ignores MEMORY: the bars, or the second tap, decide, up to
+  // all the buffer holds (32 s). Mirrors maxCaptureSamples() in native/dsp/brood.h.
   maxCaptureSamples() {
     const clock = clockHz(this.e.clock, this.p.smooth);
+    const most = Math.min(MAX_LOOP_SAMPLES - 1, MAX_LOOP_SECONDS * clock);
+    if (this.p.recMode === 1) return Math.floor(Math.max(64, most));
     const user = this.p.memory > 0.001 ? expMap(clamp(this.p.memory), 1, 30) * clock : LOOP_SAMPLES;
-    return Math.floor(Math.min(MAX_LOOP_SAMPLES - 1, Math.max(64, Math.min(user, MAX_LOOP_SECONDS * clock))));
+    return Math.floor(Math.max(64, Math.min(user, most)));
   }
 
   // RECORD: from here, for the chosen bars (from the next bar line, when `atBar`).
@@ -819,6 +825,24 @@ class BroodCore {
     this.grain[0].dir = 1; this.grain[1].dir = 1;
     this.loopState = 'play';
     this.events.push('loop-wave');
+    this.fitWindow();
+  }
+
+  // A new take plays all of itself: END at the end, START out of the way and, in TAPE,
+  // LENGTH full, so 2 bars recorded is 2 bars heard. The core sets its own copy at once,
+  // so not one tick plays the old window; takeFitted() tells the panel to move its knobs.
+  fitWindow() {
+    this.p.loopEnd = 1; this.p.start = 1;
+    if (this.p.loopMode === 1) { this.p.length = 1; this.s.length = 1; }
+    this.lengthSlew = -1; this.startLen = -1;   // the window starts afresh, not gliding from the old one
+    this.fitted = true;
+  }
+
+  // Once after a take arrived and fitted the window: null, or whether LENGTH moved too.
+  takeFitted() {
+    if (!this.fitted) return null;
+    this.fitted = false;
+    return { length: this.p.loopMode === 1 };
   }
 
   // Loop region being played. LENGTH decides how big the window is (TAPE takes it
@@ -1503,7 +1527,15 @@ class BroodCore {
   liveColumns() { return this.liveCols; }
   histWritten() { return this.histTotal; }
   histWritePos() { return this.histW; }
-  memoryTicks() { return this.maxCaptureSamples(); }
+  // The strip's window: in CAPTURE the most a tap keeps; in RECORD the chosen bars, or with
+  // FREE 8 s, widening as the take grows.
+  memoryTicks() {
+    if (this.p.recMode !== 1) return this.maxCaptureSamples();
+    const p = this.p, clock = clockHz(this.e.clock, p.smooth);
+    let want = p.recBars > 0 ? p.recBars * Math.max(0.25, p.barQuarters) * 60 / Math.max(5, p.bpm) * clock : 8 * clock;
+    if (p.recBars === 0) want = Math.max(want, this.takeSoFar() + clock);
+    return Math.floor(Math.min(this.maxCaptureSamples(), Math.max(64, want)));
+  }
   // Ticks kept so far by a RECORD take, or by a CAPTURE hold; -1 when nothing is.
   takeSoFar() {
     const since = (idx, cycle) => Math.min(this.maxCaptureSamples(), Math.max(0, (this.histCycles - cycle) * this.hist.length + this.histW - idx));
@@ -1570,6 +1602,10 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       // OVERDUB on with nothing to layer into (or the loop stopped under it): set it back to
       // off, as the plug-in does, so the next press is a fresh switch-on.
       for (const core of [this.left, this.right]) if (core.p.overdubLatch && !core.dubLatched) core.p.overdubLatch = 0;
+      // A new take fitted the window: tell the panel, so its START, END (and LENGTH in TAPE) follow.
+      const fit = this.left.takeFitted();
+      this.right.takeFitted();
+      if (fit) this.port.postMessage({ type: 'fit', length: fit.length });
       this.sinceState += outL.length;
       if (this.sinceState >= sampleRate / 30) {
         this.sinceState = 0;

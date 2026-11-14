@@ -1,5 +1,5 @@
-# RECORD at the MEMORY ceiling: a 2 s ceiling closes a longer recording and keeps the
-# first two seconds.
+# RECORD ignores MEMORY: with MEMORY at 2 s, a recording runs on past it and the second tap
+# ends it at 3 s. (MEMORY is CAPTURE's; RECORD's ceiling is the 32 s the buffer holds.)
 rate 48000
 seconds 8
 0 param mix 1
@@ -10,3 +10,5 @@ seconds 8
 0 param recMode 1
 150 fs loop down
 154 fs loop up
+1279 fs loop down
+1283 fs loop up

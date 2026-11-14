@@ -125,6 +125,11 @@ private:
     // couldn't latch (no loop playing) or the loop stopped under it.
     bool lastClear_ = false, lastUndo_ = false;
     std::atomic<bool> resetClear_ { false }, resetUndo_ { false }, resetOverdub_ { false };
+    // A new take fits the window; the message thread moves START, END (and LENGTH in TAPE)
+    // to match, and until then pullParams keeps the cores on the fitted values.
+    std::atomic<bool> resetFit_ { false }, fitLength_ { false };
+    bool fitPending_ = false;
+    int fitSamples_ = 0;
     void handleAsyncUpdate() override;
     // A take restored from the state, waiting to be swapped in by the audio thread.
     // (A host that renders offline may be a fresh instance with nothing captured.)

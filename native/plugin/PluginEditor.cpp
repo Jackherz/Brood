@@ -1259,13 +1259,17 @@ void BroodEditor::updateBench() {
         if (sent) momentSent = juce::Time::currentTimeMillis();
     }
     const auto now = juce::Time::getMillisecondCounterHiRes();
-    if (now - benchCheckedAt >= 1000.0) { benchCheckedAt = now; waiting = kit::bench::latest("E-01"); }
+    if (now - benchCheckedAt >= 1000.0) { benchCheckedAt = now; waiting = kit::bench::latest(); }
     const bool fresh = waiting.has_value() && waiting->stamp != momentTaken;
     const int caught = proc.ui.lsrc.load() >= 64 ? 1 : 0;
     const juce::String state = caught == 1 ? juce::String(proc.ui.winLen.load() / proc.ui.clockHz.load(), 2) + " S CAUGHT" : juce::String("LISTENING");
     const auto capture = proc.outputCaptureState();
     const bool bars = benchSource.getSelectedId() > 1;
-    const juce::String fromThere = fresh ? "FROM " + waiting->fromChip + " " + waiting->fromName + " / " + juce::String(waiting->seconds, 2) + " S" : juce::String();
+    // The newest moment may be what this Brood just sent: TAKE brings it back into the loop.
+    const bool ours = fresh && waiting->fromChip == "E-01" && momentSent != 0 && waiting->stamp >= momentSent - 5000;
+    const juce::String fromThere = !fresh ? juce::String()
+                                 : ours ? "SENT " + juce::String(waiting->seconds, 2) + " S. TAKE TO RESAMPLE"
+                                 : "FROM " + waiting->fromChip + " " + waiting->fromName + " / " + juce::String(waiting->seconds, 2) + " S";
     if (capture == Capture::waiting) benchStrip.set(state, "WAITING FOR THE NEXT BAR", "STOP", true, fresh);
     else if (capture == Capture::recording) benchStrip.set(state, "RECORDING " + juce::String(juce::roundToInt(proc.outputCaptureProgress() * 100.f)) + "%", "STOP", true, fresh);
     else benchStrip.set(state, fresh ? fromThere : momentSent != 0 ? "SENT: AN INSTRUMENT CAN TAKE IT" : "NOTHING WAITING", "SEND >", bars || caught == 1, fresh);
@@ -1280,6 +1284,10 @@ void BroodEditor::updateModeControls() {
     if (wm == lastModeWet && lm == lastModeLoop && pre == lastPre && worn == lastWorn && record == lastRec) return;
     lastModeWet = wm; lastModeLoop = lm; lastPre = pre; lastWorn = worn; lastRec = record;
     recBars->setVisible(record == 1);   // bars and the bar line are RECORD's alone
+    // MEMORY is CAPTURE's: RECORD's length is the bars, or the second tap, up to 32 s.
+    memory.setEnabled(record == 0);
+    memory.setAlpha(record == 0 ? 1.f : 0.35f);
+    repaintDesign(loopArea);
     recAtTap.setVisible(record == 1);
     wearPost.setVisible(worn == 1);   // only WORN has anything to keep out of the loop
     // With the wet side before the loop it hears only the input, so ROUTING stands aside.
@@ -1532,7 +1540,7 @@ void BroodEditor::rebuildHoverHelp() {
     for (int i = 0; i < 5; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
     add(wetPreDesign, "WET POSITION", "pre-loop: the wet side goes into the loop, so catches and overdubs keep it and SEND carries it. post-loop: the loop stays clean and the wet side plays over it.");
 
-    add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "how much of the recent past is kept. hard left is the pedal's own buffer, which shrinks as CLOCK drops.");
+    add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal's own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.");
     add(gainDesign, "LOOP GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
     add(loopViewDesign, "THE WINDOW", "drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.");
     add(recModeDesign, "LOOP SWITCH", "capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.");
@@ -1627,7 +1635,13 @@ void BroodEditor::paint(juce::Graphics& g) {
         g.setColour(kInk); g.setFont(labelFont());
         g.drawText(text, slider.getX() - labelW, slider.getY(), labelW - kSp1, slider.getHeight(), juce::Justification::centredLeft);
     };
-    rowLabel("MEMORY", memoryDesign, 74);
+    const bool recordMode = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f;
+    {   // greyed in RECORD, with its slider: MEMORY is CAPTURE's
+        juce::Graphics::ScopedSaveState faded(g);
+        if (recordMode) g.beginTransparencyLayer(0.35f);
+        rowLabel("MEMORY", memoryDesign, 74);
+        if (recordMode) g.endTransparencyLayer();
+    }
     rowLabel("WET/LOOP", balanceDesign, 74);
     rowLabel("LEVEL", inputGainDesign, 44);
     // RATE sits inside the rate cell, so it costs no extra row. With SYNC on it is
@@ -1649,7 +1663,9 @@ void BroodEditor::paint(juce::Graphics& g) {
         else txt = juce::String(brood::expMap(v->load(), 1, 30), 1) + "s";
         g.drawText(txt, r.withX(r.getRight() + kSp1).withWidth(40), juce::Justification::centredRight);
     };
+    if (recordMode) g.setColour(kMuted.withMultipliedAlpha(0.35f));
     figure("memory", memoryDesign, false);
+    g.setColour(kMuted);
     // Loop side, %: where the sound has it now, in ink, while a source is moving it.
     if ((routeMaskSeen & balanceRouteBits) != 0 && routeMaskSeen != -1) {
         g.setColour(kInk);

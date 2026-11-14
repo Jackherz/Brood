@@ -409,6 +409,15 @@ void BroodProcessor::pullParams() {
     p.recAtTap = param("recAtTap") > 0.5f;
     p.barQuarters = hostBarQuarters_.load();
     p.hostPlaying = hostPlaying_; p.ppq = hostPpq_; p.barStartPpq = hostBarStart_;
+    // A new take fitted the window (START, END, and LENGTH in TAPE, to the whole take). Until
+    // the message thread has moved those knobs, keep the cores on the fitted values, or the
+    // old knob positions would trim the new take for a block or two.
+    if (fitPending_) {
+        const bool moved = p.start >= 0.999 && p.loopEnd >= 0.999 && (!fitLength_ || p.length >= 0.999);
+        // Half a second at most: automation holding a knob elsewhere wins after that.
+        if (moved || (fitSamples_ += getBlockSize()) > static_cast<int>(getSampleRate() * 0.5)) fitPending_ = false;
+        else { p.start = 1; p.loopEnd = 1; if (fitLength_) p.length = 1; }
+    }
     coreRight_.p = p;
 }
 
@@ -455,6 +464,15 @@ void BroodProcessor::handleAsyncUpdate() {
     off("clear", resetClear_);
     off("undo", resetUndo_);
     off("overdub", resetOverdub_);
+    // A new take: START and END around all of it, and LENGTH full in TAPE.
+    if (resetFit_.exchange(false)) {
+        juce::StringArray ids { "start", "loopEnd" };
+        if (fitLength_.load()) ids.add("length");
+        for (const auto& id : ids)
+            if (auto* prm = apvts.getParameter(id); prm != nullptr && prm->getValue() < 0.999f) {
+                prm->beginChangeGesture(); prm->setValueNotifyingHost(1.f); prm->endChangeGesture();
+            }
+    }
 }
 
 bool BroodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
@@ -658,11 +676,16 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         }
     }
     publishLive();
+    {
+        bool lengthLeft = false, lengthRight = false;
+        const bool fitLeft = core_.takeFitted(lengthLeft), fitRight = coreRight_.takeFitted(lengthRight);
+        if (fitLeft || fitRight) { fitLength_ = lengthLeft || lengthRight; fitPending_ = true; fitSamples_ = 0; resetFit_ = true; }
+    }
     ui.canOverdub = st.canOverdub; ui.dubLatched = st.dubLatched; ui.undoKind = st.undoKind; ui.undoRedo = st.undoRedo;
     // OVERDUB on as the core saw it, but not latched: no loop to layer into, or the loop
     // stopped. Set it back so a controller shows the truth.
     if (core_.p.overdubLatch && !core_.overdubLatched()) resetOverdub_ = true;
-    if (resetClear_.load() || resetUndo_.load() || resetOverdub_.load()) triggerAsyncUpdate();
+    if (resetClear_.load() || resetUndo_.load() || resetOverdub_.load() || resetFit_.load()) triggerAsyncUpdate();
     const double secs = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
     ui.load = static_cast<float>(100.0 * secs / (n / getSampleRate()));
 }

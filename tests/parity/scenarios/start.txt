@@ -6,17 +6,18 @@
 # plays as it always has.
 rate 48000
 seconds 18
-0 param start 0
 0 param wetMode 0
 0 param clock 1
 0 param memory 0.6
 0 param mix 1
 0 param routing 0
 0 param loopMode 0
-0 param length 0.6
-0 param loopEnd 0.5
 200 fs loop down
 240 fs loop up
+# A new take plays all of itself; the window is trimmed once it's caught.
+250 param start 0
+250 param length 0.6
+250 param loopEnd 0.5
 500 param start 0.25
 650 param start 0.5
 800 param start 0.75

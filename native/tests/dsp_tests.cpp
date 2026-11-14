@@ -140,8 +140,10 @@ int main() {
         for (int mode = 0; mode < 3; ++mode) {
             // START at the oldest audio: at 1 (the newest) the window keeps against the end
             // of the take, so trimming it moves where it starts by design.
-            brood::Core c; c.p.loopMode = mode; c.p.length = 0.72; c.p.start = 0; c.prepare(FS); tap(c, 1);
+            brood::Core c; c.p.loopMode = mode; c.prepare(FS); tap(c, 1);
             render(c, 3, tone(330, 10), [&](brood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
+            c.p.length = 0.72; c.p.start = 0;   // a new take opens fully; trim it once caught
+            render(c, 0.5, [](double) { return 0.0; });
             const auto full = c.state();
             c.p.loopEnd = 0.5;
             const auto half = c.state();
@@ -197,9 +199,10 @@ int main() {
     }
     {   // END moves the end marker and nothing else: START stays where it was put
         for (int mode = 0; mode < 3; ++mode) {
-            brood::Core c; c.p.loopMode = mode; c.p.start = 0.15; c.p.memory = 0; c.p.clock = 1;
+            brood::Core c; c.p.loopMode = mode; c.p.memory = 0; c.p.clock = 1;
             c.prepare(FS); tap(c, 0);
             render(c, 1.2, tone(220, 5), [&](brood::Core& cc, long b) { if (b == blk(1.0)) tap(cc, 1); });
+            c.p.start = 0.15;   // set once caught: a new take opens the window fully
             c.p.loopEnd = 0.7;
             const int startFull = c.state().winStart, lenFull = c.state().winLen;
             c.p.loopEnd = 0.5;
@@ -721,6 +724,8 @@ int main() {
             c.p.loopEnd = 1;
             render(c, 4, [](double) { return 0.2; });
             tap(c, 1);
+            c.p.length = length;   // a new take sets LENGTH full in TAPE; put it back
+            render(c, 0.5, [](double) { return 0.0; });   // and let it settle there
             return c;
         };
         for (int mode : {0, 2}) {
@@ -847,10 +852,11 @@ int main() {
         CHECK(rms(o.L, 0, 1) > 0.1, "and the loop keeps sounding (%.3f)", rms(o.L, 0, 1));
     }
     {   // START means the same in every loop mode: the window starts at the same place in the take
-        brood::Core c; c.p.loopMode = 0; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.5; c.p.loopEnd = 0.5; c.p.start = 0.3;
+        brood::Core c; c.p.loopMode = 0; c.p.clock = 1; c.p.memory = 0.6;
         c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.prepare(FS);
         render(c, 4, tone(220, 10));
         tap(c, 1);
+        c.p.length = 0.5; c.p.loopEnd = 0.5; c.p.start = 0.3;   // trimmed once caught
         int starts[3];
         for (int m = 0; m < 3; ++m) { c.p.loopMode = m; render(c, 0.5, [](double) { return 0.0; }); starts[m] = c.state().winStart; }
         CHECK(std::abs(starts[1] - starts[0]) <= 1 && std::abs(starts[2] - starts[0]) <= 1, "START lands in one place in ENV, TAPE and STRETCH (%d, %d, %d)", starts[0], starts[1], starts[2]);
@@ -937,13 +943,28 @@ int main() {
             tap(d, 1); tap(d, 1);
             CHECK(!d.state().recArmed && d.state().loop == brood::LoopLed::Off, "RECORD: a second tap while waiting stands it down");
         }
-        {   // the MEMORY ceiling closes it, keeping what was played first
-            brood::Core c = fresh(); c.p.memory = std::log(2.0) / std::log(30.0);   // a 2 s ceiling
+        {   // RECORD ignores MEMORY: a 2 s MEMORY doesn't stop a 3 s recording, the second tap does
+            brood::Core c = fresh(); c.p.memory = std::log(2.0) / std::log(30.0);   // MEMORY 2 s
             render(c, 0.5, [](double) { return 0.0; });
             tap(c, 1);
             render(c, 3, [](double t) { return 0.3 * std::sin(2 * brood::kPi * (200 + 100 * t) * t); });
-            CHECK(c.state().loop == brood::LoopLed::Play, "RECORD: the ceiling closes the recording");
-            CHECK(std::fabs(seconds(c) - 2.0) < 0.02, "RECORD: at 2 s (%.3f)", seconds(c));
+            CHECK(c.state().loop == brood::LoopLed::Rec, "RECORD: MEMORY doesn't close it");
+            tap(c, 1);
+            CHECK(std::fabs(seconds(c) - 3.0) < 0.02, "RECORD: the take is all 3 s (%.3f)", seconds(c));
+        }
+        {   // ... and 4 bars at 120 bpm are 8 s whatever MEMORY says
+            brood::Core c = fresh(); c.p.memory = 0; c.p.recBars = 4; c.p.recAtTap = true; c.p.bpm = 120;
+            render(c, 0.5, [](double) { return 0.0; });
+            tap(c, 1);
+            render(c, 8.3, [](double) { return 0.2; });
+            CHECK(c.state().loop == brood::LoopLed::Play && std::fabs(seconds(c) - 8.0) < 0.02, "RECORD: 4 bars with MEMORY at PEDAL are 8 s (%.3f)", seconds(c));
+        }
+        {   // the buffer's 32 s is the ceiling: it closes there, keeping what was played first
+            brood::Core c = fresh();
+            render(c, 0.5, [](double) { return 0.0; });
+            tap(c, 1);
+            render(c, 33, [](double) { return 0.2; });
+            CHECK(c.state().loop == brood::LoopLed::Play && std::fabs(seconds(c) - 32.0) < 0.05, "RECORD: closes at 32 s (%.3f)", seconds(c));
         }
         {   // CAPTURE is as it was: a tap keeps the recent past
             brood::Core c; c.p.clock = 1; c.p.memory = 0.6; c.prepare(FS);
@@ -1100,6 +1121,45 @@ int main() {
             brood::Core c = fresh(); render(c, 0.5, sine);
             c.undoLoop(); render(c, 0.2, sine);
             CHECK(c.capturedLength() == 0 && c.state().undoKind == 0, "UNDO: with nothing to undo, nothing happens");
+        }
+    }
+    {   // A new take plays all of itself: START and END around it, and LENGTH full in TAPE
+        const auto sine = [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); };
+        for (int mode = 0; mode < 3; ++mode) {
+            brood::Core c; c.p.loopMode = mode; c.p.clock = 1; c.p.memory = 0.3; c.prepare(FS);
+            c.p.length = 0.3; c.p.loopEnd = 0.4; c.p.start = 0.2;   // a trimmed window from before
+            render(c, 2, sine);
+            tap(c, 1);
+            bool lengthToo = false;
+            CHECK(c.takeFitted(lengthToo) && lengthToo == (mode == 1), "mode %d: a new take reports the fit (LENGTH %d)", mode, lengthToo);
+            CHECK(!c.takeFitted(lengthToo), "mode %d: once", mode);
+            render(c, 0.02, [](double) { return 0.0; });
+            CHECK(c.state().winLen == c.capturedLength() && c.state().winStart == 0, "mode %d: the window is the whole take at once (%d of %d, from %d)", mode, c.state().winLen, c.capturedLength(), c.state().winStart);
+            CHECK(c.p.loopEnd == 1 && c.p.start == 1 && (mode != 1 || c.p.length == 1), "mode %d: START, END (and LENGTH in TAPE) moved", mode);
+        }
+        {   // RECORD 2 bars at 120 bpm in TAPE: 4 s recorded, 4 s plays
+            brood::Core c; c.p.loopMode = 1; c.p.recMode = 1; c.p.recBars = 2; c.p.recAtTap = true; c.p.bpm = 120;
+            c.p.clock = 1; c.p.memory = 1; c.p.length = 0.4; c.p.loopEnd = 0.6; c.prepare(FS);
+            render(c, 0.5, sine);
+            tap(c, 1);
+            render(c, 4.2, sine);
+            const double plays = c.state().winLen / c.state().clockHz;
+            CHECK(std::fabs(plays - 4.0) < 0.02, "RECORD: 2 bars plays 2 bars (%.3f s)", plays);
+        }
+        {   // UNDO to another take fits it; undoing a layer leaves the window alone
+            brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.3; c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.prepare(FS);
+            bool lengthToo = false;
+            render(c, 2, sine); tap(c, 1); render(c, 0.2, sine); tap(c, 1); render(c, 0.2, sine); tap(c, 1);   // two takes
+            c.takeFitted(lengthToo);
+            c.p.length = 0.5; c.p.loopEnd = 0.5;
+            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(c.takeFitted(lengthToo) && c.p.loopEnd == 1 && c.p.length == 1, "UNDO to the take before fits it");
+            tap(c, 1); render(c, 0.2, sine);   // stopped in CAPTURE, a tap catches a new take
+            c.takeFitted(lengthToo);
+            c.p.loopEnd = 0.5;
+            c.p.overdubLatch = true; render(c, 0.4, sine); c.p.overdubLatch = false; render(c, 0.1, sine);
+            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(!c.takeFitted(lengthToo) && c.p.loopEnd == 0.5, "UNDO of a layer keeps the window");
         }
     }
     {   // TAPE ECHO
