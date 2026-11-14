@@ -1,0 +1,28 @@
+# Every modulation target at the top rate and full depth, square on source 1 and random on
+# source 2, through each wet and loop mode: the cases that used to click (CLOCK, STRETCH's
+# LENGTH, ENV's LENGTH, REVERB's TIME) stay mirrored between the two engines.
+rate 48000
+seconds 12
+0 param mix 0.5
+0 param clock 0.9
+0 param memory 0.3
+0 param mod1Rate 1
+0 param mod2Rate 1
+0 param mod1Wave 0.25
+0 param mod2Wave 0.75
+0 param mod1_clock 1
+0 param mod2_length 1
+0 param mod1_time 1
+0 param mod2_modLoop 0.5
+0 param wetMode 0
+0 param loopMode 2
+10 fs wet down
+14 fs wet up
+300 fs loop down
+304 fs loop up
+1100 param loopMode 0
+1500 param wetMode 1
+1900 param loopMode 1
+2300 param wetMode 2
+2700 param wetMode 3
+3100 param loopMode 2

@@ -128,11 +128,26 @@ class LowPass {
   }
 }
 
-// Butterworth low-pass, 6th order (three biquads) or, for CLASSIC, the 4th order
+// A low-pass state-variable filter (the topology-preserving form): LowPass's response, but
+// built to be retuned while it runs, so a modulated CLOCK doesn't pop. Mirrors brood.h.
+class SvfLowPass {
+  constructor() { this.a1 = 1; this.a2 = 0; this.a3 = 0; this.ic1 = 0; this.ic2 = 0; }
+  set(fc, fs, q) {
+    const g = Math.tan(Math.PI * clamp(fc, 10, fs * 0.49) / fs), k = 1 / q;
+    this.a1 = 1 / (1 + g * (g + k)); this.a2 = g * this.a1; this.a3 = g * this.a2;
+  }
+  run(x) {
+    const v3 = x - this.ic2, v1 = this.a1 * this.ic1 + this.a2 * v3, v2 = this.ic2 + this.a2 * this.ic1 + this.a3 * v3;
+    this.ic1 = 2 * v1 - this.ic1; this.ic2 = 2 * v2 - this.ic2;
+    return v2;
+  }
+}
+
+// Butterworth low-pass, 6th order (three sections) or, for CLASSIC, the 4th order
 // the clock filters used to be. The steeper one keeps far less of the images a
 // low CLOCK leaves above its band; CLASSIC keeps that grit on purpose.
 class LowPassN {
-  constructor() { this.a = new LowPass(); this.b = new LowPass(); this.c = new LowPass(); this.sixth = true; }
+  constructor() { this.a = new SvfLowPass(); this.b = new SvfLowPass(); this.c = new SvfLowPass(); this.sixth = true; }
   set(fc, fs, sixth) {
     this.sixth = sixth;
     if (sixth) { this.a.set(fc, fs, 0.5176); this.b.set(fc, fs, 0.7071); this.c.set(fc, fs, 1.9319); }
@@ -232,10 +247,14 @@ class Reverb {
     this.hold = 0; this.ring = 0;
     this.holdA = 1 - Math.exp(-1 / (WET_HOLD_SEC * fs));
   }
+  // The size moves at a capped speed, so no line's read head runs outside 0.75x to 1.25x
+  // under a fast TIME modulation. Mirrors native/dsp/brood.h.
   setDecay(t60, size) {
     if (Math.abs(t60 - this.t60) < 1e-4 && Math.abs(size - this.size) < 1e-4) return;
-    this.t60 = t60; this.size = size;
-    for (let i = 0; i < 8; i++) this.g[i] = Math.pow(10, (-3 * this.len[i] * size) / (t60 * this.fs));
+    const most = 0.25 / this.len[7];
+    this.size = this.t60 < 0 ? size : this.size + clamp(size - this.size, -most, most);
+    this.t60 = t60;
+    for (let i = 0; i < 8; i++) this.g[i] = Math.pow(10, (-3 * this.len[i] * this.size) / (t60 * this.fs));
   }
   // modify = smear: CCW clear and still, CW washed out (more input diffusion,
   // deeper delay modulation, softer highs)
@@ -770,6 +789,7 @@ class BroodCore {
       this.grain[0].ph = 0; this.grain[1].ph = 0.5;
       this.grain[0].start = 0; this.grain[1].start = 0;
       this.grain[0].dir = 1; this.grain[1].dir = 1;
+    this.grain[0].off = -1; this.grain[1].off = -1;
       if (this.lsrc >= 64) this.fitWindow();   // another take: it plays all of itself, as a new one does
     }
     this.events.push('loop-wave');
@@ -868,6 +888,7 @@ class BroodCore {
     this.grain[0].ph = 0; this.grain[1].ph = 0.5;
     this.grain[0].start = 0; this.grain[1].start = 0;
     this.grain[0].dir = 1; this.grain[1].dir = 1;
+    this.grain[0].off = -1; this.grain[1].off = -1;
     this.loopState = 'play';
     this.events.push('loop-wave');
     this.fitWindow();
@@ -1132,9 +1153,12 @@ class BroodCore {
       y = 0;
       for (let k = 0; k < 2; k++) {
         const g = this.grain[k];
+        // The read head runs on its own count at normal speed (see native/dsp/brood.h).
+        if (!(g.off >= 0)) g.off = g.ph * G;
         g.ph += 1 / Gs;
-        if (g.ph >= 1) { g.ph -= 1; g.start = pos + (this.rand() - 0.5) * 0.2 * G; g.dir = dir; }
-        const p = g.start + g.dir * g.ph * G;
+        g.off += G / Gs;
+        if (g.ph >= 1) { g.ph -= 1; g.start = pos + (this.rand() - 0.5) * 0.2 * G; g.dir = dir; g.off = g.ph * G; }
+        const p = g.start + g.dir * g.off;
         const sw = Math.sin(Math.PI * g.ph);
         y += rd(p) * sw * sw * edgeAt(p);
       }
@@ -1186,7 +1210,7 @@ class BroodCore {
         // Synced, a slice plays at its own length (sliceS) and a new LENGTH takes over at the next
         // slice start; with the host playing, slices land on its grid. Mirrors native/dsp/brood.h.
         const synced = !!this.p.envSync;
-        if (!synced || this.sliceFresh || this.sliceS <= 0) this.sliceS = S;
+        if (this.sliceFresh || this.sliceS <= 0) this.sliceS = S;   // a slice keeps its length (see brood.h)
         const handOff = () => { this.softStart = sl0.start; this.softPh = sl0.ph; this.softOldS = soft ? this.softS : this.sliceS; this.softOldFade = 1; };
         const grid = synced && !!this.p.hostPlaying;
         if (grid) {

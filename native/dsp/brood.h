@@ -237,11 +237,27 @@ struct LowPass {
     }
 };
 
-// Butterworth low-pass, 6th order (three biquads) or, for CLASSIC, the 4th order
+// A low-pass state-variable filter (the topology-preserving form). Its response is LowPass's,
+// but it's built to be retuned while it runs: the clock filters follow CLOCK, and as biquads
+// every retune under a modulated CLOCK was a pop (up to 0.5 at 8 Hz).
+struct SvfLowPass {
+    double a1 = 1, a2 = 0, a3 = 0, ic1 = 0, ic2 = 0;
+    void set(double fc, double fs, double q) {
+        const double g = std::tan(kPi * clampd(fc, 10, fs * 0.49) / fs), k = 1 / q;
+        a1 = 1 / (1 + g * (g + k)); a2 = g * a1; a3 = g * a2;
+    }
+    double run(double x) {
+        const double v3 = x - ic2, v1 = a1 * ic1 + a2 * v3, v2 = ic2 + a2 * ic1 + a3 * v3;
+        ic1 = 2 * v1 - ic1; ic2 = 2 * v2 - ic2;
+        return v2;
+    }
+};
+
+// Butterworth low-pass, 6th order (three sections) or, for CLASSIC, the 4th order
 // the clock filters used to be. The steeper one keeps far less of the images a
 // low CLOCK leaves above its band; CLASSIC keeps that grit on purpose.
 struct LowPassN {
-    LowPass a, b, c;
+    SvfLowPass a, b, c;
     bool sixth = true;
     void set(double fc, double fs, bool sixthOrder) {
         sixth = sixthOrder;
@@ -321,9 +337,14 @@ struct Reverb {
         const int dl[4] = {142, 107, 379, 277};
         for (int i = 0; i < 4; ++i) diff[i].init(static_cast<int>(jsRound(dl[i] * k)), 0.7);
     }
+    // TIME sets the decay and the room's size. The size scales every line's length, so it
+    // moves at a capped speed: no read head runs faster than 1.25x or slower than 0.75x. A fast
+    // TIME modulation used to swing them to two or three times speed and alias.
     void setDecay(double t, double roomSize) {
         if (std::fabs(t - t60) < 1e-4 && std::fabs(roomSize - size) < 1e-4) return;
-        t60 = t; size = roomSize;
+        const double most = 0.25 / len[7];   // the longest line moves a quarter sample a tick at most
+        size = t60 < 0 ? roomSize : size + clampd(roomSize - size, -most, most);
+        t60 = t;
         for (int i = 0; i < 8; ++i) g[i] = static_cast<float>(std::pow(10.0, (-3.0 * len[i] * size) / (t * fs)));
     }
     // modify = smear: CCW clear and still, CW washed out
@@ -1054,7 +1075,8 @@ private:
     enum class RecPhase { Idle, Armed, Recording };
     struct Recording { RecPhase phase = RecPhase::Idle; int histIdx = 0; uint32_t histCycle = 0; int64_t endAt = -1; double barTarget = 0; };
     Recording rec;
-    struct Grain { double ph, start, dir; };
+    // `off`: how far the grain has read, at normal speed; -1 until its first tick.
+    struct Grain { double ph, start, dir; double off = -1; };
     struct Window { int W, start; };
 
     double fs = 48000;
@@ -1507,9 +1529,14 @@ private:
             const double dir = stretchSpeed < 0 ? -1.0 : 1.0;
             y = 0;
             for (auto& g : grain) {
+                // The window runs on LENGTH's size, but the read head runs on its own count at
+                // normal speed. Reading at ph * G made every LENGTH move speed the head up or
+                // slow it down, and a fast LENGTH modulation warbled and aliased.
+                if (g.off < 0) g.off = g.ph * G;
                 g.ph += 1 / Gs;
-                if (g.ph >= 1) { g.ph -= 1; g.start = pos + (rand01() - 0.5) * 0.2 * G; g.dir = dir; }
-                const double q = g.start + g.dir * g.ph * G;
+                g.off += G / Gs;
+                if (g.ph >= 1) { g.ph -= 1; g.start = pos + (rand01() - 0.5) * 0.2 * G; g.dir = dir; g.off = g.ph * G; }
+                const double q = g.start + g.dir * g.off;
                 const double sw = std::sin(kPi * g.ph);
                 y += rd(q) * sw * sw * edgeAt(q);
             }
@@ -1550,11 +1577,12 @@ private:
                 const double S = p.envSync
                     ? std::min(Wd, std::max(64.0, syncSecondsRaw(p.bpm, e.length) * clockRatio * fs))
                     : std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
-                // Synced, a slice plays at its own length (sliceS), and a new LENGTH takes over at the
-                // next slice start, so a slice is never cut short and nothing goes quiet. Unsynced,
-                // the length follows LENGTH as it always has.
+                // A slice plays at its own length (sliceS), and a new LENGTH takes over at the next
+                // slice start, so a slice is never cut short, yanked back up mid-fade, or left
+                // quiet. (It used to follow LENGTH tick by tick, and a fast modulation clicked.)
+                // SOFT off the grid glides its own length instead, below.
                 const bool synced = p.envSync;
-                if (!synced || sliceFresh || sliceS <= 0) sliceS = S;
+                if (sliceFresh || sliceS <= 0) sliceS = S;
                 // The slice sounding now fades out under the next one: 4 ms, or SOFT's 20.
                 auto handOff = [&] { softStart = sliceStart; softPh = slicePh; softOldS = soft ? softS : sliceS; softOldFade = 1; };
                 // With the host playing, slices land on its grid, counted from the song position.

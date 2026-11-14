@@ -1307,6 +1307,38 @@ int main() {
                 CHECK(longest < FS * 0.02, "ENV sync, SOFT %d, LENGTH swept at %.1f Hz: nothing cuts out (longest silence %.0f ms)", soft, rate, longest / FS * 1000);
             }
     }
+    {   // Modulation at the top rate (8 Hz) and full depth doesn't click or alias. The input and loop
+        // are a 220 Hz sine, so anything above 8 kHz in the output is artefact.
+        // target, loop mode, wet mode, shape, and the most it may reach (it used to reach...)
+        struct Case { int target, loop, wet, shape; double most; const char* name; };
+        const Case cases[] = {
+            {4, 1, 0, 3, 0.05, "CLOCK, REVERB/TAPE, random (was 0.31)"},
+            {4, 1, -1, 1, 0.01, "CLOCK, wet off, square (was 0.22)"},
+            {2, 2, -1, 1, 0.002, "LENGTH in STRETCH, square (was 0.25)"},
+            {2, 2, -1, 2, 0.002, "LENGTH in STRETCH, sine (was 0.14)"},
+            {2, 0, -1, 3, 0.002, "LENGTH in ENV, random (was 0.0099)"},
+            {0, 1, 0, 1, 0.002, "TIME in REVERB, square (was 0.0097)"},
+        };
+        for (const auto& k : cases) {
+            brood::Core c; c.p.clock = 0.9; c.p.loopMode = k.loop; c.p.wetMode = std::max(0, k.wet); c.p.memory = 0.3;
+            auto& m = c.p.mods[0]; m.rate = 1; m.wave = brood::rampValueOfIndex(k.shape, brood::kRampWaveCount); m.depth[k.target] = 1;
+            c.p.mods[1].on = false;
+            c.prepare(FS);
+            if (k.wet >= 0) tap(c, 0);
+            const Out o = render(c, 6, [](double t) { return 0.25 * std::sin(2 * brood::kPi * 220 * t); },
+                                 [](brood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
+            // Two high-pass sections at 8 kHz.
+            double z[2][4] = {}, peak = 0;
+            const double w = 2 * brood::kPi * 8000 / FS, cw = std::cos(w), al = std::sin(w) / (2 * 0.7071), a0 = 1 + al;
+            const double b0 = (1 + cw) / 2 / a0, b1 = -(1 + cw) / a0, a1 = -2 * cw / a0, a2 = (1 - al) / a0;
+            for (size_t i = 0; i < o.L.size(); ++i) {
+                double v = o.L[i];
+                for (auto& f : z) { const double y = b0 * v + b1 * f[0] + b0 * f[1] - a1 * f[2] - a2 * f[3]; f[1] = f[0]; f[0] = v; f[3] = f[2]; f[2] = y; v = y; }
+                if (i >= static_cast<size_t>(3 * FS)) peak = std::max(peak, std::fabs(v));
+            }
+            CHECK(peak < k.most, "fast modulation: %s, artefacts above 8 kHz peak at %.4f (most %.4f)", k.name, peak, k.most);
+        }
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };
