@@ -1,0 +1,22 @@
+# ENV synced with the host playing: slices land on the host's grid. A loop is caught,
+# then LENGTH steps through divisions off the grid, in plain and SOFT.
+rate 48000
+seconds 10
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param loopMode 0
+0 param envSync 1
+0 param modLoop 1
+0 param memory 0.3
+0 param bpm 120
+0 param hostPlaying 1
+0 param length 0.5
+400 fs loop down
+404 fs loop up
+1013 param length 0.3
+1561 param length 0.7
+2007 param envSoft 1
+2531 param length 0.4
+3100 param hostPlaying 0

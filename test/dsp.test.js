@@ -1786,3 +1786,22 @@ test('transport loops: a take caught while the host plays follows its transport'
   free.setParam('hostPlaying', 0); render(free, 0.3, sine);
   assert.ok(!free.state().follows && free.state().loop === 'play', 'caught with the host stopped, the host never touches it');
 });
+
+test('ENV synced with the host playing: slices land on the host grid', () => {
+  const { syncSecondsRaw } = require('../src/brood-worklet.js');
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ clock: 1, loopMode: 0, envSync: 1, modLoop: 1, memory: 0.3, mix: 1, balance: 1, routing: 2, bpm: 120, hostPlaying: 1, length: 0.5 })) core.setParam(k, v);
+  const S = syncSecondsRaw(120, 0.5), gateAt = 2.537, at = {};
+  const n = Math.ceil(5 * FS / BLOCK);
+  for (let b = 0; b < n; b++) at[b] = (c) => { c.p.ppq = (b * BLOCK) / FS * 2; if (b === blk(2)) { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); } };
+  const { L } = render(core, 5, (t) => (t < 2 ? 0.3 * Math.sin(2 * Math.PI * 1000 * t) : t >= gateAt ? 0.05 * Math.sin(2 * Math.PI * 100 * t) : 0), at);
+  const dips = []; let inDip = false, from = 0;
+  for (let i = Math.floor(gateAt * FS) + 2400; i + 48 < L.length; i += 48) {
+    let pk = 0; for (let k = 0; k < 48; k++) pk = Math.max(pk, Math.abs(L[i + k]));
+    if (pk < 0.12 && !inDip) { inDip = true; from = i; }
+    if (pk >= 0.12 && inDip) { inDip = false; dips.push((from + i) / 2 / FS); }
+  }
+  const off = (t) => { const r = t % S; return Math.min(r, S - r); };
+  assert.ok(dips.length >= 3, `slices repeat (${dips.length})`);
+  assert.ok(dips.every((t) => off(t) < 0.004), `every slice starts on the grid (${dips.map((t) => off(t).toFixed(4))})`);
+});

@@ -298,7 +298,10 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   1/1 — and does the same for WEAVE's reach; it is absent in REVERB and SLIP,
   which have nothing to put on the beat. `SYNC` under LENGTH (in ENV) makes the
   envelope's slice a division of the beat instead of a free length, and appears
-  only in ENV. The modulation panel has its own SYNC for the rate (eight bars to a
+  only in ENV. With the host playing, the slices land on its grid, counted from the
+  song position rather than from when your playing opened the envelope, and a change
+  of LENGTH takes over at the next grid line of the new division. With the host
+  stopped there is no grid, so slices count from when the envelope opens. The modulation panel has its own SYNC for the rate (eight bars to a
   sixteenth). All three are independent: a synced delay can run against a free
   envelope. In the plugin the tempo comes from the DAW's playhead, every block, so
   tempo changes are followed; in the browser you set it on the TEMPO field. The

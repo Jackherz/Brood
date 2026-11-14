@@ -1224,6 +1224,41 @@ int main() {
             CHECK(c.state().follows && c.state().parked, "transport: UNDO brings the transport take back, waiting for play");
         }
     }
+    {   // ENV synced with the host playing: slices land on the host's grid, LENGTH moves included
+        brood::Core c; c.p.clock = 1; c.p.loopMode = 0; c.p.envSync = true; c.p.modLoop = 1; c.p.memory = 0.3;
+        c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true; c.p.length = 0.5;
+        c.prepare(FS);
+        const double S1 = brood::syncSecondsRaw(120, 0.5), S2 = brood::syncSecondsRaw(120, 0.3);
+        const double gateAt = 2.537, changeAt = 4.013;   // the input opens the envelope off the grid; LENGTH moves off it too
+        const Out o = render(c, 6.5, [&](double t) {
+            if (t < 2.0) return 0.3 * std::sin(2 * brood::kPi * 1000 * t);   // what's caught
+            return t >= gateAt ? 0.05 * std::sin(2 * brood::kPi * 100 * t) : 0.0;   // what opens the envelope
+        }, [&](brood::Core& cc, long b) {
+            cc.p.ppq = static_cast<double>(b * B) / FS * 2;   // 120 bpm from bar 1
+            if (b == blk(2.0)) tap(cc, 1);
+            if (b == blk(changeAt)) cc.p.length = 0.3;
+        });
+        // Slice boundaries are dips: the 4 ms fade out and in. Find each one's centre.
+        std::vector<double> dips;
+        const int W1 = 48;   // 1 ms
+        bool in = false; long from = 0;
+        for (long i = static_cast<long>(gateAt * FS) + 2400; i + W1 < static_cast<long>(o.L.size()); i += W1) {
+            float pk = 0;
+            for (int k = 0; k < W1; ++k) pk = std::max(pk, std::fabs(o.L[static_cast<size_t>(i + k)]));
+            const bool low = pk < 0.12f;
+            if (low && !in) { in = true; from = i; }
+            if (!low && in) { in = false; dips.push_back((from + i) / 2.0 / FS); }
+        }
+        auto offGrid = [](double t, double S) { const double r = std::fmod(t, S); return std::min(r, S - r); };
+        int before = 0, after = 0, wrong = 0;
+        double worst = 0;
+        for (double t : dips) {
+            if (t < changeAt) { ++before; worst = std::max(worst, offGrid(t, S1)); if (offGrid(t, S1) > 0.004) ++wrong; }
+            else if (t > changeAt + S1) { ++after; worst = std::max(worst, offGrid(t, S2)); if (offGrid(t, S2) > 0.004) ++wrong; }
+        }
+        CHECK(before >= 3 && after >= 3, "ENV sync: slices repeat (%d before the LENGTH move, %d after)", before, after);
+        CHECK(wrong == 0, "ENV sync: every slice starts on the host's grid, before and after LENGTH moves (%d off, worst %.4f s)", wrong, worst);
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };
