@@ -17,8 +17,9 @@ calibrated against the hardware. It is not affiliated with or endorsed by Chase 
   echo, where turning TIME bends the echoes' pitch.
 - **Always listening, or recording.** In CAPTURE, tap the looper to catch the last few
   seconds. In RECORD, tap to record what you play and tap again to loop it, or record a
-  set number of bars that lands on the host's bar lines. Hold to overdub. Keep up to
-  30 s, and trim the take with START and END markers on the waveform.
+  set number of bars that lands on the host's bar lines. Hold to overdub, or latch
+  OVERDUB on. CLEAR empties the take, and UNDO steps back once (press it again to redo).
+  Keep up to 30 s, and trim the take with START and END markers on the waveform.
 - **Routing:** the wet side hears the input, the loop, or both, and runs before or after
   the looper. FREEZE holds the wet side ringing on its own.
 - **Two modulation sources** with their own rate and shape, routed by dragging onto any

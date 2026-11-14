@@ -464,5 +464,50 @@ int main() {
         }
     }
     std::printf(failures ? "%d processor failure(s)\n" : "all processor integration tests passed\n", failures);
+    {   // OVERDUB, CLEAR and UNDO as host parameters
+        BroodProcessor q;
+        q.setPlayConfigDetails(2, 2, rate, size);
+        q.prepareToPlay(rate, size);
+        auto run = [&](int blocks) {
+            for (int block = 0; block < blocks; ++block) {
+                for (int i = 0; i < size; ++i) { const auto x = static_cast<float>(0.2 * std::sin(0.03 * (block * size + i))); b.setSample(0, i, x); b.setSample(1, i, x); }
+                process(q, b, m);
+            }
+        };
+        auto set = [&](const char* id, float v) { q.apvts.getParameter(id)->setValueNotifyingHost(v); };
+        auto value = [&](const char* id) { return q.apvts.getRawParameterValue(id)->load(); };
+        run(200);
+        set("overdub", 1.f); run(2); q.settleControls();
+        CHECK(value("overdub") < 0.5f && !q.ui.canOverdub.load(), "OVERDUB with no loop is set back to off");
+        set("loopSwitch", 1.f); run(2); set("loopSwitch", 0.f); run(50);
+        CHECK(q.ui.canOverdub.load(), "OVERDUB can switch on once a loop plays");
+        set("overdub", 1.f); run(50); q.settleControls();
+        CHECK(value("overdub") > 0.5f && q.ui.dubLatched.load(), "OVERDUB stays on while it layers");
+        set("loopSwitch", 1.f); run(2); set("loopSwitch", 0.f); run(2); q.settleControls();
+        CHECK(value("overdub") < 0.5f, "OVERDUB is set back to off when the loop stops");
+        set("clear", 1.f); run(100); q.settleControls();
+        CHECK(value("clear") < 0.5f, "CLEAR sets itself back to off");
+        CHECK(q.ui.lsrc.load() == 0 && q.ui.undoKind.load() == 2, "CLEAR empties the take");
+        {
+            juce::MemoryBlock saved; q.getStateInformation(saved);
+            BroodProcessor r; r.setPlayConfigDetails(2, 2, rate, size); r.prepareToPlay(rate, size);
+            r.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+            juce::AudioBuffer<float> rb(2, size); rb.clear(); r.processBlock(rb, m);
+            CHECK(r.ui.lsrc.load() == 0, "a cleared take isn't saved");
+        }
+        set("undo", 1.f); run(5); q.settleControls();
+        CHECK(value("undo") < 0.5f, "UNDO sets itself back to off");
+        CHECK(q.ui.lsrc.load() > 64 && q.ui.undoRedo.load(), "UNDO brings the cleared take back");
+        {   // a set saved in the moment CLEAR was on mustn't clear its own take when it opens
+            set("clear", 1.f);
+            juce::MemoryBlock saved; q.getStateInformation(saved);
+            set("clear", 0.f);
+            BroodProcessor r; r.setPlayConfigDetails(2, 2, rate, size); r.prepareToPlay(rate, size);
+            r.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+            juce::AudioBuffer<float> rb(2, size); rb.clear();
+            for (int k = 0; k < 4; ++k) r.processBlock(rb, m);
+            CHECK(r.apvts.getRawParameterValue("clear")->load() < 0.5f && r.ui.lsrc.load() > 64, "a saved CLEAR doesn't clear the reopened take");
+        }
+    }
     return failures ? 1 : 0;
 }

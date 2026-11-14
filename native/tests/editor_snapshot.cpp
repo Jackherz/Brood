@@ -5,7 +5,8 @@
 // its markers have something to show. The others show the strip mid-gesture:
 // "listen" plays the demo with nothing caught, "record" taps the loop switch and keeps
 // playing (pass recMode=1 for RECORD), "hold" holds it down in CAPTURE, and "dub" catches a
-// loop then holds the switch to overdub.
+// loop then holds the switch to overdub. "rerecord" (with recMode=1) records a take, stops it,
+// and starts recording a second over it.
 #include "plugin/PluginProcessor.h"
 #include <cstdio>
 
@@ -19,7 +20,7 @@ int main(int argc, char** argv) {
     juce::String scene;
     for (int i = 2; i < argc; ++i) {
         const juce::String arg(argv[i]);
-        if (juce::StringArray{"loop", "listen", "record", "hold", "dub"}.contains(arg)) { scene = arg; continue; }
+        if (juce::StringArray{"loop", "listen", "record", "hold", "dub", "rerecord"}.contains(arg)) { scene = arg; continue; }
         if (!arg.containsChar('=')) { scale = arg.getFloatValue(); continue; }
         if (auto* p = proc.apvts.getParameter(arg.upToFirstOccurrenceOf("=", false, false)))
             p->setValueNotifyingHost(arg.fromFirstOccurrenceOf("=", false, false).getFloatValue());
@@ -35,6 +36,7 @@ int main(int argc, char** argv) {
         if (scene == "loop" || scene == "dub") { tapLoop(); run(0.5); }
         if (scene == "record") { tapLoop(); run(0.9); }
         if (scene == "hold" || scene == "dub") { sw->setValueNotifyingHost(1.f); run(1.2); }
+        if (scene == "rerecord") { tapLoop(); run(0.6); tapLoop(); run(0.3); tapLoop(); run(0.3); tapLoop(); run(0.5); }
     }
     std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
     editor->setSize(juce::roundToInt(editor->getWidth() * scale), juce::roundToInt(editor->getHeight() * scale));

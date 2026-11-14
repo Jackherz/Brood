@@ -690,6 +690,23 @@ function PresetBrowser({ patches, current, favourites, onChoose, onStar, onKeep,
   </div>;
 }
 
+// OVERDUB (latching, only over a playing loop), CLEAR and UNDO, under the LOOP switch.
+function TakeKeys({ state, running, engine, help }) {
+  const can = running && !!state;
+  const latched = !!state?.dubLatched;
+  const canDub = can && (state.canOverdub || latched);
+  const canClear = can && (state.lsrc > 0 || state.loop === 'rec' || state.recArmed);
+  const canUndo = can && state.undoKind > 0 && state.loop !== 'rec' && !state.recArmed;
+  return <div className="take-keys">
+    <button type="button" className={`take-key ${latched ? 'on' : ''}`} aria-pressed={latched} disabled={!canDub} onClick={() => engine?.overdub(!latched)}
+      {...help('OVERDUB', 'latches: layers into the playing loop until you switch it off. needs a loop playing.')}>OVERDUB</button>
+    <button type="button" className="take-key" disabled={!canClear} onClick={() => engine?.clearLoop()}
+      {...help('CLEAR', 'empties the take. undo brings it back.')}>CLEAR</button>
+    <button type="button" className="take-key" disabled={!canUndo} onClick={() => engine?.undoLoop()}
+      {...help('UNDO', 'one step back: a clear, a new take, or the last overdub layer. press again to redo.')}>{state?.undoRedo ? 'REDO' : 'UNDO'}</button>
+  </div>;
+}
+
 function Dip({ label, checked, onClick, help }) {
   return <button type="button" className="dip" role="switch" aria-checked={!!checked} aria-label={label} onClick={onClick} {...(help || {})}>
     <span className={`dip-track ${checked ? 'on' : ''}`}><span /></span><span>{label}</span>
@@ -911,6 +928,7 @@ function App() {
                 <Knob id="modLoop" title="MODIFY" sub={WHISPERS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch} modSource={modSource}/>
               </div>
               <Footswitch kind="loop" active={loopActive} state={loopStatus} running={running} onGesture={gesture}/>
+              <TakeKeys state={state} running={running} engine={engineRef.current} help={help}/>
             </div>
           </div>
           <div className="capture-strip">

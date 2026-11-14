@@ -1,5 +1,6 @@
 // Scenario format shared by the JS and C++ renderers (see native/tests/render.cpp).
 //   rate <Hz> | seconds <s> | <block> param <name> <value> | <block> fs <wet|loop> <down|up>
+//   | <block> op <clear|undo>
 'use strict';
 const BLOCK = 128;
 
@@ -13,7 +14,9 @@ function parse(text) {
     else if (t[0] === 'seconds') sc.seconds = Number(t[1]);
     else {
       const b = Number(t[0]);
-      const ev = t[1] === 'param' ? { kind: 'param', name: t[2], value: Number(t[3]) } : { kind: 'fs', which: t[2], action: t[3] };
+      const ev = t[1] === 'param' ? { kind: 'param', name: t[2], value: Number(t[3]) }
+        : t[1] === 'op' ? { kind: 'op', op: t[2] }
+        : { kind: 'fs', which: t[2], action: t[3] };
       if (!sc.events.has(b)) sc.events.set(b, []);
       sc.events.get(b).push(ev);
     }

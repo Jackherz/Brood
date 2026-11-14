@@ -1,0 +1,19 @@
+# CLEAR while playing fades out then empties; UNDO brings it back stopped; a tap plays it;
+# UNDO again (redo) clears; UNDO once more brings it back.
+rate 48000
+seconds 10
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param memory 0.4
+300 fs loop down
+304 fs loop up
+700 op clear
+900 op undo
+1000 fs loop down
+1004 fs loop up
+1300 op undo
+1500 op undo
+1600 fs loop down
+1604 fs loop up

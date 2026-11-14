@@ -59,6 +59,12 @@ public:
         int written = 0;
         bool dragging = false;
     };
+    // A key on the take strip's dark heading (CLEAR, UNDO): its word in the strip's pale ink in
+    // a faint outline, lit under the mouse and while pressed.
+    struct StripKey final : juce::Button {
+        explicit StripKey(const juce::String& name) : juce::Button(name) {}
+        void paintButton(juce::Graphics&, bool hover, bool down) override;
+    };
     // The loop's GAIN, beside the waveform as Silt has it: drag up or down, Shift for fine,
     // double-click for 0 dB.
     struct GainBox final : juce::Component {
@@ -255,6 +261,14 @@ private:
     std::unique_ptr<Stepper> recBars;
     juce::ToggleButton recAtTap { "AT TAP" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> recAtTapAtt;
+    // OVERDUB beside the LOOP switch: latching, greyed out with no loop playing. CLEAR and UNDO
+    // on the take strip's heading: each press is a pulse of its host parameter.
+    juce::ToggleButton overdub { "OVERDUB" };
+    StripKey clearTake { "CLEAR" }, undoTake { "UNDO" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> overdubAtt;
+    juce::Rectangle<int> overdubDesign, clearDesign, undoDesign;
+    void pulse(const char* id);
+    void updateTakeControls();
     juce::Rectangle<int> recModeDesign, recBarsDesign, recAtTapDesign;
     int lastRec = -1;
     juce::Rectangle<int> wetPreDesign;

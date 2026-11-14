@@ -111,6 +111,10 @@ export class AudioEngine {
     }
   }
   footswitch(which, action) { this.node?.port.postMessage({ type: 'fs', which, action }); }
+  // OVERDUB latches (it isn't one of the saved settings); CLEAR and UNDO act once.
+  overdub(on) { this.node?.port.postMessage({ type: 'param', name: 'overdubLatch', value: on ? 1 : 0 }); }
+  clearLoop() { this.node?.port.postMessage({ type: 'clear' }); }
+  undoLoop() { this.node?.port.postMessage({ type: 'undo' }); }
   setInputLevel(value) {
     this.inputLevel = value;
     if (this.gain && this.context) this.gain.gain.setTargetAtTime(value, this.context.currentTime, 0.01);

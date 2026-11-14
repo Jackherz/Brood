@@ -74,6 +74,22 @@ pedal this follows has none. It reads in three tiers:
    else 120 bpm, in 4/4), so moving CLOCK while recording doesn't change them. If MEMORY
    runs out first, the recording ends there and keeps what was played first. With a
    loop playing, a tap stops it and a hold overdubs, in both modes.
+
+   **OVERDUB**, beside the LOOP switch, latches: switched on, it layers into the playing
+   loop until you switch it off, so a controller that can't hold a button (Push's knobs
+   and buttons, say) can overdub. It's greyed out unless a loop is playing, and it
+   switches itself off when the loop stops. A hold on LOOP still overdubs while OVERDUB is
+   on, and letting go doesn't end the latched layer. FADE sets how much of the take
+   survives each pass, as for a hold.
+
+   **CLEAR** and **UNDO** sit on the take strip's heading, beside GAIN. CLEAR empties the
+   take; a playing loop fades out first, so it doesn't click. UNDO steps back once: it
+   brings back a cleared take, goes back to the take before a new one (or to nothing, after
+   the first), or takes off the last overdub layer. Press it again to redo; it reads REDO
+   when that's what it will do. Undoing a clear or a take leaves the loop stopped, ready
+   for a tap; undoing a layer keeps a playing loop playing (it dips for a moment while
+   the take is swapped). The undo step isn't saved with your project, so a reopened set
+   starts with nothing to undo, and a cleared take isn't saved at all.
 3. **Under the hood**: the six sliders along the bottom. The last, **NOISE**, sets how much
    of the worn clock's hiss is let through; it only does anything with WEAR on WORN.
 
@@ -84,8 +100,11 @@ wet side too when it's PRE-LOOP, and WEAR's worn sound when WEAR is before the l
 nothing that comes after the looper. In CAPTURE all of it is bright, since a tap keeps
 it. In RECORD it stays dim until you tap. While a recording or a CAPTURE hold runs, a
 START rule marks where the take begins and rides left as it grows, and the heading
-counts the seconds kept. With a loop playing, the strip shows the take, and an overdub
-redraws as you lay it down.
+counts the seconds kept. The same live view takes over from a take you've stopped
+while a new one records over it (RECORD recording or waiting for the bar line, or a
+CAPTURE hold), and comes back after CLEAR. Otherwise, with a take caught, the strip
+shows the take, so START and END can still be edited, and an overdub redraws as you lay
+it down.
 
 **START and END are markers on the waveform.** Grab one and drag it, all the way to
 either end of the take in every mode, or drag inside the window to slide it along
@@ -171,6 +190,9 @@ Tempo sync has no CC in the pedal's map; automate the `sync` parameter, or switc
 it on in the editor. TAPE, CAPTURE / RECORD, BARS and AT TAP have none either: the
 pedal's map has nothing for them, and a spare number could clash with a controller set
 up for the pedal. Automate `tapeDelay`, `recMode`, `recBars` and `recAtTap` instead.
+OVERDUB, CLEAR and UNDO have no CC for the same reason; they're host parameters
+(`overdub`, `clear`, `undo`), so Push and other controllers that map plug-in parameters
+reach them. CLEAR and UNDO act when switched on and set themselves back to off.
 
 What a host or controller shows for each value is kept to 8 characters, a number and its
 unit where there is one (`2.31 s`, `426 ms`, `1/8D`, `16.0 kHz`, `1.00x`, `-6.0 dB`,

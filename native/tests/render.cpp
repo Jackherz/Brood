@@ -9,7 +9,7 @@
 #include <vector>
 #include "dsp/brood.h"
 
-struct Event { bool isParam; std::string a, b; double value; };
+struct Event { bool isParam; std::string a, b; double value; bool isOp = false; };
 
 static void setParam(brood::Params& p, const std::string& n, double v) {
     if (n == "time") p.time = v; else if (n == "mix") p.mix = v; else if (n == "length") p.length = v;
@@ -25,6 +25,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
     else if (n == "tone") p.tone = v; else if (n == "fade") p.fade = v; else if (n == "width") p.width = v;
     else if (n == "wetDiv") p.wetDiv = v; else if (n == "loopDiv") p.loopDiv = v;
     else if (n == "classic") p.classic = v != 0; else if (n == "wearNoise") p.wearNoise = v; else if (n == "wearPost") p.wearPost = v != 0;
+    else if (n == "overdubLatch") p.overdubLatch = v != 0;
     else if (n == "freeze") p.freezeLatch = v;
     else if (n.rfind("mod1", 0) == 0 || n.rfind("mod2", 0) == 0) {
         auto& m = p.mods[n[3] - '1'];
@@ -68,7 +69,7 @@ int main(int argc, char** argv) {
         if (t0 == "rate") { ss >> rate; continue; }
         if (t0 == "seconds") { ss >> seconds; continue; }
         ss >> t1 >> t2 >> t3;
-        events[std::stol(t0)].push_back(Event{t1 == "param", t2, t3, t1 == "param" ? std::stod(t3) : 0.0});
+        events[std::stol(t0)].push_back(Event{t1 == "param", t2, t3, t1 == "param" ? std::stod(t3) : 0.0, t1 == "op"});
     }
     constexpr int B = 128;
     brood::Core core; core.prepare(rate);
@@ -80,6 +81,7 @@ int main(int argc, char** argv) {
         if (it != events.end())
             for (const auto& e : it->second) {
                 if (e.isParam) setParam(core.p, e.a, e.value);
+                else if (e.isOp) { if (e.a == "clear") core.clearLoop(); else if (e.a == "undo") core.undoLoop(); }
                 else core.footswitch(e.a == "wet" ? 0 : 1, e.b == "down");
             }
         // A host transport running from the start at the scenario's tempo, for RECORD's bar line.

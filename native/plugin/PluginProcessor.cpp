@@ -123,6 +123,9 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV Soft", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet Switch", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop Switch", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("overdub", 1), "Overdub", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("clear", 1), "Clear", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("undo", 1), "Undo", false));
           return layout;
       }()) {
     formats_.registerBasicFormats();
@@ -385,6 +388,7 @@ void BroodProcessor::pullParams() {
     p.wearNoise = param("wearNoise");
     p.wearPost = param("wearPost") > 0.5f;
     p.wetPre = param("wetPre") > 0.5f;
+    p.overdubLatch = param("overdub") > 0.5f;
     p.loopDb = param("loopDb");
     p.envSoft = param("envSoft") > 0.5f;
     p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
@@ -441,6 +445,16 @@ void BroodProcessor::publishLive() {
     ui.histPos = pos;
     ui.memTicks = core_.memoryTicks();
     ui.takeSoFar = core_.takeSoFar();
+}
+
+void BroodProcessor::handleAsyncUpdate() {
+    const auto off = [this](const char* id, std::atomic<bool>& flag) {
+        if (!flag.exchange(false)) return;
+        if (auto* prm = apvts.getParameter(id); prm != nullptr && prm->getValue() > 0.5f) prm->setValueNotifyingHost(0.f);
+    };
+    off("clear", resetClear_);
+    off("undo", resetUndo_);
+    off("overdub", resetOverdub_);
 }
 
 bool BroodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
@@ -545,6 +559,12 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     const bool wetSw = param("wetSwitch") > 0.5f, loopSw = param("loopSwitch") > 0.5f;
     if (wetSw != lastWetSw_) { lastWetSw_ = wetSw; core_.footswitch(0, wetSw); coreRight_.footswitch(0, wetSw); }
     if (loopSw != lastLoopSw_) { lastLoopSw_ = loopSw; core_.footswitch(1, loopSw); coreRight_.footswitch(1, loopSw); }
+    const bool clearNow = param("clear") > 0.5f, undoNow = param("undo") > 0.5f;
+    if (clearNow && !lastClear_) { core_.clearLoop(); coreRight_.clearLoop(); }
+    if (undoNow && !lastUndo_) { core_.undoLoop(); coreRight_.undoLoop(); }
+    lastClear_ = clearNow; lastUndo_ = undoNow;
+    if (clearNow) resetClear_ = true;
+    if (undoNow) resetUndo_ = true;
 
     // A well-behaved host does not exceed its promised block size. Grow only if it does.
     const auto needed = static_cast<size_t>(n);
@@ -638,6 +658,11 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         }
     }
     publishLive();
+    ui.canOverdub = st.canOverdub; ui.dubLatched = st.dubLatched; ui.undoKind = st.undoKind; ui.undoRedo = st.undoRedo;
+    // OVERDUB on as the core saw it, but not latched: no loop to layer into, or the loop
+    // stopped. Set it back so a controller shows the truth.
+    if (core_.p.overdubLatch && !core_.overdubLatched()) resetOverdub_ = true;
+    if (resetClear_.load() || resetUndo_.load() || resetOverdub_.load()) triggerAsyncUpdate();
     const double secs = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
     ui.load = static_cast<float>(100.0 * secs / (n / getSampleRate()));
 }
@@ -784,8 +809,9 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
         for (auto takeTree = state.getChildWithName("TAKES"); takeTree.isValid(); takeTree = state.getChildWithName("TAKES"))
             state.removeChild(takeTree, nullptr);
         apvts.replaceState(state);
-        // footswitches are momentary: never restore one as held down
-        for (auto* id : {"wetSwitch", "loopSwitch"})
+        // Footswitches are momentary and OVERDUB, CLEAR and UNDO are gestures: never restore
+        // one as on (a saved CLEAR would clear the take it was saved with).
+        for (auto* id : {"wetSwitch", "loopSwitch", "overdub", "clear", "undo"})
             if (auto* p = apvts.getParameter(id)) p->setValueNotifyingHost(0.f);
     }
 }

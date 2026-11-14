@@ -1644,3 +1644,78 @@ test('the strip\'s live view: peaks of the history as it is written, read only',
     for (let b = 0; b < 400; b++) assert.equal(part[b], b >= 100 && b <= 199 ? whole[b] : -1, `bin ${b}`);
   }
 });
+
+test('OVERDUB latched, CLEAR and UNDO', () => {
+  const sine = (t) => 0.4 * Math.sin(2 * Math.PI * 440 * t);
+  const other = (t) => 0.3 * Math.sin(2 * Math.PI * 660 * t);
+  const silence = () => 0;
+  const fresh = () => {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ clock: 1, memory: 0.3, mix: 1, balance: 1, routing: 2 })) core.setParam(k, v);
+    return core;
+  };
+  const tapLoop = (core) => { core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); };
+  const take = (core) => Array.from(core.loopBuf.subarray(0, core.lsrc));
+  const caught = (core, src) => { render(core, 2, src); tapLoop(core); render(core, 0.3, silence); };
+  {
+    const core = fresh(); caught(core, sine);
+    const before = take(core);
+    core.setParam('overdubLatch', 1); render(core, 0.6, other);
+    assert.equal(core.state().loop, 'dub', 'latched, it layers');
+    core.setParam('overdubLatch', 0); render(core, 0.1, other);
+    assert.equal(core.state().loop, 'play', 'off, it stops layering');
+    assert.notDeepStrictEqual(take(core), before, 'the layer is in the take');
+  }
+  {
+    const core = fresh(); render(core, 0.5, sine);
+    assert.equal(core.state().canOverdub, false, 'can not overdub with no loop');
+    core.setParam('overdubLatch', 1); render(core, 0.2, sine);
+    assert.equal(core.state().dubLatched, false, 'switched on with no loop, nothing happens');
+  }
+  {
+    const core = fresh(); caught(core, sine);
+    core.setParam('overdubLatch', 1); render(core, 0.2, other);
+    core.footswitch('loop', 'down'); render(core, 0.6, other); core.footswitch('loop', 'up'); render(core, 0.1, other);
+    assert.equal(core.state().loop, 'dub', 'a hold release leaves a latched overdub layering');
+    tapLoop(core); render(core, 0.1, other);
+    assert.equal(core.state().dubLatched, false, 'a tap stops the loop and the overdub');
+  }
+  {
+    const core = fresh(); caught(core, sine);
+    const kept = take(core);
+    core.clearLoop(); render(core, 0.5, silence);
+    assert.equal(core.lsrc, 0, 'CLEAR empties the take');
+    assert.equal(core.state().undoKind, 2);
+    core.undoLoop();
+    assert.deepStrictEqual(take(core), kept, 'UNDO brings the cleared take back');
+    assert.equal(core.state().loop, 'off', 'stopped');
+    core.undoLoop();
+    assert.equal(core.lsrc, 0, 'UNDO again clears again');
+  }
+  {
+    const core = fresh(); caught(core, sine);
+    const first = take(core);
+    tapLoop(core); render(core, 0.3, other); caught(core, other);
+    core.undoLoop(); render(core, 0.3, silence);
+    assert.deepStrictEqual(take(core), first, 'UNDO goes back to the take before');
+    const d = fresh(); caught(d, sine);
+    d.undoLoop(); render(d, 0.3, silence);
+    assert.equal(d.lsrc, 0, 'after a first take, empty');
+  }
+  {
+    const core = fresh(); caught(core, sine);
+    const before = take(core);
+    core.setParam('overdubLatch', 1); render(core, 0.6, other); core.setParam('overdubLatch', 0); render(core, 0.1, other);
+    const layered = take(core);
+    core.undoLoop(); render(core, 0.3, silence);
+    assert.deepStrictEqual(take(core), before, 'UNDO takes the layer off');
+    assert.equal(core.state().loop, 'play', 'and the loop plays on');
+    core.undoLoop(); render(core, 0.3, silence);
+    assert.deepStrictEqual(take(core), layered, 'again puts it back');
+  }
+  {
+    const core = fresh(); render(core, 0.5, sine);
+    core.undoLoop(); render(core, 0.2, sine);
+    assert.equal(core.lsrc, 0, 'nothing to undo: nothing happens');
+  }
+});

@@ -133,8 +133,11 @@ private:
         return list;
     }
 
+    // Gestures, not settings: the footswitches, OVERDUB, CLEAR and UNDO never travel in a preset.
     static bool isSound(const juce::RangedAudioParameter& p) {
-        return p.getParameterID() != "wetSwitch" && p.getParameterID() != "loopSwitch";
+        for (const auto* id : {"wetSwitch", "loopSwitch", "overdub", "clear", "undo"})
+            if (p.getParameterID() == id) return false;
+        return true;
     }
 
     // The four user slots became ordinary presets. Runs once: the old file is set aside.

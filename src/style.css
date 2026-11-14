@@ -126,6 +126,11 @@ button:disabled { cursor: wait; opacity: .65; }
 .mode-buttons button + button { border-left: 1px solid #181815; }
 .mode-buttons button.selected, .mode-buttons button:hover { background: #181815; color: #faf9f3; }
 .mode-buttons button.selected { box-shadow: inset 4px 0 0 #faf9f3; }
+.take-keys { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 6px; margin-top: 8px; }
+.take-key { background: #fbfaf5; border: 1px solid #b9b8ad; padding: 6px 2px; font: 10px/1 'Terminal', monospace; color: #181815; }
+.take-key:hover:not(:disabled) { border-color: #181815; }
+.take-key.on { background: #181815; color: #fbfaf5; border-color: #181815; }
+.take-key:disabled { opacity: 0.35; cursor: default; }
 .footswitch { margin-top: auto; width: 100%; background: #fbfaf5; border: 1.5px solid #181815; color: #181815; padding: 8px 8px 6px; text-align: left; box-shadow: 3px 3px 0 #181815; min-height: 58px; }
 .footswitch:hover { background: #f0efe6; }
 .footswitch.pressed { transform: translate(2px,2px); box-shadow: 1px 1px 0 #181815; }

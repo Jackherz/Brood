@@ -14,6 +14,7 @@ const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float3
 for (let b = 0; b < nBlocks; b++) {
   for (const ev of sc.events.get(b) || []) {
     if (ev.kind === 'param') core.setParam(ev.name, ev.value);
+    else if (ev.kind === 'op') { if (ev.op === 'clear') core.clearLoop(); else if (ev.op === 'undo') core.undoLoop(); }
     else core.footswitch(ev.which, ev.action);
   }
   // A host transport running from the start at the scenario's tempo, for RECORD's bar line.

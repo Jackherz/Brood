@@ -1,0 +1,25 @@
+# UNDO after a second take goes back to the first; after an overdub layer it removes the
+# layer and keeps playing; redo puts it back. In TAPE with the clock slowed part way.
+rate 48000
+seconds 12
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param memory 0.4
+0 param loopMode 1
+300 fs loop down
+304 fs loop up
+600 fs loop down
+604 fs loop up
+800 fs loop down
+804 fs loop up
+1100 op undo
+1200 fs loop down
+1204 fs loop up
+1300 param clock 0.7
+1400 param overdubLatch 1
+1700 param overdubLatch 0
+1900 op undo
+2300 op undo
+2600 op clear
+2650 op undo

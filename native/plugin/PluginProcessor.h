@@ -9,7 +9,7 @@
 // The pedal as an AudioProcessor. Every control (knobs, toggles, dips, and both
 // footswitches as momentary switches) is a host parameter, so a DAW can automate
 // it or map it to a MIDI controller.
-class BroodProcessor final : public juce::AudioProcessor {
+class BroodProcessor final : public juce::AudioProcessor, private juce::AsyncUpdater {
 public:
     BroodProcessor();
     ~BroodProcessor() override = default;
@@ -91,6 +91,11 @@ public:
         // The take strip's live view: where the history is being written (in ticks of the ring),
         // how much a tap keeps, and how much a recording or a hold has kept so far (-1: none).
         std::atomic<int> histPos { 0 }, memTicks { 64000 }, takeSoFar { -1 };
+        // OVERDUB, CLEAR and UNDO: whether OVERDUB can be switched on (a loop is playing), whether
+        // it's latched, and what UNDO would step back over (0 nothing, 1 a take, 2 a clear,
+        // 3 a layer), and whether that step is already undone (so UNDO redoes).
+        std::atomic<bool> canOverdub { false }, dubLatched { false }, undoRedo { false };
+        std::atomic<int> undoKind { 0 };
     } ui;
     // Peak of each brood::kLiveColTicks of the history ring, both sides; any thread may read.
     float livePeak(int column) const {
@@ -99,6 +104,8 @@ public:
     static constexpr int kWaveBins = 400;
     // copy of the loop's peak envelope; returns false if the audio thread holds the lock
     bool copyWave(std::array<float, kWaveBins>& out) const;
+    // Runs any pending reset of CLEAR, UNDO or OVERDUB now, on the calling (message) thread.
+    void settleControls() { handleUpdateNowIfNeeded(); }
 
 private:
     void pullParams();
@@ -113,6 +120,12 @@ private:
     bool hostPlaying_ = false; double hostPpq_ = 0, hostBarStart_ = 0;
     kit::bench::OutputRecorder outputRecorder_;
     std::atomic<int> restoreWet_ { -1 };
+    // CLEAR and UNDO act when their parameter goes on; the message thread then sets it back to
+    // off, so a controller's button lights for a moment. OVERDUB is set back to off when it
+    // couldn't latch (no loop playing) or the loop stopped under it.
+    bool lastClear_ = false, lastUndo_ = false;
+    std::atomic<bool> resetClear_ { false }, resetUndo_ { false }, resetOverdub_ { false };
+    void handleAsyncUpdate() override;
     // A take restored from the state, waiting to be swapped in by the audio thread.
     // (A host that renders offline may be a fresh instance with nothing captured.)
     struct PendingTake { std::vector<float> pcm; bool play = false; bool has = false; };

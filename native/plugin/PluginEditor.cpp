@@ -470,9 +470,42 @@ void BroodEditor::Footswitch::paint(juce::Graphics& g) {
     g.setFont(font(16));
     g.drawText("[ " + keyName + " ]", row.removeFromRight(36), juce::Justification::centredRight);
     g.setColour(kMuted);
-    g.drawText("TAP / HOLD", row, juce::Justification::centred);
+    if (row.getWidth() >= kit::textWidth(g.getCurrentFont(), "TAP / HOLD") + 8)   // narrowed beside OVERDUB, it goes
+        g.drawText("TAP / HOLD", row, juce::Justification::centred);
 }
 
+
+void BroodEditor::StripKey::paintButton(juce::Graphics& g, bool hover, bool down) {
+    const auto& k = stock();
+    const auto r = getLocalBounds().toFloat().reduced(0.5f);
+    const bool lit = isEnabled() && (hover || down);
+    if (down) { g.setColour(k.lit); g.fillRoundedRectangle(r, 2.f); }
+    g.setColour(lit ? k.lit : k.onSunk.withAlpha(0.5f));
+    g.drawRoundedRectangle(r, 2.f, 1.f);
+    g.setColour(down ? k.sunk : lit ? k.lit : k.onSunk);
+    g.setFont(capFont());
+    g.drawText(getButtonText(), getLocalBounds(), juce::Justification::centred);
+}
+
+// CLEAR and UNDO are pulses: on, and the processor sets them back to off once it has acted.
+void BroodEditor::pulse(const char* id) {
+    if (auto* prm = proc.apvts.getParameter(id)) {
+        prm->beginChangeGesture(); prm->setValueNotifyingHost(1.f); prm->endChangeGesture();
+    }
+}
+
+// OVERDUB can only switch on over a playing loop; UNDO only with something to undo, and it
+// says REDO when pressing it would put the step back. Greyed out, they ignore clicks.
+void BroodEditor::updateTakeControls() {
+    const auto grey = [](juce::Component& c, bool on) {
+        if (c.isEnabled() != on) { c.setEnabled(on); c.setAlpha(on ? 1.f : 0.35f); }
+    };
+    grey(overdub, proc.ui.canOverdub.load() || proc.ui.dubLatched.load());
+    grey(clearTake, proc.ui.lsrc.load() > 0 || proc.ui.loopLed.load() == 2 || proc.ui.recArmed.load());
+    grey(undoTake, proc.ui.undoKind.load() != 0 && proc.ui.loopLed.load() != 2 && !proc.ui.recArmed.load());
+    const juce::String undoText = proc.ui.undoRedo.load() ? "REDO" : "UNDO";
+    if (undoTake.getButtonText() != undoText) undoTake.setButtonText(undoText);
+}
 
 // ───────── loop display ─────────
 bool BroodEditor::LoopView::markers(int& startAt, int& endAt) const {
@@ -583,7 +616,9 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
     const float mid = b.getCentreY();
     const int lsrc = proc.ui.lsrc.load();
     const int led = proc.ui.loopLed.load();   // 0 off, 1 play, 2 rec, 3 dub
-    if (lsrc <= 0) {
+    // The live input while there's no take, and over one while a new take is being recorded
+    // (RECORD recording or waiting for the bar line, or a CAPTURE hold).
+    if (lsrc <= 0 || proc.ui.takeSoFar.load() >= 0 || proc.ui.recArmed.load()) {
         const bool record = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f;
         const bool armed = proc.ui.recArmed.load();
         const juce::String bars = proc.describe("recBars").toUpperCase();
@@ -748,6 +783,19 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     fsWet = std::make_unique<Footswitch>(*proc.apvts.getParameter("wetSwitch"), "WET", "A");
     fsLoop = std::make_unique<Footswitch>(*proc.apvts.getParameter("loopSwitch"), "LOOP", "L");
     addAndMakeVisible(*fsWet); addAndMakeVisible(*fsLoop);
+    overdub.getProperties().set("plate", true);
+    overdub.onClick = [this] { showReadout("OVERDUB", overdub.getToggleState() ? "layering until you switch it off" : "off"); };
+    addAndMakeVisible(overdub);
+    overdubAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "overdub", overdub);
+    for (auto* b : {&clearTake, &undoTake}) loopView.addAndMakeVisible(*b);
+    clearTake.onClick = [this] { pulse("clear"); showReadout("LOOP", "cleared. undo brings it back"); };
+    undoTake.onClick = [this] {
+        static const char* const what[] = {"", "the take before", "the cleared take", "the layer"};
+        const int kind = juce::jlimit(0, 3, proc.ui.undoKind.load());
+        const bool redo = proc.ui.undoRedo.load();
+        pulse("undo");
+        showReadout(redo ? "REDO" : "UNDO", juce::String(redo ? "again: " : "back to ") + (kind == 3 ? (redo ? "the layer is back" : "before the layer") : what[kind]));
+    };
     addAndMakeVisible(loopView);
     // Normalise, as on Silt: the take's loudest moment to -1 dB.
     gainBox = std::make_unique<GainBox>(*proc.apvts.getParameter("loopDb"), [this] {
@@ -970,6 +1018,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     presetBar.refresh();
     updateModeControls();
     updateBench();
+    updateTakeControls();   // greyed as they should be from the first frame
     startTimerHz(60);
 }
 
@@ -1285,12 +1334,21 @@ void BroodEditor::resized() {
     place(loopView, loopViewDesign);
     const auto gainLocal = juce::Rectangle<int>(130, 16).withPosition(loopViewDesign.getWidth() - 130, 0);
     gainBox->setBounds(gainLocal);
+    // CLEAR and UNDO on the heading, left of GAIN.
+    const auto undoLocal = juce::Rectangle<int>(52, 15).withPosition(gainLocal.getX() - 6 - 52, 0);
+    const auto clearLocal = undoLocal.withX(undoLocal.getX() - 4 - 56).withWidth(56);
+    undoTake.setBounds(undoLocal); clearTake.setBounds(clearLocal);
+    undoDesign = undoLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
+    clearDesign = clearLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
     gainDesign = gainLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
     const int cx[3] = {pedalArea.getX() + 138, pedalArea.getX() + 414, pedalArea.getX() + 690};
     fsWetDesign = juce::Rectangle<int>(248, 46).withCentre({cx[0], 245});
-    fsLoopDesign = juce::Rectangle<int>(248, 46).withCentre({cx[2], 245});
+    // LOOP gives up some width for OVERDUB beside it, the plate the same height as the switch.
+    fsLoopDesign = juce::Rectangle<int>(176, 46).withPosition(cx[2] - 124, 222);
+    overdubDesign = juce::Rectangle<int>(70, 43).withPosition(fsLoopDesign.getRight() + 2, 222);
     place(*fsWet, fsWetDesign);
     place(*fsLoop, fsLoopDesign);
+    place(overdub, overdubDesign);
     // Between them, what's true of both sides: how worn the one clock is.
     characterDesign = juce::Rectangle<int>(130, 24).withCentre({cx[1], 234});
     place(*character, characterDesign);
@@ -1495,6 +1553,9 @@ void BroodEditor::rebuildHoverHelp() {
 
     add(fsWetDesign, "WET FOOTSWITCH", "tap for the wet side, hold to freeze it where it stands. key A.");
     add(fsLoopDesign, "LOOP FOOTSWITCH", "tap to catch the recent past, tap again to stop, hold to overdub. key L.");
+    add(overdubDesign, "OVERDUB", "latches: layers into the playing loop until you switch it off. needs a loop playing.");
+    add(clearDesign, "CLEAR", "empties the take. undo brings it back.");
+    add(undoDesign, "UNDO", "one step back: a clear, a new take, or the last overdub layer. press again to redo.");
 
     add(benchSourceDesign, "SEND", "what SEND sends: the loop, or the exact output for that many bars, from the next bar line.");
     add(presetBarDesign, "PATCH", "click the name to search, star and audition sounds. the arrows step through them. SAVE keeps what you hear.");
@@ -1753,6 +1814,7 @@ void BroodEditor::timerCallback() {
     }
     fsWet->setLit(wetOn);
     fsLoop->setLit(loopOn);
+    updateTakeControls();
     if (led != lastLoopLed) {
         const char* msg[] = {nullptr, "playing", "recording...", "overdubbing..."};
         if (msg[led] != nullptr) showReadout("LOOP", msg[led]);

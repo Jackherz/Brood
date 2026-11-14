@@ -1029,6 +1029,79 @@ int main() {
             CHECK(same, "live: a range of bins matches the whole picture and leaves the rest alone");
         }
     }
+    {   // OVERDUB latched, CLEAR and UNDO
+        const auto sine = [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); };
+        const auto other = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 660 * t); };
+        auto fresh = [] { brood::Core c; c.p.clock = 1; c.p.memory = 0.3; c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.prepare(FS); return c; };
+        auto take = [](const brood::Core& c) { std::vector<float> v(static_cast<size_t>(c.capturedLength())); c.capturedLoop(v.data(), static_cast<int>(v.size())); return v; };
+        auto caught = [&](brood::Core& c, const std::function<double(double)>& src) { render(c, 2, src); tap(c, 1); render(c, 0.3, [](double) { return 0.0; }); };
+        {   // latched: layers while on, stops when off
+            brood::Core c = fresh(); caught(c, sine);
+            const auto before = take(c);
+            c.p.overdubLatch = true; render(c, 0.6, other);
+            CHECK(c.state().loop == brood::LoopLed::Dub && c.overdubLatched(), "OVERDUB: latched, it layers");
+            c.p.overdubLatch = false; render(c, 0.1, other);
+            CHECK(c.state().loop == brood::LoopLed::Play && !c.overdubLatched(), "OVERDUB: off, it stops layering");
+            CHECK(take(c) != before, "OVERDUB: the layer is in the take");
+        }
+        {   // no loop playing: ignored, and the state says it can't
+            brood::Core c = fresh(); render(c, 0.5, sine);
+            CHECK(!c.state().canOverdub, "OVERDUB: can't with no loop");
+            c.p.overdubLatch = true; render(c, 0.2, sine);
+            CHECK(!c.overdubLatched() && c.state().loop == brood::LoopLed::Off, "OVERDUB: switched on with no loop, nothing happens");
+        }
+        {   // the loop stopping switches it off; a hold's release doesn't
+            brood::Core c = fresh(); caught(c, sine);
+            c.p.overdubLatch = true; render(c, 0.2, other);
+            c.footswitch(1, true); render(c, 0.6, other); c.footswitch(1, false); render(c, 0.1, other);
+            CHECK(c.overdubLatched() && c.state().loop == brood::LoopLed::Dub, "OVERDUB: a hold's release leaves a latched overdub layering");
+            tap(c, 1); render(c, 0.1, other);
+            CHECK(!c.overdubLatched() && c.state().loop == brood::LoopLed::Off, "OVERDUB: a tap stops the loop and the overdub");
+        }
+        {   // CLEAR fades out, then empties; UNDO brings it back exactly; UNDO again redoes
+            brood::Core c = fresh(); caught(c, sine);
+            const auto kept = take(c);
+            c.clearLoop();
+            const Out o = render(c, 0.5, [](double) { return 0.0; });
+            double step = 0;
+            for (size_t i = 1; i < o.L.size(); ++i) step = std::max(step, static_cast<double>(std::fabs(o.L[i] - o.L[i - 1])));
+            CHECK(c.capturedLength() == 0 && c.state().loop == brood::LoopLed::Off, "CLEAR: the take is gone and the loop stopped");
+            // The take's own slope is about 0.023 a sample; a cut would jump by up to 0.4.
+            CHECK(step < 0.05, "CLEAR: it fades out, no click (largest step %.4f)", step);
+            CHECK(rms(o.L, 0.3, 0.5) < 1e-4, "CLEAR: and then it's silent (%.6f)", rms(o.L, 0.3, 0.5));
+            CHECK(c.state().undoKind == 2 && !c.state().undoRedo, "CLEAR: UNDO would bring it back");
+            c.undoLoop();
+            CHECK(take(c) == kept && c.state().loop == brood::LoopLed::Off, "UNDO: the cleared take is back, sample for sample, stopped");
+            c.undoLoop();
+            CHECK(c.capturedLength() == 0 && !c.state().undoRedo, "UNDO again: cleared again");
+        }
+        {   // a new take: UNDO goes back to the one before; after a first take, to empty
+            brood::Core c = fresh(); caught(c, sine);
+            const auto first = take(c);
+            tap(c, 1); render(c, 0.3, other); caught(c, other);
+            CHECK(take(c) != first, "UNDO: a second take differs");
+            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(take(c) == first && c.state().loop == brood::LoopLed::Off, "UNDO: back to the first take, stopped");
+            brood::Core d = fresh(); caught(d, sine);
+            d.undoLoop(); render(d, 0.3, [](double) { return 0.0; });
+            CHECK(d.capturedLength() == 0, "UNDO: after a first take, the loop is empty (%d)", d.capturedLength());
+        }
+        {   // a layer: UNDO takes it off and keeps playing; again puts it back
+            brood::Core c = fresh(); caught(c, sine);
+            const auto before = take(c);
+            c.p.overdubLatch = true; render(c, 0.6, other); c.p.overdubLatch = false; render(c, 0.1, other);
+            const auto layered = take(c);
+            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(take(c) == before && c.state().loop == brood::LoopLed::Play, "UNDO: the layer comes off and the loop plays on");
+            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(take(c) == layered, "UNDO again: the layer is back");
+        }
+        {   // nothing to undo: nothing happens
+            brood::Core c = fresh(); render(c, 0.5, sine);
+            c.undoLoop(); render(c, 0.2, sine);
+            CHECK(c.capturedLength() == 0 && c.state().undoKind == 0, "UNDO: with nothing to undo, nothing happens");
+        }
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };

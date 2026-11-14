@@ -591,6 +591,9 @@ struct Params {
     // and only what's heard is worn.
     bool wearPost = false;
     bool tapeDelay = false;                          // TAPE ECHO: the delay glides and bends pitch
+    // OVERDUB, latched: switching it on layers into a playing loop until it's switched off.
+    // Switched on with no loop playing it does nothing (overdubLatched() says so).
+    bool overdubLatch = false;
     // RECORD: the loop switch records what's played after it instead of keeping the recent
     // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
     // Bars start at the next bar line while the host plays, unless recAtTap.
@@ -621,6 +624,12 @@ struct State {
     int lsrc, winStart, winLen; double pos, clockHz; uint32_t histCycles;
     float peakIn, peakOut;
     bool recArmed;   // RECORD: waiting for the bar line
+    // OVERDUB: whether it can be switched on now (a loop is playing), and whether it's latched.
+    bool canOverdub = false, dubLatched = false;
+    // UNDO: what it would step back over next (0 nothing, 1 a take, 2 a clear, 3 a layer),
+    // and whether that step has been undone already, so pressing it again redoes.
+    int undoKind = 0;
+    bool undoRedo = false;
 };
 
 class Core {
@@ -648,12 +657,14 @@ public:
         // take there is why a bounce could come back empty. The loop is measured in
         // core-clock ticks (kCoreFs), not host samples, so it stays valid as it is.
         if (hist.size() != static_cast<size_t>(kMaxLoopSamples)) {
-            hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f);
+            hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f); undoBuf.assign(kMaxLoopSamples, 0.f);
+            undoLen = 0; undoKind = UndoKind::None; undoRedo = false;
             liveCols.assign(kLiveCols, 0.f); histTotal = 0;
             histW = histCount = 0; lsrc = 0; loopPos = 0; loopState = LoopState::Off;
         }
         histCycles = 0;
         overdub = false;
+        dubLatched = latchSeen = false; pendingOp = LoopOp::None; resumeAfterOp = false;
         loopGain = 0; tapeSpeed = 1; stretchSpeed = 0;
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         softStart = softPh = softS = softOldFade = softOldS = 0;
@@ -684,6 +695,7 @@ public:
             }
             return;
         }
+        settlePending();   // a CLEAR or UNDO still fading out happens now
         if (down) {
             const bool playing = loopState == LoopState::Play;
             // RECORD, with nothing playing: a tap while recording (or armed) ends it there.
@@ -714,9 +726,10 @@ public:
                 return;
             }
             if (d.playing) {
-                overdub = false;
-                if (!d.held) loopState = LoopState::Off;
-                else loopWaveDirty = true;
+                // A tap stops the loop, and a latched OVERDUB with it. Letting go of a hold
+                // ends its layer, unless OVERDUB is latched.
+                if (!d.held) { loopState = LoopState::Off; overdub = false; dubLatched = false; }
+                else { overdub = dubLatched; loopWaveDirty = true; }
             } else if (d.held) {
                 const auto cycles = static_cast<uint32_t>(histCycles - d.histCycle);
                 const int64_t written = static_cast<int64_t>(cycles) * static_cast<int64_t>(hist.size()) + histW - d.histIdx;
@@ -724,6 +737,29 @@ public:
             } else capture(histCount);
         }
     }
+
+    // CLEAR: the take goes, and UNDO brings it back. A playing loop fades out first, the way a
+    // tap stops it, so nothing clicks. A recording, or a wait for the bar line, stands down.
+    void clearLoop() {
+        settlePending();
+        rec.phase = RecPhase::Idle;
+        if (lsrc < 64) return;
+        overdub = false; dubLatched = false;
+        if (loopState == LoopState::Play || loopGain > 0) { loopState = LoopState::Off; pendingOp = LoopOp::Clear; resumeAfterOp = false; return; }
+        doClear();
+    }
+    // UNDO: one step back over the last CLEAR, new take or overdub layer; again, it redoes.
+    // Undoing a layer keeps a playing loop playing (it dips while the take is swapped);
+    // undoing a clear or a take leaves the loop stopped, ready for a tap.
+    void undoLoop() {
+        settlePending();
+        if (undoKind == UndoKind::None || rec.phase != RecPhase::Idle) return;
+        resumeAfterOp = loopState == LoopState::Play && undoKind == UndoKind::Dub;
+        overdub = false; dubLatched = false;
+        if (loopState == LoopState::Play || loopGain > 0) { loopState = LoopState::Off; pendingOp = LoopOp::Undo; return; }
+        runOp(LoopOp::Undo);
+    }
+    bool overdubLatched() const { return dubLatched; }
 
     // Explicit freeze for MIDI CC; footswitch gestures remain momentary/latching.
     void setFreeze(bool active) { freeze = active && wetOn; }
@@ -739,9 +775,17 @@ public:
         }
         if (fsLoop.active && !fsLoop.held && hostCount - fsLoop.t >= holdN) {
             fsLoop.held = true;
-            if (fsLoop.playing) overdub = true;
+            if (fsLoop.playing) beginLayer();
             // RECORD held: it records from the press for as long as it's held, bars or not.
             else if (rec.phase != RecPhase::Idle) { rec.histIdx = fsLoop.histIdx; rec.histCycle = fsLoop.histCycle; rec.phase = RecPhase::Recording; rec.endAt = -1; }
+        }
+        if (p.overdubLatch != latchSeen) {
+            latchSeen = p.overdubLatch;
+            if (latchSeen) { if (canOverdub()) { beginLayer(); dubLatched = true; } }
+            else if (dubLatched) {
+                dubLatched = false;
+                if (!(fsLoop.active && fsLoop.held && fsLoop.playing)) overdub = false;   // a hold keeps its layer
+            }
         }
         const int64_t blockStart = hostCount;
 
@@ -847,8 +891,11 @@ public:
         // playhead drawn is the playhead heard.
         const Window win = lsrc <= 0 ? Window{0, 0} : p.loopMode == 1 && lengthSlew >= 0 ? loopWindowAt(lengthSlew) : loopWindow();
         const bool heldNow = p.freezeLatch > 0.5;
-        return State{wetOn || heldNow, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
+        State st{wetOn || heldNow, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
                      static_cast<float>(peakIn), static_cast<float>(peakOut), rec.phase == RecPhase::Armed};
+        st.canOverdub = canOverdub(); st.dubLatched = dubLatched;
+        st.undoKind = static_cast<int>(undoKind); st.undoRedo = undoRedo;
+        return st;
     }
 
     // Peak envelope of the captured loop, for drawing. Not real-time safe to call
@@ -898,6 +945,8 @@ public:
         lsrc = n; loopPos = 0; loopGain = 1;
         loopState = play ? LoopState::Play : LoopState::Off;
         loopWaveDirty = true;
+        undoKind = UndoKind::None; undoRedo = false; undoLen = 0;   // a reopened set has no undo
+        pendingOp = LoopOp::None; overdub = dubLatched = false;
     }
     LoopState loopLedState() const { return loopState; }
     // int16 is plenty for a take and half the bytes of float; the state is
@@ -999,6 +1048,17 @@ private:
     Allpass decor[2];
 
     std::vector<float> hist, loopBuf, liveCols;
+    // UNDO's copy: the take before the last CLEAR, new take or overdub layer (or after it,
+    // once undone). Swapped with loopBuf, never copied, except when a layer begins.
+    std::vector<float> undoBuf;
+    int undoLen = 0;
+    enum class UndoKind { None = 0, Take = 1, Clear = 2, Dub = 3 };
+    UndoKind undoKind = UndoKind::None;
+    bool undoRedo = false;
+    enum class LoopOp { None, Clear, Undo };
+    LoopOp pendingOp = LoopOp::None;   // waiting for the loop to fade out
+    bool resumeAfterOp = false;
+    bool dubLatched = false, latchSeen = false;
     int64_t histTotal = 0;
     int histW = 0, histCount = 0, lsrc = 0;
     uint32_t histCycles = 0;
@@ -1131,6 +1191,37 @@ private:
         rec.phase = RecPhase::Recording;
         rec.endAt = p.recBars > 0 ? hostCount + static_cast<int64_t>(std::llround(p.recBars * std::max(0.25, p.barQuarters) * 60.0 / std::max(5.0, p.bpm) * fs)) : -1;
     }
+    bool canOverdub() const { return loopState == LoopState::Play && lsrc >= 64 && pendingOp == LoopOp::None; }
+    // A new overdub layer: the take as it stands becomes UNDO's copy first.
+    void beginLayer() {
+        if (overdub) return;
+        std::copy(loopBuf.begin(), loopBuf.begin() + lsrc, undoBuf.begin());
+        undoLen = lsrc; undoKind = UndoKind::Dub; undoRedo = false;
+        overdub = true;
+    }
+    void doClear() {
+        std::swap(loopBuf, undoBuf);
+        undoLen = lsrc; lsrc = 0; loopPos = 0;
+        undoKind = UndoKind::Clear; undoRedo = false;
+        loopWaveDirty = true;
+    }
+    void runOp(LoopOp op) {
+        if (op == LoopOp::Clear) { doClear(); return; }
+        std::swap(loopBuf, undoBuf); std::swap(lsrc, undoLen);
+        undoRedo = !undoRedo;
+        if (undoKind != UndoKind::Dub) { loopPos = 0; grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1}; }
+        loopWaveDirty = true;
+    }
+    // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
+    void settlePending() {
+        if (pendingOp == LoopOp::None) return;
+        const LoopOp op = pendingOp;
+        pendingOp = LoopOp::None;
+        runOp(op);
+        if (resumeAfterOp && lsrc >= 64) loopState = LoopState::Play;
+        resumeAfterOp = false;
+    }
+
     // Everything written since the recording began becomes the loop, which plays at once.
     void closeRecording() {
         const auto cycles = static_cast<uint32_t>(histCycles - rec.histCycle);
@@ -1143,6 +1234,9 @@ private:
         n = std::min({n, static_cast<int>(hist.size()) - 1, histCount, maxCaptureSamples()});
         if (n < 64) return;
         const int N = static_cast<int>(hist.size());
+        // The take this replaces becomes UNDO's copy: a swap, nothing copied.
+        std::swap(loopBuf, undoBuf); undoLen = lsrc >= 64 ? lsrc : 0;
+        undoKind = UndoKind::Take; undoRedo = false;
         int r = histW - n; if (r < 0) r += N;
         for (int i = 0; i < n; ++i) { loopBuf[static_cast<size_t>(i)] = hist[static_cast<size_t>(r)]; if (++r >= N) r = 0; }
         lsrc = n; loopPos = 0;
@@ -1199,7 +1293,11 @@ private:
 
         const double target = loopState == LoopState::Play ? 1.0 : 0.0;
         loopGain += (target - loopGain) * 0.003;
-        if (loopState == LoopState::Off && loopGain < 1e-4) { loopGain = 0; dubGain = 0; dubLast = -1; return 0; }
+        if (loopState == LoopState::Off && loopGain < 1e-4) {
+            loopGain = 0; dubGain = 0; dubLast = -1;
+            if (pendingOp != LoopOp::None) settlePending();   // faded out: CLEAR or UNDO now
+            return 0;
+        }
         if (lsrc < 64) return 0;
 
         // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,

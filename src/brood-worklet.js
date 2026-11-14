@@ -516,7 +516,7 @@ class BroodCore {
       trails: 0, smooth: 0, balance: 0.5,
       sync: 0, bpm: 120,
       loopEnd: 1, start: 1, memory: 0,
-      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0, tapeDelay: 0,
+      tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0, tapeDelay: 0, overdubLatch: 0,
       // RECORD: the loop switch records what's played after it instead of keeping the recent
       // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
       // Bars start at the next bar line while the host plays, unless recAtTap.
@@ -580,6 +580,15 @@ class BroodCore {
     this.histTotal = 0;
     this.dubLo = Infinity; this.dubHi = -1;   // cells an overdub wrote since the strip looked
     this.loopBuf = new Float32Array(nLoop);
+    // UNDO's copy: the take before the last CLEAR, new take or overdub layer (or after it,
+    // once undone). Swapped with loopBuf, never copied, except when a layer begins.
+    this.undoBuf = new Float32Array(nLoop);
+    this.undoLen = 0;
+    this.undoKind = 0;                          // 0 none, 1 take, 2 clear, 3 layer
+    this.undoRedo = false;
+    this.pendingOp = null;                      // 'clear' | 'undo', waiting for the loop to fade out
+    this.resumeAfterOp = false;
+    this.dubLatched = false; this.latchSeen = false;
     this.lsrc = 0;
     this.loopState = 'off';                     // off | play
     this.overdub = false;
@@ -649,6 +658,7 @@ class BroodCore {
       }
       return;
     }
+    this.settlePending();   // a CLEAR or UNDO still fading out happens now
     if (action === 'down') {
       const playing = this.loopState === 'play';
       const p = this.p, rec = this.rec;
@@ -680,9 +690,10 @@ class BroodCore {
         return;
       }
       if (d.playing) {
-        this.overdub = false;
-        if (!d.held) { this.loopState = 'off'; this.events.push('loop-stop'); }
-        else this.events.push('loop-wave');
+        // A tap stops the loop, and a latched OVERDUB with it. Letting go of a hold
+        // ends its layer, unless OVERDUB is latched.
+        if (!d.held) { this.loopState = 'off'; this.overdub = false; this.dubLatched = false; this.events.push('loop-stop'); }
+        else { this.overdub = this.dubLatched; this.events.push('loop-wave'); }
       } else if (d.held) {
         // A hold can outlast the circular history. Keep the newest full buffer
         // instead of wrapping the requested duration back to a tiny fragment.
@@ -692,6 +703,70 @@ class BroodCore {
         this.capture(this.histCount); // retroactive: grab everything heard so far
       }
     }
+  }
+
+  // CLEAR: the take goes, and UNDO brings it back. A playing loop fades out first, the way a
+  // tap stops it, so nothing clicks. A recording, or a wait for the bar line, stands down.
+  clearLoop() {
+    this.settlePending();
+    this.rec.phase = 'idle';
+    if (this.lsrc < 64) return;
+    this.overdub = false; this.dubLatched = false;
+    if (this.loopState === 'play' || this.loopGain > 0) { this.loopState = 'off'; this.pendingOp = 'clear'; this.resumeAfterOp = false; return; }
+    this.doClear();
+  }
+
+  // UNDO: one step back over the last CLEAR, new take or overdub layer; again, it redoes.
+  // Undoing a layer keeps a playing loop playing (it dips while the take is swapped);
+  // undoing a clear or a take leaves the loop stopped, ready for a tap.
+  undoLoop() {
+    this.settlePending();
+    if (this.undoKind === 0 || this.rec.phase !== 'idle') return;
+    this.resumeAfterOp = this.loopState === 'play' && this.undoKind === 3;
+    this.overdub = false; this.dubLatched = false;
+    if (this.loopState === 'play' || this.loopGain > 0) { this.loopState = 'off'; this.pendingOp = 'undo'; return; }
+    this.runOp('undo');
+  }
+
+  canOverdub() { return this.loopState === 'play' && this.lsrc >= 64 && this.pendingOp === null; }
+
+  // A new overdub layer: the take as it stands becomes UNDO's copy first.
+  beginLayer() {
+    if (this.overdub) return;
+    this.undoBuf.set(this.loopBuf.subarray(0, this.lsrc));
+    this.undoLen = this.lsrc; this.undoKind = 3; this.undoRedo = false;
+    this.overdub = true;
+  }
+
+  doClear() {
+    [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
+    this.undoLen = this.lsrc; this.lsrc = 0; this.loopPos = 0;
+    this.undoKind = 2; this.undoRedo = false;
+    this.events.push('loop-wave');
+  }
+
+  runOp(op) {
+    if (op === 'clear') { this.doClear(); return; }
+    [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
+    [this.lsrc, this.undoLen] = [this.undoLen, this.lsrc];
+    this.undoRedo = !this.undoRedo;
+    if (this.undoKind !== 3) {
+      this.loopPos = 0;
+      this.grain[0].ph = 0; this.grain[1].ph = 0.5;
+      this.grain[0].start = 0; this.grain[1].start = 0;
+      this.grain[0].dir = 1; this.grain[1].dir = 1;
+    }
+    this.events.push('loop-wave');
+  }
+
+  // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
+  settlePending() {
+    if (!this.pendingOp) return;
+    const op = this.pendingOp;
+    this.pendingOp = null;
+    this.runOp(op);
+    if (this.resumeAfterOp && this.lsrc >= 64) this.loopState = 'play';
+    this.resumeAfterOp = false;
   }
 
   // Copy the most recent n samples of history into the loop buffer and play.
@@ -725,6 +800,10 @@ class BroodCore {
   capture(n) {
     n = Math.floor(Math.min(n, this.hist.length - 1, this.histCount, this.maxCaptureSamples()));
     if (n < 64) return;
+    // The take this replaces becomes UNDO's copy: a swap, nothing copied.
+    [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
+    this.undoLen = this.lsrc >= 64 ? this.lsrc : 0;
+    this.undoKind = 1; this.undoRedo = false;
     const N = this.hist.length;
     let r = this.histW - n; if (r < 0) r += N;
     for (let i = 0; i < n; i++) {
@@ -871,7 +950,11 @@ class BroodCore {
 
     const target = this.loopState === 'play' ? 1 : 0;
     this.loopGain += (target - this.loopGain) * 0.003;
-    if (this.loopState === 'off' && this.loopGain < 1e-4) { this.loopGain = 0; return 0; }
+    if (this.loopState === 'off' && this.loopGain < 1e-4) {
+      this.loopGain = 0;
+      if (this.pendingOp) this.settlePending();   // faded out: CLEAR or UNDO now
+      return 0;
+    }
     if (this.lsrc < 64) return 0;
 
     // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
@@ -1254,9 +1337,18 @@ class BroodCore {
     const fl = this.fsDown.loop;
     if (fl && !fl.held && this.hostCount - fl.t >= holdN) {
       fl.held = true;
-      if (fl.playing) this.overdub = true;
+      if (fl.playing) this.beginLayer();
       // RECORD held: it records from the press for as long as it's held, bars or not.
       else if (this.rec.phase !== 'idle') { this.rec.histIdx = fl.histIdx; this.rec.histCycle = fl.histCycle; this.rec.phase = 'recording'; this.rec.endAt = -1; }
+    }
+    const latch = !!this.p.overdubLatch;
+    if (latch !== this.latchSeen) {
+      this.latchSeen = latch;
+      if (latch) { if (this.canOverdub()) { this.beginLayer(); this.dubLatched = true; } }
+      else if (this.dubLatched) {
+        this.dubLatched = false;
+        if (!(fl && fl.held && fl.playing)) this.overdub = false;   // a hold keeps its layer
+      }
     }
     const blockStart = this.hostCount;
 
@@ -1376,6 +1468,7 @@ class BroodCore {
       mods: this.rampRaw.slice(), lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
       recArmed: this.rec.phase === 'armed',
+      canOverdub: this.canOverdub(), dubLatched: this.dubLatched, undoKind: this.undoKind, undoRedo: this.undoRedo,
     };
   }
 
@@ -1455,6 +1548,8 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
         for (const core of [this.left, this.right]) {
           if (m.type === 'param') core.setParam(m.name, m.value);
           else if (m.type === 'fs') core.footswitch(m.which, m.action);
+          else if (m.type === 'clear') core.clearLoop();
+          else if (m.type === 'undo') core.undoLoop();
         }
       };
     }
@@ -1472,6 +1567,9 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       const inR = inp[1] || inL;
       this.left.process(inL, outL, this.scratchL);
       this.right.process(inR, this.scratchL, outR);
+      // OVERDUB on with nothing to layer into (or the loop stopped under it): set it back to
+      // off, as the plug-in does, so the next press is a fresh switch-on.
+      for (const core of [this.left, this.right]) if (core.p.overdubLatch && !core.dubLatched) core.p.overdubLatch = 0;
       this.sinceState += outL.length;
       if (this.sinceState >= sampleRate / 30) {
         this.sinceState = 0;
