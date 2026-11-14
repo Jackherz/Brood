@@ -11,16 +11,18 @@ const core = new BroodCore(sc.rate);
 const nBlocks = Math.ceil((sc.seconds * sc.rate) / BLOCK);
 const out = new Float32Array(nBlocks * BLOCK * 2);
 const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
+let songStart = 0;   // `param songStart <block>`: the song position restarts from bar 1 there
 for (let b = 0; b < nBlocks; b++) {
   for (const ev of sc.events.get(b) || []) {
-    if (ev.kind === 'param') core.setParam(ev.name, ev.value);
+    if (ev.kind === 'param' && ev.name === 'songStart') songStart = ev.value;
+    else if (ev.kind === 'param') core.setParam(ev.name, ev.value);
     else if (ev.kind === 'op') { if (ev.op === 'clear') core.clearLoop(); else if (ev.op === 'undo') core.undoLoop(); }
     else core.footswitch(ev.which, ev.action);
   }
   // A host transport running from the start at the scenario's tempo, for RECORD's bar line.
   // Same arithmetic as native/tests/render.cpp.
   if (core.p.hostPlaying) {
-    core.p.ppq = (b * BLOCK) / sc.rate * core.p.bpm / 60;
+    core.p.ppq = ((b - songStart) * BLOCK) / sc.rate * core.p.bpm / 60;
     core.p.barStartPpq = Math.floor(core.p.ppq / core.p.barQuarters) * core.p.barQuarters;
   }
   for (let i = 0; i < BLOCK; i++) inp[i] = input(b * BLOCK + i, sc.rate);

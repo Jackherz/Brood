@@ -708,7 +708,11 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
     static const char* const states[] = {"STOPPED", "PLAYING", "RECORDING", "OVERDUB"};
     g.setFont(capFont());
     g.setColour(led >= 2 ? k.lit : k.onSunk);
-    g.drawText(juce::String(states[juce::jlimit(0, 3, led)]) + "  " + juce::String(seconds, 2) + " S", all.withHeight(16.f).withTrimmedLeft(6.f), juce::Justification::centredLeft);
+    // A transport take says so, and says it's waiting while the host is stopped.
+    const bool parked = proc.ui.parked.load();
+    const juce::String status = parked ? juce::String("WAITING FOR PLAY") : juce::String(states[juce::jlimit(0, 3, led)]);
+    const juce::String follows = proc.ui.follows.load() ? juce::String("  FOLLOWS THE HOST") : juce::String();
+    g.drawText(status + "  " + juce::String(seconds, 2) + " S" + follows, all.withHeight(16.f).withTrimmedLeft(6.f), juce::Justification::centredLeft);
     // The markers: a rule the full height, and a tab that names it — START's tab
     // hangs inside the window from the top, END's from the bottom, so the two never
     // cover each other even when the window is a sliver.

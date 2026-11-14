@@ -10,6 +10,20 @@
 static int failures = 0;
 #define CHECK(condition, message) do { if (!(condition)) { std::printf("FAIL: %s\n", message); ++failures; } } while (0)
 
+// A host transport for the tests: playing or not, at a song position and tempo.
+struct TestHead final : juce::AudioPlayHead {
+    bool playing = false; double ppq = 0, bpm = 120;
+    juce::Optional<PositionInfo> getPosition() const override {
+        PositionInfo info;
+        info.setIsPlaying(playing);
+        info.setPpqPosition(ppq);
+        info.setPpqPositionOfLastBarStart(std::floor(ppq / 4) * 4);
+        info.setBpm(bpm);
+        info.setTimeSignature(TimeSignature{4, 4});
+        return info;
+    }
+};
+
 static void process(BroodProcessor& p, juce::AudioBuffer<float>& b, juce::MidiBuffer& m) {
     p.processBlock(b, m);
     m.clear();
@@ -533,6 +547,36 @@ int main() {
         CHECK(value("start") > 0.999f && value("loopEnd") > 0.999f && value("length") > 0.999f, "START, END and LENGTH moved to the whole take");
         set("loopEnd", 0.5f); run(20);
         CHECK(q.ui.winLen.load() < q.ui.lsrc.load(), "and END trims it again afterwards");
+    }
+    {   // A transport take: saved with its kind, it reopens waiting for play and plays when the host does
+        TestHead head;
+        BroodProcessor q;
+        q.setPlayConfigDetails(2, 2, rate, size);
+        q.prepareToPlay(rate, size);
+        q.setPlayHead(&head);
+        auto run = [&](BroodProcessor& proc, int blocks) {
+            for (int block = 0; block < blocks; ++block) {
+                for (int i = 0; i < size; ++i) { const auto x = static_cast<float>(0.2 * std::sin(0.03 * (block * size + i))); b.setSample(0, i, x); b.setSample(1, i, x); }
+                process(proc, b, m);
+                if (head.playing) head.ppq += size / rate * head.bpm / 60.0;
+            }
+        };
+        head.playing = true;
+        run(q, 300);
+        q.apvts.getParameter("loopSwitch")->setValueNotifyingHost(1.f); run(q, 1); q.apvts.getParameter("loopSwitch")->setValueNotifyingHost(0.f); run(q, 2);
+        CHECK(q.ui.follows.load() && q.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play), "a take caught with the host playing follows it");
+        head.playing = false; run(q, 100);
+        CHECK(q.ui.parked.load() && q.ui.loopLed.load() == 0, "the host stops: it waits");
+        juce::MemoryBlock saved; q.getStateInformation(saved);
+        TestHead head2;
+        BroodProcessor r; r.setPlayConfigDetails(2, 2, rate, size); r.prepareToPlay(rate, size); r.setPlayHead(&head2);
+        r.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+        juce::AudioBuffer<float> rb(2, size); rb.clear();
+        for (int k = 0; k < 4; ++k) r.processBlock(rb, m);
+        CHECK(r.ui.lsrc.load() > 64 && r.ui.follows.load() && r.ui.parked.load(), "reopened, it waits for play");
+        head2.playing = true;
+        for (int k = 0; k < 4; ++k) { r.processBlock(rb, m); head2.ppq += size / rate * 2.0; }
+        CHECK(r.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play) && !r.ui.parked.load(), "and plays when the host does");
     }
     return failures ? 1 : 0;
 }

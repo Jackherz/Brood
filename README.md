@@ -15,20 +15,31 @@ calibrated against the hardware. It is not affiliated with or endorsed by Chase 
   micro-looper (ENV, TAPE or STRETCH) share a CLOCK that sets the engine's own sample
   rate, so slowing it darkens and lengthens everything together. DELAY can be a tape
   echo, where turning TIME bends the echoes' pitch.
-- **Always listening, or recording.** In CAPTURE, tap the looper to catch the last few
-  seconds. In RECORD, tap to record what you play and tap again to loop it, or record a
-  set number of bars that lands on the host's bar lines. Hold to overdub, or latch
-  OVERDUB on. CLEAR empties the take, and UNDO steps back once (press it again to redo).
-  Keep up to 30 s, and trim the take with START and END markers on the waveform.
+- **Always listening, or recording.** In CAPTURE, tap the looper to catch up to 30 s of
+  the recent past. In RECORD, tap to record what you play and tap again to loop it, or
+  record a set number of bars (up to 32 s) that lands on the host's bar lines. A new take
+  plays all of itself; trim it with START and END markers on the waveform.
+- **Overdub, clear and undo.** Hold to overdub, or latch OVERDUB on (a controller that
+  can't hold a button can still overdub). CLEAR empties the take, and UNDO steps back
+  once: a clear, a new take or the last layer. Press it again to redo.
+- **See what's coming in.** Before there's a take, and while a new one records, the
+  waveform scrolls the input live, including anything ahead of the looper.
+- **Loops that follow the host.** A loop made while the host (Live, say) plays stops when
+  playback stops and comes back locked to the song, like a clip. One made with the host
+  stopped loops freely.
 - **Routing:** the wet side hears the input, the loop, or both, and runs before or after
   the looper. FREEZE holds the wet side ringing on its own.
 - **Two modulation sources** with their own rate and shape, routed by dragging onto any
   knob.
 - **Tempo sync** for the wet side, ENV and the modulation rate.
-- **MIDI CC control** laid out like the pedal's, so a controller set up for it works.
+- **MIDI CC control** laid out like the pedal's, so a controller set up for it works, and
+  host parameters with short names and values that fit a controller's display, such as
+  Push's.
 - **Presets and the Bench:** factory presets and a preset browser, and the Bench, which
-  passes loops to and from other Glyph Audio plug-ins.
-- **Loops are saved with your project**, so a reopened session plays what you heard.
+  passes loops to and from other Glyph Audio plug-ins, or back into Brood itself: SEND,
+  then TAKE, resamples the output into the loop.
+- **Loops are saved with your project**, so a reopened session plays what you heard. A
+  loop that follows the host waits for play.
 
 Every control is described in the [manual](docs/MANUAL.md).
 

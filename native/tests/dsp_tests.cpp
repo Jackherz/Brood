@@ -1092,8 +1092,9 @@ int main() {
             CHECK(rms(o.L, 0.3, 0.5) < 1e-4, "CLEAR: and then it's silent (%.6f)", rms(o.L, 0.3, 0.5));
             CHECK(c.state().undoKind == 2 && !c.state().undoRedo, "CLEAR: UNDO would bring it back");
             c.undoLoop();
-            CHECK(take(c) == kept && c.state().loop == brood::LoopLed::Off, "UNDO: the cleared take is back, sample for sample, stopped");
-            c.undoLoop();
+            // It plays: with the loop stopped, a tap would catch a new take instead of playing this one.
+            CHECK(take(c) == kept && c.state().loop == brood::LoopLed::Play, "UNDO: the cleared take is back, sample for sample, and plays");
+            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });   // playing: it fades out first
             CHECK(c.capturedLength() == 0 && !c.state().undoRedo, "UNDO again: cleared again");
         }
         {   // a new take: UNDO goes back to the one before; after a first take, to empty
@@ -1102,7 +1103,7 @@ int main() {
             tap(c, 1); render(c, 0.3, other); caught(c, other);
             CHECK(take(c) != first, "UNDO: a second take differs");
             c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
-            CHECK(take(c) == first && c.state().loop == brood::LoopLed::Off, "UNDO: back to the first take, stopped");
+            CHECK(take(c) == first && c.state().loop == brood::LoopLed::Play, "UNDO: back to the first take, playing");
             brood::Core d = fresh(); caught(d, sine);
             d.undoLoop(); render(d, 0.3, [](double) { return 0.0; });
             CHECK(d.capturedLength() == 0, "UNDO: after a first take, the loop is empty (%d)", d.capturedLength());
@@ -1154,12 +1155,73 @@ int main() {
             c.p.length = 0.5; c.p.loopEnd = 0.5;
             c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
             CHECK(c.takeFitted(lengthToo) && c.p.loopEnd == 1 && c.p.length == 1, "UNDO to the take before fits it");
-            tap(c, 1); render(c, 0.2, sine);   // stopped in CAPTURE, a tap catches a new take
-            c.takeFitted(lengthToo);
-            c.p.loopEnd = 0.5;
+            c.p.loopEnd = 0.5;   // the undone take plays: trim it, then lay a layer on it
             c.p.overdubLatch = true; render(c, 0.4, sine); c.p.overdubLatch = false; render(c, 0.1, sine);
             c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
             CHECK(!c.takeFitted(lengthToo) && c.p.loopEnd == 0.5, "UNDO of a layer keeps the window");
+        }
+    }
+    {   // Transport loops: a take caught while the host plays follows its transport
+        const auto sine = [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); };
+        const auto silence = [](double) { return 0.0; };
+        struct Song { long total = 0, start = 0; };
+        // Render with the host's song position running from `start` (in blocks) at 120 bpm.
+        auto run = [&](brood::Core& c, Song& g, double secs, const std::function<double(double)>& src) {
+            const long n = static_cast<long>(std::ceil(secs * FS / B));
+            const Out o = render(c, secs, src, [&](brood::Core& cc, long b) { cc.p.ppq = static_cast<double>((g.total + b - g.start) * B) / FS * cc.p.bpm / 60; });
+            g.total += n;
+            return o;
+        };
+        // TAPE at exactly 1x (MODIFY's 1x step), so seconds into the take are seconds of song.
+        const double one = 0.66;
+        auto fresh = [one] { brood::Core c; c.p.clock = 1; c.p.loopMode = 1; c.p.modLoop = one; c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.p.bpm = 120; c.prepare(FS); return c; };
+        auto at = [](const brood::Core& c) { return c.state().pos / c.state().clockHz; };   // seconds into the window
+        // How far `got` is from `want` around a 4 s loop.
+        auto off = [](double got, double want) { double d = std::fmod(got - want + 6.0, 4.0) - 2.0; return std::fabs(d); };
+        {
+            brood::Core c = fresh(); Song g;
+            c.p.recMode = 1; c.p.recBars = 2; c.p.recAtTap = true; c.p.hostPlaying = true;
+            run(c, g, 0.5, sine); tap(c, 1); run(c, g, 4.2, sine);
+            CHECK(c.state().follows && c.state().loop == brood::LoopLed::Play, "transport: a take recorded while the host plays follows it");
+            run(c, g, 0.2, silence);   // the input quiet, so only the loop is measured
+            c.p.overdubLatch = true; run(c, g, 0.1, silence);
+            c.p.hostPlaying = false;
+            const Out o = run(c, g, 0.4, silence);
+            double step = 0;
+            for (size_t i = 1; i < o.L.size(); ++i) step = std::max(step, static_cast<double>(std::fabs(o.L[i] - o.L[i - 1])));
+            CHECK(c.state().loop == brood::LoopLed::Off && c.state().parked, "transport: the host stops, the loop stops and waits");
+            CHECK(!c.overdubLatched(), "transport: a latched OVERDUB switches off with it");
+            CHECK(step < 0.05, "transport: it fades out, no click (largest step %.4f)", step);
+            c.p.overdubLatch = false;
+            g.start = g.total; c.p.hostPlaying = true; run(c, g, 0.5, silence);   // play from bar 1
+            CHECK(c.state().loop == brood::LoopLed::Play && !c.state().parked, "transport: play brings it back");
+            // The take began at the tap, half a second into the song, so half a second after
+            // bar 1 the loop is back at its top.
+            CHECK(off(at(c), 0.0) < 0.02, "transport: from bar 1 it lines up with the song (%.3f s in, want 0)", at(c));
+            c.p.hostPlaying = false; run(c, g, 0.3, silence);
+            g.start = g.total - blk(3.0); c.p.hostPlaying = true; run(c, g, 0.5, silence);   // play from bar 2.5
+            CHECK(off(at(c), 3.0) < 0.02, "transport: from bar 2.5 it comes in where the song is (%.3f s in, want 3.0)", at(c));
+            g.start = g.total; run(c, g, 0.5, silence);   // the song jumps back to bar 1 while playing
+            CHECK(off(at(c), 0.0) < 0.02, "transport: a jump puts it back in time (%.3f s in, want 0)", at(c));
+        }
+        {   // a take caught with the host stopped is free
+            brood::Core c = fresh(); Song g; c.p.memory = 0.3;
+            run(c, g, 2, sine); tap(c, 1); run(c, g, 0.2, sine);
+            CHECK(!c.state().follows, "transport: a take caught with the host stopped is free");
+            c.p.hostPlaying = true; run(c, g, 0.5, sine);
+            c.p.hostPlaying = false; run(c, g, 0.5, sine);
+            g.start = g.total; c.p.hostPlaying = true; run(c, g, 0.3, sine);
+            CHECK(c.state().loop == brood::LoopLed::Play && !c.state().parked, "transport: the host never touches a free loop");
+        }
+        {   // a tap while parked catches a new, free take; UNDO brings the transport take back, parked
+            brood::Core c = fresh(); Song g; c.p.memory = 0.3; c.p.hostPlaying = true;
+            run(c, g, 2, sine); tap(c, 1); run(c, g, 0.2, sine);
+            CHECK(c.state().follows, "transport: caught while playing, it follows");
+            c.p.hostPlaying = false; run(c, g, 0.3, silence);
+            tap(c, 1); run(c, g, 0.2, sine);
+            CHECK(!c.state().follows && c.state().loop == brood::LoopLed::Play && !c.state().parked, "transport: a tap while parked catches a new, free take");
+            c.undoLoop(); run(c, g, 0.3, silence);
+            CHECK(c.state().follows && c.state().parked, "transport: UNDO brings the transport take back, waiting for play");
         }
     }
     {   // TAPE ECHO

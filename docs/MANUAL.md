@@ -89,9 +89,10 @@ pedal this follows has none. It reads in three tiers:
    take; a playing loop fades out first, so it doesn't click. UNDO steps back once: it
    brings back a cleared take, goes back to the take before a new one (or to nothing, after
    the first), or takes off the last overdub layer. Press it again to redo; it reads REDO
-   when that's what it will do. Undoing a clear or a take leaves the loop stopped, ready
-   for a tap; undoing a layer keeps a playing loop playing (it dips for a moment while
-   the take is swapped). The undo step isn't saved with your project, so a reopened set
+   when that's what it will do. A take that UNDO brings back plays (fading in), since a
+   tap with the loop stopped would catch a new take instead; a transport take with the
+   host stopped waits for play. Undoing a layer keeps a playing loop playing (it dips for
+   a moment while the take is swapped) and a stopped one stopped. The undo step isn't saved with your project, so a reopened set
    starts with nothing to undo, and a cleared take isn't saved at all.
 3. **Under the hood**: the six sliders along the bottom. The last, **NOISE**, sets how much
    of the worn clock's hiss is let through; it only does anything with WEAR on WORN.
@@ -108,6 +109,22 @@ while a new one records over it (RECORD recording or waiting for the bar line, o
 CAPTURE hold), and comes back after CLEAR. Otherwise, with a take caught, the strip
 shows the take, so START and END can still be edited, and an overdub redraws as you lay
 it down.
+
+**A loop made while the host plays follows its transport.** If the host (Live, say) is
+playing when a take is caught, at the CAPTURE tap or when RECORD ends, the loop follows
+the transport. When playback stops, the loop fades out and waits; the strip reads
+WAITING FOR PLAY, and a latched OVERDUB switches off. When playback starts, it comes back
+locked to the song, like a clip: from bar 1 it starts where it began, and from mid-song
+it comes in where it would be by then. Jumping around the song, or the host's loop
+brace, puts it back in time with a short dip. A take caught with the host stopped is free,
+and the transport never touches it, so you can loop without pressing play. The strip's
+heading says FOLLOWS THE HOST for a transport loop. A set saves which kind the take is,
+so a transport loop reopens waiting for play. A tap while it waits works as with any
+stopped loop: it catches a new take, which is free. The lock holds at TAPE's normal speed
+with CLOCK unmoved; with those changed the loop still stops and starts with the host, and
+plays at its own pace in between. ENV has no running playhead, so there the transport
+only stops and starts it. The standalone app and the browser version have no transport,
+so their loops are always free.
 
 **A new take plays all of itself.** Whenever a take arrives, from CAPTURE or RECORD,
 or when UNDO or REDO brings back a different take, START and END open to the whole take

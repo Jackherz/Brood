@@ -1,0 +1,28 @@
+# A loop caught while the host plays follows the transport: it fades out when the host
+# stops, comes back locked to the song when it plays (from bar 1, then from mid-song), and
+# is put back in time after a jump in song position. TAPE, 2 bars at 120 bpm.
+rate 48000
+seconds 16
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param loopMode 1
+0 param recMode 1
+0 param recBars 2
+0 param recAtTap 1
+0 param bpm 120
+0 param hostPlaying 1
+100 fs loop down
+104 fs loop up
+# recording 4 s (1500 blocks), then it plays; stop the host
+2300 param hostPlaying 0
+# play from bar 1
+2700 param songStart 2700
+2700 param hostPlaying 1
+# stop, then play from bar 2.5 (1.5 bars in = 3 s = 1125 blocks before)
+3600 param hostPlaying 0
+3900 param songStart 2775
+3900 param hostPlaying 1
+# a jump: the song position goes back to bar 1 while playing
+5000 param songStart 5000

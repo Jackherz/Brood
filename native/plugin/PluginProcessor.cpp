@@ -494,7 +494,7 @@ void BroodProcessor::applyPendingTakes() {
             ready = std::move(pendingTake_[i]);
             pendingTake_[i] = PendingTake{};
         }
-        (i == 0 ? core_ : coreRight_).restoreLoop(ready.pcm.data(), static_cast<int>(ready.pcm.size()), ready.play);
+        (i == 0 ? core_ : coreRight_).restoreLoop(ready.pcm.data(), static_cast<int>(ready.pcm.size()), ready.play, ready.follows, ready.anchor);
     }
 }
 
@@ -682,6 +682,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         if (fitLeft || fitRight) { fitLength_ = lengthLeft || lengthRight; fitPending_ = true; fitSamples_ = 0; resetFit_ = true; }
     }
     ui.canOverdub = st.canOverdub; ui.dubLatched = st.dubLatched; ui.undoKind = st.undoKind; ui.undoRedo = st.undoRedo;
+    ui.follows = st.follows; ui.parked = st.parked;
     // OVERDUB on as the core saw it, but not latched: no loop to layer into, or the loop
     // stopped. Set it back so a controller shows the truth.
     if (core_.p.overdubLatch && !core_.overdubLatched()) resetOverdub_ = true;
@@ -710,6 +711,11 @@ static void writeTake(juce::ValueTree& parent, const brood::Core& core, const ch
     take.setProperty("id", juce::String(name), nullptr);
     take.setProperty("samples", got, nullptr);
     take.setProperty("play", core.loopLedState() != brood::LoopState::Off, nullptr);
+    // A transport take reopens waiting for play, locked to the song from where it began.
+    if (core.takeFollowsTransport()) {
+        take.setProperty("follows", true, nullptr);
+        take.setProperty("anchor", core.takeAnchor(), nullptr);
+    }
     take.setProperty("pcm", juce::MemoryBlock(raw.getData(), raw.getDataSize()).toBase64Encoding(), nullptr);
     parent.appendChild(take, nullptr);
 }
@@ -815,6 +821,8 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
                 brood::Core::unpackLoop(pcm.data(), samples, ready.pcm.data());
                 ready.has = true;
                 ready.play = static_cast<bool>(take["play"]);
+                ready.follows = static_cast<bool>(take.getProperty("follows", false));   // older sets: free
+                ready.anchor = static_cast<double>(take.getProperty("anchor", 0.0));
                 const juce::SpinLock::ScopedLockType lock(takeLock_);
                 pendingTake_[slot] = std::move(ready);
             }

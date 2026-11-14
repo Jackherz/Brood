@@ -59,9 +59,19 @@ The bundle appears under `native/build/plugin/Brood_artefacts/Release/VST3/`.
 Targets: `Brood_VST3`, `Brood_Standalone`, and on macOS `Brood_AU`. Set
 `-DBROOD_BUILD_PLUGIN_TESTS=ON` for the headless processor tests and
 
-`native/build/plugin/editor_snapshot out.png [scale] [loop] [id=value ...]` (built with
-`-DBROOD_BUILD_PLUGIN_TESTS=ON`) renders the editor to a PNG without a DAW; `loop`
-catches a few seconds of the demo first so the waveform has a take.
+`native/build/plugin/editor_snapshot out.png [scale] [scene] [id=value ...]` (built with
+`-DBROOD_BUILD_PLUGIN_TESTS=ON`) renders the editor to a PNG without a DAW, with an empty
+Bench of its own. Values are normalised (0 to 1). A scene plays the demo first:
+
+- `loop` catches a take;
+- `listen` scrolls the input with nothing caught;
+- `record` taps and keeps recording (pass `recMode=1`);
+- `hold` holds the loop switch in CAPTURE;
+- `dub` catches a take, then holds to overdub;
+- `rerecord` (with `recMode=1`) records a second take over a stopped one;
+- `follow` and `parked` catch a take with a host transport playing, then stop it.
+
+The README's picture is `editor_snapshot docs/images/brood.png 1.33334 loop`.
 
 There are no prebuilt bundles: build locally, which matches your machine and macOS
 version exactly.

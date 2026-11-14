@@ -590,6 +590,12 @@ class BroodCore {
     this.resumeAfterOp = false;
     this.dubLatched = false; this.latchSeen = false;
     this.fitted = false;
+    // Transport takes: caught while the host played, anchored at the song position of their
+    // first sample. The undo copy keeps its own.
+    this.takeFollows = false; this.undoFollows = false; this.parked = false;
+    this.anchorPpq = 0; this.undoAnchor = 0;
+    this.lastHostPlaying = false; this.lastPpq = 0; this.lastBlockN = 0; this.blockStartCount = 0;
+    this.pendingLock = false; this.lockGain = 1;
     this.lsrc = 0;
     this.loopState = 'off';                     // off | play
     this.overdub = false;
@@ -660,6 +666,7 @@ class BroodCore {
       return;
     }
     this.settlePending();   // a CLEAR or UNDO still fading out happens now
+    this.parked = false;    // a tap with a transport loop parked works as with any stopped loop
     if (action === 'down') {
       const playing = this.loopState === 'play';
       const p = this.p, rec = this.rec;
@@ -726,7 +733,8 @@ class BroodCore {
     this.resumeAfterOp = this.loopState === 'play' && this.undoKind === 3;
     this.overdub = false; this.dubLatched = false;
     if (this.loopState === 'play' || this.loopGain > 0) { this.loopState = 'off'; this.pendingOp = 'undo'; return; }
-    this.runOp('undo');
+    this.pendingOp = 'undo';
+    this.settlePending();
   }
 
   canOverdub() { return this.loopState === 'play' && this.lsrc >= 64 && this.pendingOp === null; }
@@ -736,11 +744,13 @@ class BroodCore {
     if (this.overdub) return;
     this.undoBuf.set(this.loopBuf.subarray(0, this.lsrc));
     this.undoLen = this.lsrc; this.undoKind = 3; this.undoRedo = false;
+    this.undoFollows = this.takeFollows; this.undoAnchor = this.anchorPpq;
     this.overdub = true;
   }
 
   doClear() {
     [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
+    this.undoFollows = this.takeFollows; this.undoAnchor = this.anchorPpq; this.takeFollows = false; this.parked = false;
     this.undoLen = this.lsrc; this.lsrc = 0; this.loopPos = 0;
     this.undoKind = 2; this.undoRedo = false;
     this.events.push('loop-wave');
@@ -750,6 +760,8 @@ class BroodCore {
     if (op === 'clear') { this.doClear(); return; }
     [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
     [this.lsrc, this.undoLen] = [this.undoLen, this.lsrc];
+    [this.takeFollows, this.undoFollows] = [this.undoFollows, this.takeFollows];   // each take keeps its kind
+    [this.anchorPpq, this.undoAnchor] = [this.undoAnchor, this.anchorPpq];
     this.undoRedo = !this.undoRedo;
     if (this.undoKind !== 3) {
       this.loopPos = 0;
@@ -762,13 +774,43 @@ class BroodCore {
   }
 
   // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
+  // An undone take plays, since a tap with the loop stopped would catch a new one instead;
+  // a transport take with the host stopped parks and waits for play. Undoing a layer keeps
+  // a playing loop playing and a stopped one stopped.
   settlePending() {
     if (!this.pendingOp) return;
     const op = this.pendingOp;
     this.pendingOp = null;
+    const layer = this.undoKind === 3;
     this.runOp(op);
-    if (this.resumeAfterOp && this.lsrc >= 64) this.loopState = 'play';
+    this.parked = false;
+    if (op === 'undo' && this.lsrc >= 64 && (!layer || this.resumeAfterOp)) {
+      if (this.takeFollows && !this.p.hostPlaying) this.parked = true;
+      else { this.loopState = 'play'; if (this.takeFollows) { this.pendingLock = true; this.lockGain = 0; } }
+    }
     this.resumeAfterOp = false;
+  }
+
+  // ── the host's transport ── (mirrors native/dsp/brood.h)
+  songNow() { return this.p.ppq + (this.hostCount - this.blockStartCount) * this.p.bpm / (60 * this.fs); }
+  songTicks(winStart, W) {
+    const secs = (this.songNow() - this.anchorPpq) * 60 / Math.max(5, this.p.bpm);
+    let q = (secs * this.clockRatio * this.fs - winStart) % W; if (q < 0) q += W;
+    return q;
+  }
+  followTransport(n) {
+    const playing = !!this.p.hostPlaying;
+    if (this.takeFollows && this.lsrc >= 64) {
+      if (this.lastHostPlaying && !playing && this.loopState === 'play') {
+        this.loopState = 'off'; this.overdub = false; this.dubLatched = false; this.parked = true;
+      } else if (!this.lastHostPlaying && playing && this.parked) {
+        this.parked = false; this.loopState = 'play'; this.pendingLock = true; this.lockGain = 0;
+      } else if (this.lastHostPlaying && playing && this.loopState === 'play' && this.lastBlockN > 0) {
+        const expected = this.lastPpq + this.lastBlockN * this.p.bpm / (60 * this.fs);
+        if (Math.abs(this.p.ppq - expected) > 0.05) this.pendingLock = true;   // a jump, not drift
+      }
+    }
+    this.lastHostPlaying = playing; this.lastPpq = this.p.ppq; this.lastBlockN = n;
   }
 
   // Copy the most recent n samples of history into the loop buffer and play.
@@ -809,6 +851,7 @@ class BroodCore {
     // The take this replaces becomes UNDO's copy: a swap, nothing copied.
     [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
     this.undoLen = this.lsrc >= 64 ? this.lsrc : 0;
+    this.undoFollows = this.takeFollows; this.undoAnchor = this.anchorPpq;
     this.undoKind = 1; this.undoRedo = false;
     const N = this.hist.length;
     let r = this.histW - n; if (r < 0) r += N;
@@ -826,6 +869,10 @@ class BroodCore {
     this.loopState = 'play';
     this.events.push('loop-wave');
     this.fitWindow();
+    // Caught while the host plays: it follows the transport, anchored at the song position
+    // its first sample belongs to.
+    this.takeFollows = !!this.p.hostPlaying; this.parked = false; this.pendingLock = false; this.lockGain = 1;
+    this.anchorPpq = this.songNow() - n / Math.max(1, this.clockRatio * this.fs) * this.p.bpm / 60;
   }
 
   // A new take plays all of itself: END at the end, START out of the way and, in TAPE,
@@ -990,6 +1037,11 @@ class BroodCore {
     else this.lengthSlew += clamp(this.e.length - this.lengthSlew, -maxL, maxL);
     const win = this.p.loopMode === 1 ? this.loopWindowAt(this.lengthSlew) : this.loopWindow();
     const W = win.W, winStart = win.start;
+    // The song lock: dip for 5 ms, move the playhead to where the song says, come back.
+    if (this.pendingLock) {
+      this.lockGain = Math.max(0, this.lockGain - 1 / (0.005 * CORE_FS));
+      if (this.lockGain <= 0) { this.loopPos = this.songTicks(winStart, W); this.pendingLock = false; }
+    } else if (this.lockGain < 1) this.lockGain = Math.min(1, this.lockGain + 1 / (0.005 * CORE_FS));
     const buf = this.loopBuf;
     const len = Math.max(64, this.lsrc);
     const mode = this.p.loopMode;
@@ -1208,7 +1260,7 @@ class BroodCore {
     // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
     if (this.p.loopDb !== this.loopDbSeen) { this.loopDbSeen = this.p.loopDb; this.loopLevelTarget = Math.pow(10, this.p.loopDb / 20); }
     this.loopLevel += (this.loopLevelTarget - this.loopLevel) * 0.003;
-    return y * this.loopGain * this.loopLevel;
+    return y * this.loopGain * this.loopLevel * this.lockGain;
   }
 
   coreTick(x) {
@@ -1374,7 +1426,9 @@ class BroodCore {
         if (!(fl && fl.held && fl.playing)) this.overdub = false;   // a hold keeps its layer
       }
     }
+    this.followTransport(n);
     const blockStart = this.hostCount;
+    this.blockStartCount = this.hostCount;
 
     let pkIn = 0, pkOut = 0;
     for (let i = 0; i < n; i++) {
@@ -1493,6 +1547,7 @@ class BroodCore {
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
       recArmed: this.rec.phase === 'armed',
       canOverdub: this.canOverdub(), dubLatched: this.dubLatched, undoKind: this.undoKind, undoRedo: this.undoRedo,
+      follows: this.takeFollows && this.lsrc >= 64, parked: this.parked,
     };
   }
 

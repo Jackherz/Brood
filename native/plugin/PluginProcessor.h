@@ -96,6 +96,8 @@ public:
         // 3 a layer), and whether that step is already undone (so UNDO redoes).
         std::atomic<bool> canOverdub { false }, dubLatched { false }, undoRedo { false };
         std::atomic<int> undoKind { 0 };
+        // The take follows the host's transport, and is parked (the host stopped it).
+        std::atomic<bool> follows { false }, parked { false };
     } ui;
     // Peak of each brood::kLiveColTicks of the history ring, both sides; any thread may read.
     float livePeak(int column) const {
@@ -133,7 +135,7 @@ private:
     void handleAsyncUpdate() override;
     // A take restored from the state, waiting to be swapped in by the audio thread.
     // (A host that renders offline may be a fresh instance with nothing captured.)
-    struct PendingTake { std::vector<float> pcm; bool play = false; bool has = false; };
+    struct PendingTake { std::vector<float> pcm; bool play = false; bool has = false; bool follows = false; double anchor = 0; };
     juce::SpinLock takeLock_;
     PendingTake pendingTake_[2];
     void applyPendingTakes();

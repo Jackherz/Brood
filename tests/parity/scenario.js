@@ -1,6 +1,6 @@
 // Scenario format shared by the JS and C++ renderers (see native/tests/render.cpp).
 //   rate <Hz> | seconds <s> | <block> param <name> <value> | <block> fs <wet|loop> <down|up>
-//   | <block> op <clear|undo>
+//   | <block> op <clear|undo> | <block> param songStart <block> (the song restarts from bar 1)
 'use strict';
 const BLOCK = 128;
 

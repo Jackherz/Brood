@@ -1,0 +1,18 @@
+# A loop caught with the host stopped is free: the host starting, stopping and jumping
+# around never touches it. ENV-free TAPE, as in transport_follow.
+rate 48000
+seconds 10
+0 param mix 1
+0 param routing 2
+0 param balance 1
+0 param clock 1
+0 param loopMode 1
+0 param memory 0.4
+300 fs loop down
+304 fs loop up
+800 param hostPlaying 1
+1500 param hostPlaying 0
+1800 param songStart 1800
+1800 param hostPlaying 1
+2500 param songStart 2500
+3000 param hostPlaying 0

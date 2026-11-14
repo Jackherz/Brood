@@ -1700,8 +1700,8 @@ test('OVERDUB latched, CLEAR and UNDO', () => {
     assert.equal(core.state().undoKind, 2);
     core.undoLoop();
     assert.deepStrictEqual(take(core), kept, 'UNDO brings the cleared take back');
-    assert.equal(core.state().loop, 'off', 'stopped');
-    core.undoLoop();
+    assert.equal(core.state().loop, 'play', 'and plays it (a tap would catch a new take)');
+    core.undoLoop(); render(core, 0.3, silence);   // playing: it fades out first
     assert.equal(core.lsrc, 0, 'UNDO again clears again');
   }
   {
@@ -1753,4 +1753,36 @@ test('a new take plays all of itself: START and END around it, LENGTH full in TA
   render(core, 4.2, sine);
   const plays = core.state().winLen / core.state().clockHz;
   assert.ok(Math.abs(plays - 4) < 0.02, `RECORD: 2 bars plays 2 bars (${plays.toFixed(3)} s)`);
+});
+
+test('transport loops: a take caught while the host plays follows its transport', () => {
+  const sine = (t) => 0.4 * Math.sin(2 * Math.PI * 440 * t);
+  const g = { total: 0, start: 0 };
+  // Render with the host's song position running from g.start (in blocks).
+  const run = (core, secs, src) => {
+    const n = Math.ceil((secs * FS) / BLOCK), at = {};
+    for (let b = 0; b < n; b++) { const k = g.total + b; at[b] = (c) => { c.p.ppq = ((k - g.start) * BLOCK) / FS * c.p.bpm / 60; }; }
+    render(core, secs, src, at);
+    g.total += n;
+  };
+  const off = (got, want) => Math.abs(((got - want + 6) % 4) - 2);
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ clock: 1, loopMode: 1, modLoop: 0.66, mix: 1, balance: 1, routing: 2, bpm: 120, recMode: 1, recBars: 2, recAtTap: 1, hostPlaying: 1 })) core.setParam(k, v);
+  run(core, 0.5, sine);
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  run(core, 4.2, sine);
+  assert.ok(core.state().follows, 'recorded while the host plays, it follows');
+  core.setParam('hostPlaying', 0); run(core, 0.4, () => 0);
+  assert.ok(core.state().loop === 'off' && core.state().parked, 'the host stops: it stops and waits');
+  g.start = g.total; core.setParam('hostPlaying', 1); run(core, 0.5, () => 0);
+  const at = core.state().pos / core.state().clockHz;
+  assert.ok(core.state().loop === 'play' && off(at, 0) < 0.02, `play: back in time with the song (${at.toFixed(3)} s in, want 0)`);
+
+  const free = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ clock: 1, loopMode: 1, memory: 0.3 })) free.setParam(k, v);
+  render(free, 2, sine);
+  free.footswitch('loop', 'down'); free.footswitch('loop', 'up');
+  free.setParam('hostPlaying', 1); render(free, 0.3, sine);
+  free.setParam('hostPlaying', 0); render(free, 0.3, sine);
+  assert.ok(!free.state().follows && free.state().loop === 'play', 'caught with the host stopped, the host never touches it');
 });

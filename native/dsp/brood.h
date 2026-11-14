@@ -630,6 +630,9 @@ struct State {
     // and whether that step has been undone already, so pressing it again redoes.
     int undoKind = 0;
     bool undoRedo = false;
+    // The take follows the host's transport (it was caught while the host played), and is
+    // parked: the host stopped it, and it waits for play.
+    bool follows = false, parked = false;
 };
 
 class Core {
@@ -665,6 +668,7 @@ public:
         histCycles = 0;
         overdub = false;
         dubLatched = latchSeen = false; pendingOp = LoopOp::None; resumeAfterOp = false;
+        pendingLock = false; lockGain = 1; lastHostPlaying = false; lastBlockN = 0;
         loopGain = 0; tapeSpeed = 1; stretchSpeed = 0;
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         softStart = softPh = softS = softOldFade = softOldS = 0;
@@ -696,6 +700,7 @@ public:
             return;
         }
         settlePending();   // a CLEAR or UNDO still fading out happens now
+        parked = false;    // a tap with a transport loop parked works as with any stopped loop
         if (down) {
             const bool playing = loopState == LoopState::Play;
             // RECORD, with nothing playing: a tap while recording (or armed) ends it there.
@@ -757,9 +762,13 @@ public:
         resumeAfterOp = loopState == LoopState::Play && undoKind == UndoKind::Dub;
         overdub = false; dubLatched = false;
         if (loopState == LoopState::Play || loopGain > 0) { loopState = LoopState::Off; pendingOp = LoopOp::Undo; return; }
-        runOp(LoopOp::Undo);
+        pendingOp = LoopOp::Undo;
+        settlePending();
     }
     bool overdubLatched() const { return dubLatched; }
+    // The take is a transport take, and the song position its first sample belongs to (for saving).
+    bool takeFollowsTransport() const { return takeFollows && lsrc >= 64; }
+    double takeAnchor() const { return anchorPpq; }
     // True once after a take arrived and fitted the window (see fitWindow), with TAPE's
     // LENGTH moved too when `lengthToo`.
     bool takeFitted(bool& lengthToo) {
@@ -794,7 +803,9 @@ public:
                 if (!(fsLoop.active && fsLoop.held && fsLoop.playing)) overdub = false;   // a hold keeps its layer
             }
         }
+        followTransport(n);
         const int64_t blockStart = hostCount;
+        blockStartCount = hostCount;
 
         double pkIn = 0, pkOut = 0;
         for (int i = 0; i < n; ++i) {
@@ -902,6 +913,7 @@ public:
                      static_cast<float>(peakIn), static_cast<float>(peakOut), rec.phase == RecPhase::Armed};
         st.canOverdub = canOverdub(); st.dubLatched = dubLatched;
         st.undoKind = static_cast<int>(undoKind); st.undoRedo = undoRedo;
+        st.follows = takeFollows && lsrc >= 64; st.parked = parked;
         return st;
     }
 
@@ -945,12 +957,17 @@ public:
         return n;
     }
     // Put a take back. `n` must already be in core-clock samples.
-    void restoreLoop(const float* pcm, int n, bool play) {
+    // `follows`: a transport take, with the song position its first sample belongs to. It
+    // comes back parked and plays when the host does.
+    void restoreLoop(const float* pcm, int n, bool play, bool follows = false, double anchor = 0) {
         if (pcm == nullptr || n < 64 || n > static_cast<int>(loopBuf.size())) return;
         loopBuf.assign(loopBuf.size(), 0.f);      // keep the allocation, clear the old take
         std::copy(pcm, pcm + n, loopBuf.begin());
         lsrc = n; loopPos = 0; loopGain = 1;
         loopState = play ? LoopState::Play : LoopState::Off;
+        takeFollows = follows; anchorPpq = anchor; pendingLock = false; lockGain = 1;
+        if (follows) { loopState = LoopState::Off; loopGain = 0; parked = true; lastHostPlaying = false; }
+        else parked = false;
         loopWaveDirty = true;
         undoKind = UndoKind::None; undoRedo = false; undoLen = 0;   // a reopened set has no undo
         pendingOp = LoopOp::None; overdub = dubLatched = false;
@@ -1074,6 +1091,16 @@ private:
     bool resumeAfterOp = false;
     bool dubLatched = false, latchSeen = false;
     bool fitted = false;
+    // Transport takes: caught while the host played, anchored at the song position of their
+    // first sample. The undo copy keeps its own.
+    bool takeFollows = false, undoFollows = false, parked = false;
+    double anchorPpq = 0, undoAnchor = 0;
+    bool lastHostPlaying = false;
+    double lastPpq = 0;
+    int lastBlockN = 0;
+    int64_t blockStartCount = 0;
+    bool pendingLock = false;
+    double lockGain = 1;
     int64_t histTotal = 0;
     int histW = 0, histCount = 0, lsrc = 0;
     uint32_t histCycles = 0;
@@ -1215,10 +1242,12 @@ private:
         if (overdub) return;
         std::copy(loopBuf.begin(), loopBuf.begin() + lsrc, undoBuf.begin());
         undoLen = lsrc; undoKind = UndoKind::Dub; undoRedo = false;
+        undoFollows = takeFollows; undoAnchor = anchorPpq;
         overdub = true;
     }
     void doClear() {
         std::swap(loopBuf, undoBuf);
+        undoFollows = takeFollows; undoAnchor = anchorPpq; takeFollows = false; parked = false;
         undoLen = lsrc; lsrc = 0; loopPos = 0;
         undoKind = UndoKind::Clear; undoRedo = false;
         loopWaveDirty = true;
@@ -1226,6 +1255,7 @@ private:
     void runOp(LoopOp op) {
         if (op == LoopOp::Clear) { doClear(); return; }
         std::swap(loopBuf, undoBuf); std::swap(lsrc, undoLen);
+        std::swap(takeFollows, undoFollows); std::swap(anchorPpq, undoAnchor);   // each take keeps its kind
         undoRedo = !undoRedo;
         if (undoKind != UndoKind::Dub) {
             loopPos = 0; grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
@@ -1234,13 +1264,47 @@ private:
         loopWaveDirty = true;
     }
     // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
+    // An undone take plays, since a tap with the loop stopped would catch a new one instead;
+    // a transport take with the host stopped parks and waits for play. Undoing a layer keeps
+    // a playing loop playing and a stopped one stopped.
     void settlePending() {
         if (pendingOp == LoopOp::None) return;
         const LoopOp op = pendingOp;
         pendingOp = LoopOp::None;
+        const bool layer = undoKind == UndoKind::Dub;
         runOp(op);
-        if (resumeAfterOp && lsrc >= 64) loopState = LoopState::Play;
+        parked = false;
+        if (op == LoopOp::Undo && lsrc >= 64 && (!layer || resumeAfterOp)) {
+            if (takeFollows && !p.hostPlaying) parked = true;
+            else { loopState = LoopState::Play; if (takeFollows) { pendingLock = true; lockGain = 0; } }
+        }
         resumeAfterOp = false;
+    }
+
+    // ── the host's transport ──
+    // The song position now, in quarter notes, from this block's start and the host samples since.
+    double songNow() const { return p.ppq + static_cast<double>(hostCount - blockStartCount) * p.bpm / (60.0 * fs); }
+    // Where a transport take's window should be at this song position, in ticks into it.
+    double songTicks(int winStart, double Wd) const {
+        const double secs = (songNow() - anchorPpq) * 60.0 / std::max(5.0, p.bpm);
+        double q = jsMod(secs * clockRatio * fs - winStart, Wd); if (q < 0) q += Wd;
+        return q;
+    }
+    // Once a block: a transport take fades out and parks when the host stops, comes back
+    // locked to the song when it plays, and is put back in time after a jump in song position.
+    void followTransport(int n) {
+        const bool playing = p.hostPlaying;
+        if (takeFollows && lsrc >= 64) {
+            if (lastHostPlaying && !playing && loopState == LoopState::Play) {
+                loopState = LoopState::Off; overdub = false; dubLatched = false; parked = true;
+            } else if (!lastHostPlaying && playing && parked) {
+                parked = false; loopState = LoopState::Play; pendingLock = true; lockGain = 0;
+            } else if (lastHostPlaying && playing && loopState == LoopState::Play && lastBlockN > 0) {
+                const double expected = lastPpq + lastBlockN * p.bpm / (60.0 * fs);
+                if (std::fabs(p.ppq - expected) > 0.05) pendingLock = true;   // a jump, not drift
+            }
+        }
+        lastHostPlaying = playing; lastPpq = p.ppq; lastBlockN = n;
     }
 
     // Everything written since the recording began becomes the loop, which plays at once.
@@ -1257,6 +1321,7 @@ private:
         const int N = static_cast<int>(hist.size());
         // The take this replaces becomes UNDO's copy: a swap, nothing copied.
         std::swap(loopBuf, undoBuf); undoLen = lsrc >= 64 ? lsrc : 0;
+        undoFollows = takeFollows; undoAnchor = anchorPpq;
         undoKind = UndoKind::Take; undoRedo = false;
         int r = histW - n; if (r < 0) r += N;
         for (int i = 0; i < n; ++i) { loopBuf[static_cast<size_t>(i)] = hist[static_cast<size_t>(r)]; if (++r >= N) r = 0; }
@@ -1267,6 +1332,10 @@ private:
         loopState = LoopState::Play;
         loopWaveDirty = true;
         fitWindow();
+        // Caught while the host plays: it follows the transport, anchored at the song position
+        // its first sample belongs to.
+        takeFollows = p.hostPlaying; parked = false; pendingLock = false; lockGain = 1;
+        anchorPpq = songNow() - n / std::max(1.0, clockRatio * fs) * p.bpm / 60.0;
     }
 
     // A new take plays all of itself: END at the end, START out of the way and, in TAPE,
@@ -1343,6 +1412,11 @@ private:
         const int W = win.W;
         const int len = std::max(64, lsrc);
         const double Wd = W;
+        // The song lock: dip for 5 ms, move the playhead to where the song says, come back.
+        if (pendingLock) {
+            lockGain = std::max(0.0, lockGain - 1.0 / (0.005 * kCoreFs));
+            if (lockGain <= 0) { loopPos = songTicks(win.start, Wd); pendingLock = false; }
+        } else if (lockGain < 1) lockGain = std::min(1.0, lockGain + 1.0 / (0.005 * kCoreFs));
         const int mode = p.loopMode;
         const double trimNow = clampd(p.loopEnd, 0.02, 1), whereNow = clampd(p.start, 0, 1);
         // Only LENGTH moved the window: same mode, same END, same START, same take.
@@ -1552,7 +1626,7 @@ private:
         // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
         if (p.loopDb != loopDbSeen) { loopDbSeen = p.loopDb; loopLevelTarget = std::pow(10.0, p.loopDb / 20.0); }
         loopLevel += (loopLevelTarget - loopLevel) * 0.003;
-        return y * loopGain * loopLevel;
+        return y * loopGain * loopLevel * lockGain;
     }
 
     void coreTick(double x) {
