@@ -1093,7 +1093,8 @@ private:
     bool fitted = false;
     // ENV synced to a playing host: the grid line the last tick was in, at which slice length.
     bool sliceFresh = false;
-    double gridS = -1, gridLine = 0;
+    double gridS = -1, gridLine = 0, gridTLine = 0;   // the grid line of the slice's own length, and of LENGTH's
+    double sliceS = -1, sliceIn = 1;                    // synced: the length the slice plays at; a fade-in after a jump
     // Transport takes: caught while the host played, anchored at the song position of their
     // first sample. The undo copy keeps its own.
     bool takeFollows = false, undoFollows = false, parked = false;
@@ -1549,30 +1550,52 @@ private:
                 const double S = p.envSync
                     ? std::min(Wd, std::max(64.0, syncSecondsRaw(p.bpm, e.length) * clockRatio * fs))
                     : std::min(expMap(e.length, 0.01 * kCoreFs, 1.0 * kCoreFs), Wd);
-                // Synced with the host playing, slices land on the host's grid: a new one starts
-                // on each grid line of the division, counted from the song position. A LENGTH
-                // move changes the division, which re-bases the count without starting a slice,
-                // so the new length takes over at its next grid line and nothing jumps.
-                const bool grid = p.envSync && p.hostPlaying;
+                // Synced, a slice plays at its own length (sliceS), and a new LENGTH takes over at the
+                // next slice start, so a slice is never cut short and nothing goes quiet. Unsynced,
+                // the length follows LENGTH as it always has.
+                const bool synced = p.envSync;
+                if (!synced || sliceFresh || sliceS <= 0) sliceS = S;
+                // The slice sounding now fades out under the next one: 4 ms, or SOFT's 20.
+                auto handOff = [&] { softStart = sliceStart; softPh = slicePh; softOldS = soft ? softS : sliceS; softOldFade = 1; };
+                // With the host playing, slices land on its grid, counted from the song position.
+                const bool grid = synced && p.hostPlaying;
                 if (grid) {
                     const double t = songNow() * 60.0 / std::max(5.0, p.bpm) * clockRatio * fs * lstep;   // the song, in slice ticks
-                    const double line = std::floor(t / S);
-                    const double into = t - line * S;
-                    if (sliceFresh) slicePh = into;   // the envelope just opened: join the slice the grid is in
-                    else if (S == gridS && line != gridLine) {
-                        if (soft && envMix > 1e-4) { softStart = sliceStart; softPh = slicePh; softOldS = softS; softOldFade = 1; }
-                        slicePh = into;
+                    const double tLine = std::floor(t / S), tInto = t - tLine * S;   // LENGTH's division
+                    if (sliceFresh) {
+                        // The envelope just opened: join the slice the grid is in, reading from where the
+                        // loop was at its grid line, so the slice carries on from the loop (a 1/1 slice
+                        // of a 1-bar loop is the loop).
+                        slicePh = tInto; sliceStart = pos - tInto; gridLine = tLine;
+                    } else if (S != sliceS && S == gridS && tLine != gridTLine) {
+                        // A grid line of the new division: the new length takes over here.
+                        handOff(); sliceS = S; slicePh = tInto; gridLine = tLine;
+                    } else {
+                        // The slice's own grid: a new slice at each of its lines. Its count runs on the
+                        // engine's ticks and carries over; the song position only moves in host samples,
+                        // so it takes over only after a real drift, such as a jump in the song.
+                        const double line = std::floor(t / sliceS), into = t - line * sliceS;
+                        if (line != gridLine) {
+                            if (soft) handOff();
+                            const double carried = slicePh - sliceS;
+                            if (std::fabs(carried - into) < 4.0) slicePh = carried;
+                            else { if (!soft) handOff(); slicePh = into; sliceIn = 0; }   // a jump: fade the new slice in
+                            gridLine = line;
+                        }
                     }
-                    gridS = S; gridLine = line;
-                    if (soft) softS = S;
+                    gridS = S; gridTLine = tLine;
+                    if (soft) softS = sliceS;
                 } else gridS = -1;
                 sliceFresh = false;
+                // A slice that starts mid-way (after a jump) fades in rather than starting at full level.
+                if (sliceIn < 1) sliceIn = std::min(1.0, sliceIn + 1.0 / ((soft ? 0.02 : 0.004) * kCoreFs));
                 if (soft) {
                     // The slice length glides, so a moving LENGTH can't cut a fade short.
                     softS = softS <= 0 ? S : softS + (S - softS) * 0.0005;
+                    if (grid) softS = sliceS;
                     if (slicePh >= softS) slicePh -= softS;
                     const double F3 = std::min(softF, softS / 4);
-                    sl = rd(sliceStart + slicePh) * (0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3})));
+                    sl = rd(sliceStart + slicePh) * (0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3}))) * sliceIn;
                     if (softOldFade > 0) {
                         const double F4 = std::min(softF, softOldS / 4);
                         const double shape = 0.5 - 0.5 * std::cos(kPi * std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0));
@@ -1581,9 +1604,17 @@ private:
                         softOldFade = std::max(0.0, softOldFade - 1.0 / softF);
                     }
                 } else {
-                    if (!grid && slicePh >= S) slicePh -= S;   // on the grid, a slice cut short waits for its line
-                    const double F2 = std::min(0.004 * kCoreFs, S / 4);
-                    sl = rd(sliceStart + slicePh) * std::max(0.0, std::min({1.0, slicePh / F2, (S - slicePh) / F2}));
+                    // Synced but off the grid, a new length takes over at the slice's own end.
+                    if (!grid && slicePh >= sliceS) { slicePh -= sliceS; sliceS = S; }
+                    const double F2 = std::min(0.004 * kCoreFs, sliceS / 4);
+                    sl = rd(sliceStart + slicePh) * std::max(0.0, std::min({1.0, slicePh / F2, (sliceS - slicePh) / F2})) * sliceIn;
+                    if (softOldFade > 0) {
+                        const double F4 = std::min(0.004 * kCoreFs, softOldS / 4);
+                        const double shape = std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0);
+                        sl += rd(softStart + softPh) * shape * softOldFade;
+                        softPh += lstep;
+                        softOldFade = std::max(0.0, softOldFade - 1.0 / (0.004 * kCoreFs));
+                    }
                 }
                 slicePh += lstep;
             }

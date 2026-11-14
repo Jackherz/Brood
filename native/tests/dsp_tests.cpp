@@ -1259,6 +1259,54 @@ int main() {
         CHECK(before >= 3 && after >= 3, "ENV sync: slices repeat (%d before the LENGTH move, %d after)", before, after);
         CHECK(wrong == 0, "ENV sync: every slice starts on the host's grid, before and after LENGTH moves (%d off, worst %.4f s)", wrong, worst);
     }
+    {   // ENV synced, 1/1 over a 1-bar loop: the slice is the loop, however mid-bar the envelope opens
+        auto play = [&](bool openGate) {
+            brood::Core c; c.p.clock = 1; c.p.loopMode = 0; c.p.envSync = true; c.p.modLoop = 1; c.p.length = 1.0;
+            c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true;
+            c.p.recMode = 1; c.p.recBars = 1; c.prepare(FS);
+            return render(c, 10, [&](double t) {
+                if (t < 4.2) return 0.3 * std::sin(2 * brood::kPi * (300 + 200 * std::fmod(t, 2.0)) * t);   // a sweep, so any shift shows
+                return openGate && t > 5.37 ? 0.02 : 0.0;                                                       // opens the envelope mid-bar
+            }, [&](brood::Core& cc, long b) {
+                cc.p.ppq = static_cast<double>(b * B) / FS * 2; cc.p.barStartPpq = std::floor(cc.p.ppq / 4) * 4;
+                if (b == blk(0.3)) tap(cc, 1);   // records bar 2, 2 to 4 s
+            }).L;
+        };
+        const auto loop = play(false), sliced = play(true);
+        double diff = 0, level = 0;
+        for (size_t i = static_cast<size_t>(6 * FS); i < static_cast<size_t>(10 * FS); ++i) {
+            const double d = sliced[i] - loop[i];
+            diff += d * d; level += loop[i] * static_cast<double>(loop[i]);
+        }
+        const double dB = 10 * std::log10(diff / level + 1e-12);
+        CHECK(dB < -60, "ENV sync: a 1/1 slice of a 1-bar loop is the loop (%.1f dB apart)", dB);
+    }
+    {   // ENV synced, LENGTH swept while the host plays: no clicks, and no slice cut into silence
+        for (int soft = 0; soft < 2; ++soft)
+            for (double rate : {0.3, 2.0}) {
+                brood::Core c; c.p.clock = 1; c.p.loopMode = 0; c.p.modLoop = 1; c.p.memory = 0.3;
+                c.p.mix = 1; c.p.balance = 1; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true;
+                c.p.envSync = true; c.p.envSoft = soft == 1; c.p.length = 0.5;
+                c.prepare(FS);
+                const Out o = render(c, 14, [](double t) {
+                    return t < 2.0 ? 0.3 * std::sin(2 * brood::kPi * 220 * t) : 0.0005 * std::sin(2 * brood::kPi * 50 * t) + 0.01;   // then just enough to hold the envelope open
+                }, [&](brood::Core& cc, long b) {
+                    const double t0 = static_cast<double>(b * B) / FS;
+                    cc.p.ppq = t0 * 2;
+                    if (b == blk(2.0)) tap(cc, 1);
+                    if (t0 > 3) cc.p.length = 0.5 + 0.5 * std::sin(2 * brood::kPi * rate * (t0 - 3));   // end to end, as a modulation source would
+                });
+                double step = 0; long run = 0, longest = 0;
+                for (size_t i = static_cast<size_t>(3.5 * FS); i < o.L.size(); ++i) {
+                    step = std::max(step, static_cast<double>(std::fabs(o.L[i] - o.L[i - 1])));
+                    if (std::fabs(o.L[i]) < 0.003f) { if (++run > longest) longest = run; } else run = 0;
+                }
+                // The tone's own slope is about 0.009 a sample; cutting a slice short jumped by up to 0.4
+                // and left up to half a second of silence.
+                CHECK(step < 0.04, "ENV sync, SOFT %d, LENGTH swept at %.1f Hz: no click (largest step %.3f)", soft, rate, step);
+                CHECK(longest < FS * 0.02, "ENV sync, SOFT %d, LENGTH swept at %.1f Hz: nothing cuts out (longest silence %.0f ms)", soft, rate, longest / FS * 1000);
+            }
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };

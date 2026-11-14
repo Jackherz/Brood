@@ -596,7 +596,8 @@ class BroodCore {
     this.anchorPpq = 0; this.undoAnchor = 0;
     this.lastHostPlaying = false; this.lastPpq = 0; this.lastBlockN = 0; this.blockStartCount = 0;
     this.pendingLock = false; this.lockGain = 1;
-    this.sliceFresh = false; this.gridS = -1; this.gridLine = 0;   // ENV synced to a playing host
+    this.sliceFresh = false; this.gridS = -1; this.gridLine = 0; this.gridTLine = 0;   // ENV synced to a playing host
+    this.sliceS = -1; this.sliceIn = 1;
     this.lsrc = 0;
     this.loopState = 'off';                     // off | play
     this.overdub = false;
@@ -1182,27 +1183,41 @@ class BroodCore {
           ? Math.min(W, Math.max(64, syncSecondsRaw(this.p.bpm, this.e.length) * this.clockRatio * this.fs))
           : Math.min(expMap(this.e.length, 0.01 * fs, 1.0 * fs), W);
         const sl0 = this.slice;
-        // Synced with the host playing, slices land on the host's grid (see native/dsp/brood.h).
-        const grid = !!this.p.envSync && !!this.p.hostPlaying;
+        // Synced, a slice plays at its own length (sliceS) and a new LENGTH takes over at the next
+        // slice start; with the host playing, slices land on its grid. Mirrors native/dsp/brood.h.
+        const synced = !!this.p.envSync;
+        if (!synced || this.sliceFresh || this.sliceS <= 0) this.sliceS = S;
+        const handOff = () => { this.softStart = sl0.start; this.softPh = sl0.ph; this.softOldS = soft ? this.softS : this.sliceS; this.softOldFade = 1; };
+        const grid = synced && !!this.p.hostPlaying;
         if (grid) {
           const t = this.songNow() * 60 / Math.max(5, this.p.bpm) * this.clockRatio * this.fs * lstep;
-          const line = Math.floor(t / S);
-          const into = t - line * S;
-          if (this.sliceFresh) sl0.ph = into;
-          else if (S === this.gridS && line !== this.gridLine) {
-            if (soft && this.envMix > 1e-4) { this.softStart = sl0.start; this.softPh = sl0.ph; this.softOldS = this.softS; this.softOldFade = 1; }
-            sl0.ph = into;
+          const tLine = Math.floor(t / S), tInto = t - tLine * S;
+          if (this.sliceFresh) {
+            sl0.ph = tInto; sl0.start = pos - tInto; this.gridLine = tLine;
+          } else if (S !== this.sliceS && S === this.gridS && tLine !== this.gridTLine) {
+            handOff(); this.sliceS = S; sl0.ph = tInto; this.gridLine = tLine;
+          } else {
+            const line = Math.floor(t / this.sliceS), into = t - line * this.sliceS;
+            if (line !== this.gridLine) {
+              if (soft) handOff();
+              const carried = sl0.ph - this.sliceS;
+              if (Math.abs(carried - into) < 4) sl0.ph = carried;
+              else { if (!soft) handOff(); sl0.ph = into; this.sliceIn = 0; }
+              this.gridLine = line;
+            }
           }
-          this.gridS = S; this.gridLine = line;
-          if (soft) this.softS = S;
+          this.gridS = S; this.gridTLine = tLine;
+          if (soft) this.softS = this.sliceS;
         } else this.gridS = -1;
         this.sliceFresh = false;
+        if (this.sliceIn < 1) this.sliceIn = Math.min(1, this.sliceIn + 1 / ((soft ? 0.02 : 0.004) * CORE_FS));
         if (soft) {
           // The slice length glides, so a moving LENGTH can't cut a fade short.
           this.softS = this.softS <= 0 ? S : this.softS + (S - this.softS) * 0.0005;
+          if (grid) this.softS = this.sliceS;
           if (sl0.ph >= this.softS) sl0.ph -= this.softS;
           const F3 = Math.min(softF, this.softS / 4);
-          sl = rd(sl0.start + sl0.ph) * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3)));
+          sl = rd(sl0.start + sl0.ph) * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3))) * this.sliceIn;
           if (this.softOldFade > 0) {
             const F4 = Math.min(softF, this.softOldS / 4);
             const shape = 0.5 - 0.5 * Math.cos(Math.PI * clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1));
@@ -1211,9 +1226,16 @@ class BroodCore {
             this.softOldFade = Math.max(0, this.softOldFade - 1 / softF);
           }
         } else {
-          if (!grid && sl0.ph >= S) sl0.ph -= S;   // on the grid, a slice cut short waits for its line
-          const F2 = Math.min(0.004 * fs, S / 4);
-          sl = rd(sl0.start + sl0.ph) * Math.max(0, Math.min(1, sl0.ph / F2, (S - sl0.ph) / F2));
+          if (!grid && sl0.ph >= this.sliceS) { sl0.ph -= this.sliceS; this.sliceS = S; }
+          const F2 = Math.min(0.004 * fs, this.sliceS / 4);
+          sl = rd(sl0.start + sl0.ph) * Math.max(0, Math.min(1, sl0.ph / F2, (this.sliceS - sl0.ph) / F2)) * this.sliceIn;
+          if (this.softOldFade > 0) {
+            const F4 = Math.min(0.004 * CORE_FS, this.softOldS / 4);
+            const shape = clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1);
+            sl += rd(this.softStart + this.softPh) * shape * this.softOldFade;
+            this.softPh += lstep;
+            this.softOldFade = Math.max(0, this.softOldFade - 1 / (0.004 * CORE_FS));
+          }
         }
         sl0.ph += lstep;
       }
