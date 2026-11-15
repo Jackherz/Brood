@@ -630,6 +630,7 @@ class BroodCore {
     this.overdub = false;
     this.loopGain = 0;
     this.loopPos = 0;
+    this.heardPos = [0, 0]; this.heardLevel = [1, 0];   // for the playhead: see heardAt
     // Moving START moves the read head; see loopTick for the 25 ms crossfade these
     // four carry from where the loop was playing to where it now begins.
     this.startA = 0; this.startB = 0; this.startFade = 1; this.startLen = -1;
@@ -1055,6 +1056,14 @@ class BroodCore {
   }
 
   // `x` is what the looper listens to; `rec` is what an overdub lays down.
+  // Where the loop is heard from, inside the window, and how loud each read is (0 to 1).
+  // TAPE: one head, the playhead. STRETCH: its two grains. ENV: the slice while it's the
+  // louder sound (and the last one fading under it), else the playhead. Mirrors brood.h.
+  heardAt(heard, hpos, hlev, W = 1) {
+    if (!heard) { this.heardPos[0] = this.loopPos; this.heardPos[1] = 0; this.heardLevel[0] = 1; this.heardLevel[1] = 0; return; }
+    for (let k = 0; k < 2; k++) { this.heardPos[k] = ((hpos[k] % W) + W) % W; this.heardLevel[k] = hlev[k]; }
+  }
+
   loopTick(x, rec) {
     // The detector and overdub use clean input, even when the wet channel is on.
     const fs = CORE_FS;
@@ -1066,9 +1075,10 @@ class BroodCore {
     if (this.loopState === 'off' && this.loopGain < 1e-4) {
       this.loopGain = 0;
       if (this.pendingOp) this.settlePending();   // faded out: CLEAR or UNDO now
+      this.heardAt(false);
       return 0;
     }
-    if (this.lsrc < 64) return 0;
+    if (this.lsrc < 64) { this.heardAt(false); return 0; }
 
     // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
     // which keeps its share of the window, never runs faster than four times normal
@@ -1163,6 +1173,10 @@ class BroodCore {
     const F = Math.min(0.004 * fs, W / 4);
     const edgeAt = (p) => { let q = p % W; if (q < 0) q += W; return Math.min(1, q / F, (W - q) / F); };
     let y;
+    // What the playhead shows: the reads STRETCH and ENV make, where they're heard;
+    // otherwise the playhead itself. Drawn only, never heard.
+    const hpos = [0, 0], hlev = [1, 0];
+    let heard = false;
 
     if (mode === 2) {
       // STRETCH: two Hann grains at 1x pitch; LENGTH = grain (slice) size,
@@ -1185,10 +1199,13 @@ class BroodCore {
         const p = g.start + g.dir * g.off;
         const sw = Math.sin(Math.PI * g.ph);
         y += rd(p) * sw * sw * edgeAt(p);
+        hpos[k] = p; hlev[k] = sw * sw;
       }
       // Blend to the unprocessed loop at full clockwise, per MKII behavior.
       const normal = clamp((m - 0.97) / 0.03, 0, 1);
       y = y * (1 - normal) + rd(pos) * edgeAt(pos) * normal;
+      // Full clockwise is the plain loop: the playhead again once that's the louder.
+      if (normal < 0.5) { heard = true; hlev[0] *= 1 - normal; hlev[1] *= 1 - normal; }
       this.stretchSpeed += (stretchMap(m) - this.stretchSpeed) * 0.001;
       pos += this.stretchSpeed * lstep;
     } else if (mode === 1) {
@@ -1267,6 +1284,8 @@ class BroodCore {
           const F3 = Math.min(softF, this.softS / 4);
           // Every slice read also fades over the take's seam (see brood.h).
           sl = rd(sl0.start + sl0.ph) * Math.min(0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3)), edgeAt(sl0.start + sl0.ph)) * this.sliceIn;
+          hpos[0] = sl0.start + sl0.ph; hlev[0] = 1; hpos[1] = this.softStart + this.softPh;
+          hlev[1] = this.softOldFade > 0 ? 0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade) : 0;
           if (this.softOldFade > 0) {
             const F4 = Math.min(softF, this.softOldS / 4);
             const shape = 0.5 - 0.5 * Math.cos(Math.PI * clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1));
@@ -1278,6 +1297,7 @@ class BroodCore {
           if (!grid && sl0.ph >= this.sliceS) { sl0.ph -= this.sliceS; this.sliceS = S; }
           const F2 = Math.min(0.004 * fs, this.sliceS / 4);
           sl = rd(sl0.start + sl0.ph) * Math.min(Math.max(0, Math.min(1, sl0.ph / F2, (this.sliceS - sl0.ph) / F2)), edgeAt(sl0.start + sl0.ph)) * this.sliceIn;
+          hpos[0] = sl0.start + sl0.ph; hlev[0] = 1; hpos[1] = this.softStart + this.softPh; hlev[1] = Math.max(0, this.softOldFade);
           if (this.softOldFade > 0) {
             const F4 = Math.min(0.004 * CORE_FS, this.softOldS / 4);
             const shape = clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1);
@@ -1289,6 +1309,7 @@ class BroodCore {
         sl0.ph += lstep;
       }
       y = main * (1 - this.envMix) + sl * this.envMix;
+      heard = this.envMix > 0.5;   // the slice is the louder sound: show where it reads
       pos += lstep;
     }
 
@@ -1358,6 +1379,7 @@ class BroodCore {
       this.dubLast = q; this.dubPrev = rec;
     } else this.dubLast = -1;
     this.loopPos = ((pos % W) + W) % W;
+    this.heardAt(heard, hpos, hlev, W);
     // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
     if (this.p.loopDb !== this.loopDbSeen) { this.loopDbSeen = this.p.loopDb; this.loopLevelTarget = Math.pow(10, this.p.loopDb / 20); }
     this.loopLevel += (this.loopLevelTarget - this.loopLevel) * 0.003;
@@ -1656,6 +1678,7 @@ class BroodCore {
     return {
       wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
       mods: this.rampRaw.slice(), lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
+      head: this.heardPos.slice(), headLevel: this.heardLevel.slice(),
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
       recArmed: this.rec.phase === 'armed',
       canOverdub: this.canOverdub(), dubLatched: this.dubLatched, undoKind: this.undoKind, undoRedo: this.undoRedo,

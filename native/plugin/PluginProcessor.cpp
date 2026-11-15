@@ -656,6 +656,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     for (int k = 0; k < 2; ++k) ui.modValue[static_cast<size_t>(k)] = static_cast<float>(core_.rampValue(k));
     ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop); ui.recArmed = st.recArmed;
     ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.winSpan = core_.loopSpan(); ui.pos = static_cast<float>(st.pos);
+    for (size_t k = 0; k < 2; ++k) { ui.head[k] = static_cast<float>(st.head[k]); ui.headLevel[k] = st.headLevel[k]; }
     ui.clockHz = static_cast<float>(st.clockHz); ui.histCycles = st.histCycles;
     ui.peakIn = std::max(st.peakIn, rightState.peakIn); ui.peakOut = std::max(st.peakOut, rightState.peakOut);
 

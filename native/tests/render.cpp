@@ -1,5 +1,6 @@
 // Render a parity scenario through the C++ core (see tests/parity/scenario.js).
-//   brood_render <scenario.txt> <out.f32>
+//   brood_render <scenario.txt> <out.f32> [heads.f32]
+// heads.f32, per block: the window's length, then each heard head's position and level.
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
     brood::Core core; core.prepare(rate);
     const long nBlocks = static_cast<long>(std::ceil(seconds * rate / B));
     std::vector<float> out(static_cast<size_t>(nBlocks * B * 2));
+    std::vector<float> heads;
     float x[B], L[B], R[B];
     long songStart = 0;
     for (long b = 0; b < nBlocks; ++b) {
@@ -94,6 +96,15 @@ int main(int argc, char** argv) {
         for (int i = 0; i < B; ++i) x[i] = input(b * B + i, rate);
         core.process(x, L, R, B);
         for (int i = 0; i < B; ++i) { out[static_cast<size_t>(2 * (b * B + i))] = L[i]; out[static_cast<size_t>(2 * (b * B + i) + 1)] = R[i]; }
+        if (argc > 3) {
+            const auto st = core.state();
+            heads.insert(heads.end(), {static_cast<float>(st.winLen), static_cast<float>(st.head[0]), st.headLevel[0], static_cast<float>(st.head[1]), st.headLevel[1]});
+        }
+    }
+    if (argc > 3) {
+        std::ofstream h(argv[3], std::ios::binary);
+        h.write(reinterpret_cast<const char*>(heads.data()), static_cast<std::streamsize>(heads.size() * sizeof(float)));
+        if (!h) return 1;
     }
     std::ofstream o(argv[2], std::ios::binary);
     o.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size() * sizeof(float)));

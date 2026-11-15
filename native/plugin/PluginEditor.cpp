@@ -702,9 +702,15 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
         g.setColour(x >= xs && x < xe ? k.onSunk : dimmed);
         g.fillRect(x, mid - a, std::max(1.f, bw - 0.4f), 2 * a + 1);
     }
-    // The play head.
-    const float px = b.getWidth() * (proc.ui.winStart.load() + proc.ui.pos.load()) / lsrc;
-    g.setColour(k.lit); g.fillRect(px - 0.5f, b.getY(), 1.f, b.getHeight());
+    // The play head: where the loop is heard from. TAPE has one, the playhead; STRETCH shows
+    // both grains and ENV the slice (and the last one fading), each as bright as it's loud.
+    const int winStart = proc.ui.winStart.load();
+    for (size_t h = 0; h < 2; ++h) {
+        const float level = juce::jlimit(0.f, 1.f, proc.ui.headLevel[h].load());
+        if (level < 0.02f) continue;
+        const float px = b.getWidth() * (winStart + proc.ui.head[h].load()) / lsrc;
+        g.setColour(k.lit.withMultipliedAlpha(level)); g.fillRect(px - 0.5f, b.getY(), 1.f, b.getHeight());
+    }
     static const char* const states[] = {"STOPPED", "PLAYING", "RECORDING", "OVERDUB"};
     g.setFont(capFont());
     g.setColour(led >= 2 ? k.lit : k.onSunk);
@@ -1531,6 +1537,9 @@ void BroodEditor::rebuildHoverHelp() {
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal's own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.");
     add(gainDesign, "LOOP GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
+    // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
+    add(clearDesign, "CLEAR", "empties the take. undo brings it back.");
+    add(undoDesign, "UNDO", "one step back: a clear, a new take, or the last overdub layer. press again to redo.");
     add(loopViewDesign, "THE WINDOW", "drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.");
     add(recModeDesign, "LOOP SWITCH", "capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.");
     if (recBars->isVisible()) {
@@ -1550,8 +1559,6 @@ void BroodEditor::rebuildHoverHelp() {
     add(fsWetDesign, "WET FOOTSWITCH", "tap for the wet side, hold to freeze it where it stands. key A.");
     add(fsLoopDesign, "LOOP FOOTSWITCH", "tap to catch the recent past, tap again to stop, hold to overdub. key L.");
     add(overdubDesign, "OVERDUB", "latches: layers into the playing loop until you switch it off. needs a loop playing.");
-    add(clearDesign, "CLEAR", "empties the take. undo brings it back.");
-    add(undoDesign, "UNDO", "one step back: a clear, a new take, or the last overdub layer. press again to redo.");
 
     add(benchSourceDesign, "SEND", "what SEND sends: the loop, or the exact output for that many bars, from the next bar line.");
     add(presetBarDesign, "PATCH", "click the name to search, star and audition sounds. the arrows step through them. SAVE keeps what you hear.");

@@ -426,8 +426,17 @@ function LoopWave({ wave, state, params, onChange, onTouch, help }) {
         g.fillStyle = inside ? '#151512' : '#b3b3ab';
         g.fillRect(x, Math.floor(h / 2 - amplitude), 2, Math.max(2, Math.floor(amplitude * 2)));
       }
+      // The play head: where the loop is heard from. TAPE has one, the playhead; STRETCH shows
+      // both grains and ENV the slice (and the last one fading), each as dark as it's loud.
+      const heads = state.head || [state.pos, 0], levels = state.headLevel || [1, 0];
       g.fillStyle = '#77776f';
-      g.fillRect(Math.round(clamp((state.winStart + state.pos) / m.len) * w), 12, 1, h - 24);
+      for (let k = 0; k < 2; k++) {
+        const level = clamp(levels[k]);
+        if (level < 0.02) continue;
+        g.globalAlpha = level;
+        g.fillRect(Math.round(clamp((state.winStart + heads[k]) / m.len) * w), 12, 1, h - 24);
+      }
+      g.globalAlpha = 1;
       // The markers: a full-height line, and a labelled tab the hand can find.
       const marker = (x, top, label, lit) => {
         const px = Math.round(clamp(x, 0, 1) * w);

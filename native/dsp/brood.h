@@ -656,6 +656,10 @@ struct State {
     int lsrc, winStart, winLen; double pos, clockHz; uint32_t histCycles;
     float peakIn, peakOut;
     bool recArmed;   // RECORD: waiting for the bar line
+    // Where the loop is heard from, inside the window, and how loud each read is (0 to 1).
+    // TAPE: one head, the playhead. STRETCH: its two grains. ENV: the slice while it's the
+    // louder sound (and the last one fading under it), else the playhead.
+    double head[2] = {0, 0}; float headLevel[2] = {1, 0};
     // OVERDUB: whether it can be switched on now (a loop is playing), and whether it's latched.
     bool canOverdub = false, dubLatched = false;
     // UNDO: what it would step back over next (0 nothing, 1 a take, 2 a clear, 3 a layer),
@@ -963,6 +967,7 @@ public:
         st.canOverdub = canOverdub(); st.dubLatched = dubLatched;
         st.undoKind = static_cast<int>(undoKind); st.undoRedo = undoRedo;
         st.follows = takeFollows && lsrc >= 64; st.parked = parked;
+        for (int k = 0; k < 2; ++k) { st.head[k] = heardPos[k]; st.headLevel[k] = static_cast<float>(heardLevel[k]); }
         return st;
     }
 
@@ -1172,6 +1177,7 @@ private:
     int dubLast = -1;
     int dubLo = std::numeric_limits<int>::max(), dubHi = -1;   // cells written since the strip looked
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
+    double heardPos[2] = {0, 0}, heardLevel[2] = {1, 0};   // for the playhead: see State::head
     // Moving START moves the read head, and a jump is a click. These three carry a
     // short crossfade from where the loop was playing to where it now begins.
     int startA = 0, startB = 0;                // whole samples: never fractional
@@ -1465,6 +1471,11 @@ private:
     }
 
     // `x` is what the looper listens to; `rec` is what an overdub lays down.
+    void heardAt(bool heard, const double* hpos, const double* hlev, double Wd = 1) {
+        if (!heard) { heardPos[0] = loopPos; heardPos[1] = 0; heardLevel[0] = 1; heardLevel[1] = 0; return; }
+        for (int k = 0; k < 2; ++k) { heardPos[k] = jsMod(jsMod(hpos[k], Wd) + Wd, Wd); heardLevel[k] = hlev[k]; }
+    }
+
     double loopTick(double x, double rec) {
         const double ax = std::fabs(x);
         env += (ax - env) * (ax > env ? 0.02 : 0.0005);
@@ -1474,9 +1485,10 @@ private:
         if (loopState == LoopState::Off && loopGain < 1e-4) {
             loopGain = 0; dubGain = 0; dubLast = -1;
             if (pendingOp != LoopOp::None) settlePending();   // faded out: CLEAR or UNDO now
+            heardAt(false, nullptr, nullptr);
             return 0;
         }
-        if (lsrc < 64) return 0;
+        if (lsrc < 64) { heardAt(false, nullptr, nullptr); return 0; }
 
         // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
         // which keeps its share of the window, never runs faster than four times normal
@@ -1574,6 +1586,10 @@ private:
         const double F = std::min(0.004 * kCoreFs, Wd / 4);
         auto edgeAt = [&](double q0) { double q = jsMod(q0, Wd); if (q < 0) q += Wd; return std::min({1.0, q / F, (Wd - q) / F}); };
         double y;
+        // What the playhead shows (State::head): the reads STRETCH and ENV make, where they're
+        // heard; otherwise the playhead itself. Drawn only, never heard.
+        double hpos[2] = {0, 0}, hlev[2] = {1, 0};
+        bool heard = false;
 
         if (mode == 2) {
             const double G = std::min(expMap(e.length, 0.01 * kCoreFs, 0.5 * kCoreFs), Wd);
@@ -1584,6 +1600,7 @@ private:
             // as MODIFY passes the middle jumped both read heads, and that was a click.
             const double dir = stretchSpeed < 0 ? -1.0 : 1.0;
             y = 0;
+            int gk = 0;
             for (auto& g : grain) {
                 // The window runs on LENGTH's size, but the read head runs on its own count at
                 // normal speed. Reading at ph * G made every LENGTH move speed the head up or
@@ -1595,9 +1612,12 @@ private:
                 const double q = g.start + g.dir * g.off;
                 const double sw = std::sin(kPi * g.ph);
                 y += rd(q) * sw * sw * edgeAt(q);
+                hpos[gk] = q; hlev[gk] = sw * sw; ++gk;
             }
             const double normal = clampd((m - 0.97) / 0.03, 0, 1);
             y = y * (1 - normal) + rd(pos) * edgeAt(pos) * normal;
+            // Full clockwise is the plain loop: the playhead again once that's the louder.
+            if (normal < 0.5) { heard = true; hlev[0] *= 1 - normal; hlev[1] *= 1 - normal; }
             stretchSpeed += (stretchMap(m) - stretchSpeed) * 0.001;
             pos += stretchSpeed * lstep;
         } else if (mode == 1) {
@@ -1683,6 +1703,8 @@ private:
                     // as the loop itself does: a slice reading across it used to click. The lower of
                     // the two fades, so where a slice's edge falls on the seam it's one fade, not two.
                     sl = rd(sliceStart + slicePh) * std::min(0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3})), edgeAt(sliceStart + slicePh)) * sliceIn;
+                    hpos[0] = sliceStart + slicePh; hlev[0] = 1; hpos[1] = softStart + softPh;
+                    hlev[1] = softOldFade > 0 ? 0.5 - 0.5 * std::cos(kPi * softOldFade) : 0;
                     if (softOldFade > 0) {
                         const double F4 = std::min(softF, softOldS / 4);
                         const double shape = 0.5 - 0.5 * std::cos(kPi * std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0));
@@ -1695,6 +1717,7 @@ private:
                     if (!grid && slicePh >= sliceS) { slicePh -= sliceS; sliceS = S; }
                     const double F2 = std::min(0.004 * kCoreFs, sliceS / 4);
                     sl = rd(sliceStart + slicePh) * std::min(std::max(0.0, std::min({1.0, slicePh / F2, (sliceS - slicePh) / F2})), edgeAt(sliceStart + slicePh)) * sliceIn;
+                    hpos[0] = sliceStart + slicePh; hlev[0] = 1; hpos[1] = softStart + softPh; hlev[1] = std::max(0.0, softOldFade);
                     if (softOldFade > 0) {
                         const double F4 = std::min(0.004 * kCoreFs, softOldS / 4);
                         const double shape = std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0);
@@ -1706,6 +1729,7 @@ private:
                 slicePh += lstep;
             }
             y = mainV * (1 - envMix) + sl * envMix;
+            heard = envMix > 0.5;   // the slice is the louder sound: show where it reads
             pos += lstep;
         }
 
@@ -1779,6 +1803,7 @@ private:
             dubLast = q; dubPrev = rec;
         } else dubLast = -1;
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);
+        heardAt(heard, hpos, hlev, Wd);
         // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
         if (p.loopDb != loopDbSeen) { loopDbSeen = p.loopDb; loopLevelTarget = std::pow(10.0, p.loopDb / 20.0); }
         loopLevel += (loopLevelTarget - loopLevel) * 0.003;

@@ -1,5 +1,6 @@
 // Render a parity scenario through the JS reference core.
-//   node tests/parity/render.js <scenario.txt> <out.f32>
+//   node tests/parity/render.js <scenario.txt> <out.f32> [heads.f32]
+// heads.f32, per block: the window's length, then each heard head's position and level.
 // Output: interleaved stereo float32 little-endian.
 'use strict';
 const fs = require('fs');
@@ -10,6 +11,7 @@ const sc = parse(fs.readFileSync(process.argv[2], 'utf8'));
 const core = new BroodCore(sc.rate);
 const nBlocks = Math.ceil((sc.seconds * sc.rate) / BLOCK);
 const out = new Float32Array(nBlocks * BLOCK * 2);
+const heads = new Float32Array(nBlocks * 5);
 const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
 let songStart = 0;   // `param songStart <block>`: the song position restarts from bar 1 there
 for (let b = 0; b < nBlocks; b++) {
@@ -28,5 +30,10 @@ for (let b = 0; b < nBlocks; b++) {
   for (let i = 0; i < BLOCK; i++) inp[i] = input(b * BLOCK + i, sc.rate);
   core.process(inp, L, R);
   for (let i = 0; i < BLOCK; i++) { out[2 * (b * BLOCK + i)] = L[i]; out[2 * (b * BLOCK + i) + 1] = R[i]; }
+  if (process.argv[4]) {
+    const st = core.state();
+    heads.set([st.winLen, st.head[0], st.headLevel[0], st.head[1], st.headLevel[1]], b * 5);
+  }
 }
+if (process.argv[4]) fs.writeFileSync(process.argv[4], Buffer.from(heads.buffer));
 fs.writeFileSync(process.argv[3], Buffer.from(out.buffer));

@@ -93,6 +93,9 @@ public:
         std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 }, winSpan { 0 };
         std::atomic<bool> recArmed { false };   // RECORD: waiting for the bar line
         std::atomic<float> pos { 0 }, clockHz { 48000 }, peakIn { 0 }, peakOut { 0 }, load { 0 };
+        // Where the loop is heard from (in the window) and how loud each read is: the playhead in
+        // TAPE, the two grains in STRETCH, the slice in ENV while it's the louder sound.
+        std::array<std::atomic<float>, 2> head {}, headLevel {};
         std::atomic<float> bpm { 120.f };
         std::atomic<uint32_t> histCycles { 0 };
         std::atomic<uint32_t> waveVersion { 0 };
