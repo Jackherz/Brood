@@ -1832,3 +1832,30 @@ test('SLIP at 2x with WET DIV 4x and a low CLOCK never goes quiet, and stays fin
   }
   assert.ok(longest < FS * 0.1, `longest quiet ${(longest / FS).toFixed(2)} s`);
 });
+
+test('CLOCK above the host rate, and slow overdubs, leave no aliases', () => {
+  const toneAt = (o, f, from, to) => {
+    const w = 2 * Math.PI * f / FS, cw = 2 * Math.cos(w); let s1 = 0, s2 = 0, n = 0;
+    for (let i = Math.floor(from * FS); i < Math.floor(to * FS); i++, n++) { const v = o[i] + cw * s1 - s2; s2 = s1; s1 = v; }
+    return Math.sqrt(Math.max(0, s1 * s1 + s2 * s2 - cw * s1 * s2)) / n * 2;
+  };
+  const make = (extra) => {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ loopMode: 1, routing: 2, balance: 0, mix: 1, memory: 0.3, clock: 1, modLoop: 0.66, mod1On: 0, mod2On: 0, ...extra })) core.setParam(k, v);
+    return core;
+  };
+  const tapLoop = (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); };
+  {
+    const core = make({});
+    const { L } = render(core, 6, (t) => (t < 2.5 ? 0.3 * Math.sin(2 * Math.PI * 18000 * t) : 0), { [blk(2.5)]: tapLoop });
+    const alias = Math.max(toneAt(L, 2000, 3.5, 6), toneAt(L, 14000, 3.5, 6));
+    assert.ok(alias < 0.001, `CLOCK 64 kHz: an 18 kHz tone leaves no alias (${alias.toFixed(5)})`);
+  }
+  {
+    const core = make({ modLoop: 0.5, fade: 1 });
+    const at = { [blk(2)]: tapLoop, [blk(2.5)]: (c) => c.setParam('overdubLatch', 1), [blk(5.5)]: (c) => c.setParam('overdubLatch', 0) };
+    const { L } = render(core, 9, (t) => (t < 2 ? 0.001 * Math.sin(2 * Math.PI * 300 * t) : t > 2.5 && t < 5.5 ? 0.3 * Math.sin(2 * Math.PI * 18000 * t) : 0), at);
+    const alias = toneAt(L, 14000, 6.5, 9);
+    assert.ok(alias < 0.003, `overdub at TAPE 0.5x: no fold back to 14 kHz (${alias.toFixed(5)})`);
+  }
+});

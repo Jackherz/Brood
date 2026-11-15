@@ -119,9 +119,10 @@ brace, puts it back in time with a short dip. A take caught with the host stoppe
 and the transport never touches it, so you can loop without pressing play. The strip's
 heading says FOLLOWS THE HOST for a transport loop. A set saves which kind the take is,
 so a transport loop reopens waiting for play. A tap while it waits works as with any
-stopped loop: it catches a new take, which is free. The lock holds at TAPE's normal speed
-with CLOCK unmoved; with those changed the loop still stops and starts with the host, and
-plays at its own pace in between. ENV has no running playhead, so there the transport
+stopped loop: it catches a new take, which is free. The lock counts the loop's own rate
+(TAPE's speed, STRETCH's, LOOP DIV): a loop at 0.5x comes in half as far into the take, and
+when the song jumps (the loop brace, say) it moves by the jump at its rate. At 1x a jump
+locks it back to the song exactly. ENV has no running playhead, so there the transport
 only stops and starts it. The standalone app and the browser version have no transport,
 so their loops are always free.
 
@@ -368,6 +369,17 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   fewer artifacts and a fuller top at low clocks. The wet side and the loop run a little later
   (eight clock ticks, so 1 ms at 8 kHz and 4 ms at 2 kHz); the dry side isn't delayed, so
   no latency is reported to the host. CLASSIC ignores it (`tests/parity/scenarios/hi_q.txt`).
+
+  With CLOCK above the host's rate (64 kHz on a 48 kHz session, say) the engine uses this
+  conversion by itself, with filters at its own rate too, whatever HI-Q and WEAR say:
+  squeezing the engine down to the host's rate with the plain curve folded the top octave
+  back as aliasing (an 18 kHz tone came back with a 2 kHz copy only 20 dB under it, and
+  WORN's straight lines were worse). Above the host's rate that's conversion, not
+  character. At or below the host's rate nothing changes, bit for bit.
+- **Overdubbing slower than 1x** (TAPE below 1x, STRETCH, LOOP DIV) records at a lower rate
+  than the engine runs, so what's laid down is filtered first, just under that rate.
+  Without it, the top of anything overdubbed folded back as aliasing and stayed in the
+  take (`tests/parity/scenarios/alias_clock.txt`).
 - **GAIN**, in the LOOP panel's heading, is the loop's own level, -24 to +12 dB: drag up or down, Shift
   for fine, double-click for 0 dB. The waveform grows and shrinks with it, and SEND sends the loop at this level.
 - **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,

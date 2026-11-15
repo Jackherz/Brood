@@ -565,6 +565,8 @@ class BroodCore {
     this.phase = 0;
     this.clockRatio = 1;
     this.aa = new LowPassN();
+    this.dubAA = [new LowPassN(), new LowPassN()]; this.dubAARate = -1;
+    this.coreIn = new LowPassN(); this.coreOut = [new LowPassN(), new LowPassN()]; this.coreW = 0;   // CLOCK above the host's rate   // in front of an overdub written slower than 1x
     this.reconL = new LowPassN();
     this.reconR = new LowPassN();
     this.filterClock = -1;
@@ -620,7 +622,7 @@ class BroodCore {
     this.takeFollows = false; this.undoFollows = false; this.parked = false;
     this.anchorPpq = 0; this.undoAnchor = 0;
     this.lastHostPlaying = false; this.lastPpq = 0; this.lastBlockN = 0; this.blockStartCount = 0;
-    this.pendingLock = false; this.lockGain = 1;
+    this.pendingLock = false; this.lockGain = 1; this.lockShift = NaN;
     this.sliceFresh = false; this.gridS = -1; this.gridLine = 0; this.gridTLine = 0;   // ENV synced to a playing host
     this.sliceS = -1; this.sliceIn = 1;
     this.lsrc = 0;
@@ -814,16 +816,21 @@ class BroodCore {
     this.parked = false;
     if (op === 'undo' && this.lsrc >= 64 && (!layer || this.resumeAfterOp)) {
       if (this.takeFollows && !this.p.hostPlaying) this.parked = true;
-      else { this.loopState = 'play'; if (this.takeFollows) { this.pendingLock = true; this.lockGain = 0; } }
+      else { this.loopState = 'play'; if (this.takeFollows) { this.pendingLock = true; this.lockGain = 0; this.lockShift = NaN; } }
     }
     this.resumeAfterOp = false;
   }
 
   // ── the host's transport ── (mirrors native/dsp/brood.h)
   songNow() { return this.p.ppq + (this.hostCount - this.blockStartCount) * this.p.bpm / (60 * this.fs); }
+  // The loop's playback rate now, in window ticks a core tick (see brood.h).
+  loopRate() {
+    const r = this.p.loopMode === 1 ? this.tapeSpeed : this.p.loopMode === 2 ? this.stretchSpeed : 1;
+    return r / divMap(this.p.loopDiv);
+  }
   songTicks(winStart, W) {
     const secs = (this.songNow() - this.anchorPpq) * 60 / Math.max(5, this.p.bpm);
-    let q = (secs * this.clockRatio * this.fs - winStart) % W; if (q < 0) q += W;
+    let q = (secs * this.clockRatio * this.fs * this.loopRate() - winStart) % W; if (q < 0) q += W;
     return q;
   }
   followTransport(n) {
@@ -833,9 +840,15 @@ class BroodCore {
         this.loopState = 'off'; this.overdub = false; this.dubLatched = false; this.parked = true;
       } else if (!this.lastHostPlaying && playing && this.parked) {
         this.parked = false; this.loopState = 'play'; this.pendingLock = true; this.lockGain = 0;
+        this.lockShift = NaN;   // from the song itself
       } else if (this.lastHostPlaying && playing && this.loopState === 'play' && this.lastBlockN > 0) {
         const expected = this.lastPpq + this.lastBlockN * this.p.bpm / (60 * this.fs);
-        if (Math.abs(this.p.ppq - expected) > 0.05) this.pendingLock = true;   // a jump, not drift
+        if (Math.abs(this.p.ppq - expected) > 0.05) {   // a jump, not drift
+          this.pendingLock = true;
+          // At 1x it locks back to the song; at any other rate it moves by the jump (see brood.h).
+          const rate = this.loopRate();
+          this.lockShift = Math.abs(rate - 1) < 1e-3 ? NaN : (this.p.ppq - expected) * 60 / Math.max(5, this.p.bpm) * this.clockRatio * this.fs * rate;
+        }
       }
     }
     this.lastHostPlaying = playing; this.lastPpq = this.p.ppq; this.lastBlockN = n;
@@ -1069,7 +1082,12 @@ class BroodCore {
     // The song lock: dip for 5 ms, move the playhead to where the song says, come back.
     if (this.pendingLock) {
       this.lockGain = Math.max(0, this.lockGain - 1 / (0.005 * CORE_FS));
-      if (this.lockGain <= 0) { this.loopPos = this.songTicks(winStart, W); this.pendingLock = false; }
+      if (this.lockGain <= 0) {
+        if (Number.isNaN(this.lockShift)) this.loopPos = this.songTicks(winStart, W);
+        else { this.loopPos = (this.loopPos + this.lockShift) % W; if (this.loopPos < 0) this.loopPos += W; }
+        this.lockShift = NaN;
+        this.pendingLock = false;
+      }
     } else if (this.lockGain < 1) this.lockGain = Math.min(1, this.lockGain + 1 / (0.005 * CORE_FS));
     const buf = this.loopBuf;
     const len = Math.max(64, this.lsrc);
@@ -1247,22 +1265,23 @@ class BroodCore {
           if (grid) this.softS = this.sliceS;
           if (sl0.ph >= this.softS) sl0.ph -= this.softS;
           const F3 = Math.min(softF, this.softS / 4);
-          sl = rd(sl0.start + sl0.ph) * (0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3))) * this.sliceIn;
+          // Every slice read also fades over the take's seam (see brood.h).
+          sl = rd(sl0.start + sl0.ph) * Math.min(0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3)), edgeAt(sl0.start + sl0.ph)) * this.sliceIn;
           if (this.softOldFade > 0) {
             const F4 = Math.min(softF, this.softOldS / 4);
             const shape = 0.5 - 0.5 * Math.cos(Math.PI * clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1));
-            sl += rd(this.softStart + this.softPh) * shape * (0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade));
+            sl += rd(this.softStart + this.softPh) * Math.min(shape, edgeAt(this.softStart + this.softPh)) * (0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade));
             this.softPh += lstep;
             this.softOldFade = Math.max(0, this.softOldFade - 1 / softF);
           }
         } else {
           if (!grid && sl0.ph >= this.sliceS) { sl0.ph -= this.sliceS; this.sliceS = S; }
           const F2 = Math.min(0.004 * fs, this.sliceS / 4);
-          sl = rd(sl0.start + sl0.ph) * Math.max(0, Math.min(1, sl0.ph / F2, (this.sliceS - sl0.ph) / F2)) * this.sliceIn;
+          sl = rd(sl0.start + sl0.ph) * Math.min(Math.max(0, Math.min(1, sl0.ph / F2, (this.sliceS - sl0.ph) / F2)), edgeAt(sl0.start + sl0.ph)) * this.sliceIn;
           if (this.softOldFade > 0) {
             const F4 = Math.min(0.004 * CORE_FS, this.softOldS / 4);
             const shape = clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1);
-            sl += rd(this.softStart + this.softPh) * shape * this.softOldFade;
+            sl += rd(this.softStart + this.softPh) * Math.min(shape, edgeAt(this.softStart + this.softPh)) * this.softOldFade;
             this.softPh += lstep;
             this.softOldFade = Math.max(0, this.softOldFade - 1 / (0.004 * CORE_FS));
           }
@@ -1291,6 +1310,19 @@ class BroodCore {
     // modulated LENGTH or START can't throw it around the take and leave seams: what's
     // laid down stays continuous, and the read head finds it as it comes round. It writes
     // every cell it crosses, once, and fades at that window's edges.
+    // Overdubbing slower than normal is a decimation: filter what's laid down first, just under
+    // the rate it records at, so nothing folds back as aliasing (see brood.h).
+    {
+      const rate = Math.abs(pos - posAtStart - dubWow);
+      if (Math.abs(rate - this.dubAARate) > 0.002 * Math.max(rate, 0.01)) {
+        this.dubAARate = rate;
+        const fc = Math.max(20, 0.4 * Math.min(1, rate) * CORE_FS);
+        this.dubAA[0].set(fc, CORE_FS, true); this.dubAA[1].set(fc, CORE_FS, true);
+      }
+      const lp = this.dubAA[1].run(this.dubAA[0].run(rec));
+      const slow = clamp((1 - rate) / 0.1, 0, 1);
+      if (slow > 0) rec += (lp - rec) * slow;
+    }
     this.dubGain += ((this.overdub ? 1 : 0) - this.dubGain) * 0.002;
     if (this.dubGain > 1e-4) {
       const starting = this.dubLast < 0;
@@ -1459,8 +1491,13 @@ class BroodCore {
     const ld = loopOut * loopLvl;
     for (const ch of this.ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
     const hissOut = hissAfter ? hiss * this.wetOut : 0;
-    this.ticks[0][3] = (wl + hissOut) * wetLvl + ld;
-    this.ticks[1][3] = (wr + hissOut) * wetLvl + ld;
+    let outL = (wl + hissOut) * wetLvl + ld, outR = (wr + hissOut) * wetLvl + ld;
+    {
+      const fL = this.coreOut[0].run(outL), fR = this.coreOut[1].run(outR);
+      if (this.coreW > 0) { outL += (fL - outL) * this.coreW; outR += (fR - outR) * this.coreW; }
+    }
+    this.ticks[0][3] = outL;
+    this.ticks[1][3] = outR;
     this.ticksHi[0][this.ticksHiW] = this.ticks[0][3]; this.ticksHi[1][this.ticksHiW] = this.ticks[1][3];
     this.ticksHiW = (this.ticksHiW + 1) & 15;
   }
@@ -1528,6 +1565,11 @@ class BroodCore {
           // and less folds back.
           const fcHi = Math.min(0.48 * c * fs, 0.45 * fs, 20000);
           this.aaHi[0].set(fcHi, fs, true); this.aaHi[1].set(fcHi, fs, true);
+          // CLOCK above the host's rate: filter the conversions at the core's own rate too
+          // (see brood.h), faded in from the host's rate to 5% above it.
+          this.coreW = clamp((c - 1) / 0.05, 0, 1);
+          const fcCore = Math.min(0.45 * fs, 20000);   // they always run, so they fade in warm
+          this.coreIn.set(fcCore, c * fs, true); this.coreOut[0].set(fcCore, c * fs, true); this.coreOut[1].set(fcCore, c * fs, true);
         }
       }
 
@@ -1536,7 +1578,8 @@ class BroodCore {
       const xa = this.aa.run(dry);
       const xin = this.xin;
       xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
-      this.hiMix += ((p.hiQ && !p.classic ? 1 : 0) - this.hiMix) * 0.002;
+      // HI-Q's sinc conversion, or always with CLOCK above the host's rate (see brood.h).
+      this.hiMix += (((p.hiQ && !p.classic) || this.coreW > 0 ? 1 : 0) - this.hiMix) * 0.002;
       const hi = this.hiMix > 1e-5;
       if (hi) { this.xinHi[this.xinHiW] = this.aaHi[1].run(this.aaHi[0].run(dry)); this.xinHiW = (this.xinHiW + 1) & 7; }
       this.phase += this.clockRatio;
@@ -1550,6 +1593,7 @@ class BroodCore {
         const u = 1 - this.phase / this.clockRatio;
         let xt = p.classic && !p.wearPost ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
         if (hi) xt += (sincRead(SINC_IN, 8, this.xinHi, this.xinHiW, u) - xt) * this.hiMix;
+        { const f = this.coreIn.run(xt); if (this.coreW > 0) xt += (f - xt) * this.coreW; }
         this.coreTick(xt);
       }
       const f = this.phase;

@@ -1,0 +1,22 @@
+# A transport loop at TAPE 0.5x under a loop brace: each jump back in the song moves the
+# playhead by the loop's own rate. Then STRETCH, and LOOP DIV, under the same brace.
+rate 48000
+seconds 16
+0 param mix 1
+0 param routing 2
+0 param balance 0
+0 param clock 1
+0 param loopMode 1
+0 param modLoop 0.5
+0 param memory 0.6
+0 param bpm 120
+0 param hostPlaying 1
+375 fs loop down
+379 fs loop up
+1500 param songStart 1500
+3000 param songStart 3000
+3500 param loopMode 2
+4500 param songStart 4500
+4800 param loopMode 1
+4800 param loopDiv 0.5
+6000 param songStart 6000

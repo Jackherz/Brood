@@ -701,6 +701,7 @@ public:
         overdub = false;
         dubLatched = latchSeen = false; pendingOp = LoopOp::None; resumeAfterOp = false;
         pendingLock = false; lockGain = 1; lastHostPlaying = false; lastBlockN = 0;
+        lockShift = std::numeric_limits<double>::quiet_NaN();
         loopGain = 0; tapeSpeed = 1; stretchSpeed = 0;
         env = 0; envGate = false; envHold = 0; envMix = 0; sliceStart = slicePh = 0;
         softStart = softPh = softS = softOldFade = softOldS = 0;
@@ -867,13 +868,28 @@ public:
                     // survives and less folds back.
                     const double fcHi = std::min({0.48 * c * fs, 0.45 * fs, 20000.0});
                     aaHi[0].set(fcHi, fs, true); aaHi[1].set(fcHi, fs, true);
+                    // CLOCK above the host's rate: the input is stretched up and the output
+                    // squeezed down inside the core, so the host-rate filters can't stop what
+                    // folds back (at 64 kHz on a 48 kHz host, 18 kHz came back with a 2 kHz alias
+                    // 20 dB under it). These filter at the core's own rate, to the host's band,
+                    // faded in from the host's rate to 5% above it; at or below it, untouched.
+                    // They always run (their own set clamps the corner under the core's Nyquist), so a
+                    // CLOCK swinging across the host's rate fades them in warm, not from stale state.
+                    coreW = clampd((c - 1) / 0.05, 0, 1);
+                    const double fcCore = std::min(0.45 * fs, 20000.0);
+                    coreIn.set(fcCore, c * fs, true); coreOut[0].set(fcCore, c * fs, true); coreOut[1].set(fcCore, c * fs, true);
                 }
             }
             const double dry = in ? in[i] : 0.0;
             pkIn = std::max(pkIn, std::fabs(dry));
             const double xa = aa.run(dry);
             xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
-            hiMix += ((p.hiQ && !p.classic ? 1.0 : 0.0) - hiMix) * 0.002;
+            // HI-Q's sinc conversion, or always with CLOCK above the host's rate: squeezing the
+            // core down to the host's rate with the four-point curve can't reject the mirror of
+            // the top octave (18 kHz came back as a 2 kHz alias 20 dB under it at 64 kHz on 48),
+            // and WORN's straight lines were worse. Above the host's rate that's conversion,
+            // not character, so WORN gets the clean path there too.
+            hiMix += (((p.hiQ && !p.classic) || coreW > 0 ? 1.0 : 0.0) - hiMix) * 0.002;
             const bool hi = hiMix > 1e-5;
             if (hi) { xinHi[xinHiW] = aaHi[1].run(aaHi[0].run(dry)); xinHiW = (xinHiW + 1) & 7; }
             phase += clockRatio;
@@ -887,6 +903,7 @@ public:
                 const double u = 1 - phase / clockRatio;
                 double xt = p.classic && ! p.wearPost ? xa : hermite(xin[0], xin[1], xin[2], xin[3], u);
                 if (hi) xt += (sincIn().read([this](int k) { return xinHi[(xinHiW + k) & 7]; }, u) - xt) * hiMix;
+                { const double f = coreIn.run(xt); if (coreW > 0) xt += (f - xt) * coreW; }
                 coreTick(xt);
             }
             const double f = phase;
@@ -1097,6 +1114,10 @@ private:
     double phase = 0, clockRatio = 1, filterClock = -1;
     int filterClassic = -1;
     LowPassN aa, reconL, reconR, aaHi[2];
+    LowPassN dubAA[2];       // in front of an overdub written slower than 1x
+    LowPassN coreIn, coreOut[2];   // CLOCK above the host's rate: the conversions, filtered at the core's rate
+    double coreW = 0;
+    double dubAARate = -1;
     // The last four core ticks per channel, oldest first. The host-rate output is
     // a Hermite curve through the middle two (one tick of latency), or for
     // CLASSIC the old straight line between the newest two.
@@ -1138,6 +1159,7 @@ private:
     int lastBlockN = 0;
     int64_t blockStartCount = 0;
     bool pendingLock = false;
+    double lockShift = std::numeric_limits<double>::quiet_NaN();   // a relative move, or NaN: lock to the song
     double lockGain = 1;
     int64_t histTotal = 0;
     int histW = 0, histCount = 0, lsrc = 0;
@@ -1314,7 +1336,7 @@ private:
         parked = false;
         if (op == LoopOp::Undo && lsrc >= 64 && (!layer || resumeAfterOp)) {
             if (takeFollows && !p.hostPlaying) parked = true;
-            else { loopState = LoopState::Play; if (takeFollows) { pendingLock = true; lockGain = 0; } }
+            else { loopState = LoopState::Play; if (takeFollows) { pendingLock = true; lockGain = 0; lockShift = std::numeric_limits<double>::quiet_NaN(); } }
         }
         resumeAfterOp = false;
     }
@@ -1323,9 +1345,16 @@ private:
     // The song position now, in quarter notes, from this block's start and the host samples since.
     double songNow() const { return p.ppq + static_cast<double>(hostCount - blockStartCount) * p.bpm / (60.0 * fs); }
     // Where a transport take's window should be at this song position, in ticks into it.
+    // The loop's playback rate now, in window ticks a core tick: TAPE's speed, STRETCH's,
+    // or 1 for ENV, slowed by LOOP DIV.
+    double loopRate() const {
+        const double r = p.loopMode == 1 ? tapeSpeed : p.loopMode == 2 ? stretchSpeed : 1.0;
+        return r / divMap(p.loopDiv);
+    }
     double songTicks(int winStart, double Wd) const {
         const double secs = (songNow() - anchorPpq) * 60.0 / std::max(5.0, p.bpm);
-        double q = jsMod(secs * clockRatio * fs - winStart, Wd); if (q < 0) q += Wd;
+        // At the loop's own rate: a 0.5x loop is half as far into the take as a 1x one.
+        double q = jsMod(secs * clockRatio * fs * loopRate() - winStart, Wd); if (q < 0) q += Wd;
         return q;
     }
     // Once a block: a transport take fades out and parks when the host stops, comes back
@@ -1337,9 +1366,19 @@ private:
                 loopState = LoopState::Off; overdub = false; dubLatched = false; parked = true;
             } else if (!lastHostPlaying && playing && parked) {
                 parked = false; loopState = LoopState::Play; pendingLock = true; lockGain = 0;
+                lockShift = std::numeric_limits<double>::quiet_NaN();   // from the song itself
             } else if (lastHostPlaying && playing && loopState == LoopState::Play && lastBlockN > 0) {
                 const double expected = lastPpq + lastBlockN * p.bpm / (60.0 * fs);
-                if (std::fabs(p.ppq - expected) > 0.05) pendingLock = true;   // a jump, not drift
+                if (std::fabs(p.ppq - expected) > 0.05) {   // a jump, not drift
+                    pendingLock = true;
+                    // At 1x it locks back to the song, which also takes out any drift. At any other
+                    // rate "where the song says" depends on every speed since the take began, so
+                    // the playhead moves by the jump instead, at the loop's rate: the loop brace
+                    // jumping back two bars moves a 0.5x loop back one bar's worth of take.
+                    const double rate = loopRate();
+                    lockShift = std::fabs(rate - 1) < 1e-3 ? std::numeric_limits<double>::quiet_NaN()
+                                                           : (p.ppq - expected) * 60.0 / std::max(5.0, p.bpm) * clockRatio * fs * rate;
+                }
             }
         }
         lastHostPlaying = playing; lastPpq = p.ppq; lastBlockN = n;
@@ -1453,7 +1492,12 @@ private:
         // The song lock: dip for 5 ms, move the playhead to where the song says, come back.
         if (pendingLock) {
             lockGain = std::max(0.0, lockGain - 1.0 / (0.005 * kCoreFs));
-            if (lockGain <= 0) { loopPos = songTicks(win.start, Wd); pendingLock = false; }
+            if (lockGain <= 0) {
+                if (std::isnan(lockShift)) loopPos = songTicks(win.start, Wd);
+                else { loopPos = jsMod(loopPos + lockShift, Wd); if (loopPos < 0) loopPos += Wd; }
+                lockShift = std::numeric_limits<double>::quiet_NaN();
+                pendingLock = false;
+            }
         } else if (lockGain < 1) lockGain = std::min(1.0, lockGain + 1.0 / (0.005 * kCoreFs));
         const int mode = p.loopMode;
         const double trimNow = clampd(p.loopEnd, 0.02, 1), whereNow = clampd(p.start, 0, 1);
@@ -1635,11 +1679,14 @@ private:
                     if (grid) softS = sliceS;
                     if (slicePh >= softS) slicePh -= softS;
                     const double F3 = std::min(softF, softS / 4);
-                    sl = rd(sliceStart + slicePh) * (0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3}))) * sliceIn;
+                    // Every slice read also fades over the take's seam, where its end meets its start,
+                    // as the loop itself does: a slice reading across it used to click. The lower of
+                    // the two fades, so where a slice's edge falls on the seam it's one fade, not two.
+                    sl = rd(sliceStart + slicePh) * std::min(0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3})), edgeAt(sliceStart + slicePh)) * sliceIn;
                     if (softOldFade > 0) {
                         const double F4 = std::min(softF, softOldS / 4);
                         const double shape = 0.5 - 0.5 * std::cos(kPi * std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0));
-                        sl += rd(softStart + softPh) * shape * (0.5 - 0.5 * std::cos(kPi * softOldFade));
+                        sl += rd(softStart + softPh) * std::min(shape, edgeAt(softStart + softPh)) * (0.5 - 0.5 * std::cos(kPi * softOldFade));
                         softPh += lstep;
                         softOldFade = std::max(0.0, softOldFade - 1.0 / softF);
                     }
@@ -1647,11 +1694,11 @@ private:
                     // Synced but off the grid, a new length takes over at the slice's own end.
                     if (!grid && slicePh >= sliceS) { slicePh -= sliceS; sliceS = S; }
                     const double F2 = std::min(0.004 * kCoreFs, sliceS / 4);
-                    sl = rd(sliceStart + slicePh) * std::max(0.0, std::min({1.0, slicePh / F2, (sliceS - slicePh) / F2})) * sliceIn;
+                    sl = rd(sliceStart + slicePh) * std::min(std::max(0.0, std::min({1.0, slicePh / F2, (sliceS - slicePh) / F2})), edgeAt(sliceStart + slicePh)) * sliceIn;
                     if (softOldFade > 0) {
                         const double F4 = std::min(0.004 * kCoreFs, softOldS / 4);
                         const double shape = std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0);
-                        sl += rd(softStart + softPh) * shape * softOldFade;
+                        sl += rd(softStart + softPh) * std::min(shape, edgeAt(softStart + softPh)) * softOldFade;
                         softPh += lstep;
                         softOldFade = std::max(0.0, softOldFade - 1.0 / (0.004 * kCoreFs));
                     }
@@ -1680,6 +1727,23 @@ private:
         // modulated LENGTH or START can't throw it around the take and leave seams: what's
         // laid down stays continuous, and the read head finds it as it comes round. It
         // writes every cell it crosses, once, and fades at that window's edges.
+        // Overdubbing slower than normal (TAPE under 1x, STRETCH, LOOP DIV) writes fewer cells than
+        // there are ticks: a decimation. With nothing in front, everything above the rate it
+        // records at folded back down as aliasing, baked into the take for good. So below 1x
+        // what's laid down is filtered first, just under that rate; at 1x and faster, untouched.
+        {
+            const double rate = std::fabs(pos - posAtStart - dubWow);   // cells the write head crosses a tick
+            if (std::fabs(rate - dubAARate) > 0.002 * std::max(rate, 0.01)) {
+                dubAARate = rate;
+                // Two 6th-order sections at 40% of the rate it records at: steep enough that a
+                // tone just above that rate is gone, not folded back at -12 dB.
+                const double fc = std::max(20.0, 0.4 * std::min(1.0, rate) * kCoreFs);
+                dubAA[0].set(fc, kCoreFs, true); dubAA[1].set(fc, kCoreFs, true);
+            }
+            const double lp = dubAA[1].run(dubAA[0].run(rec));
+            const double slow = clampd((1 - rate) / 0.1, 0, 1);   // faded in from 1x down to 0.9x
+            if (slow > 0) rec += (lp - rec) * slow;
+        }
         dubGain += ((overdub ? 1.0 : 0.0) - dubGain) * 0.002;
         if (dubGain > 1e-4) {
             const bool starting = dubLast < 0;
@@ -1846,8 +1910,13 @@ private:
         const double ld = loopOut * loopLvl;
         for (auto& ch : ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
         const double hissOut = hissAfter ? hiss * wetOut : 0.0;
-        ticks[0][3] = (wl + hissOut) * wetLvl + ld;
-        ticks[1][3] = (wr + hissOut) * wetLvl + ld;
+        double outL = (wl + hissOut) * wetLvl + ld, outR = (wr + hissOut) * wetLvl + ld;
+        {
+            const double fL = coreOut[0].run(outL), fR = coreOut[1].run(outR);
+            if (coreW > 0) { outL += (fL - outL) * coreW; outR += (fR - outR) * coreW; }
+        }
+        ticks[0][3] = outL;
+        ticks[1][3] = outR;
         ticksHi[0][ticksHiW] = ticks[0][3]; ticksHi[1][ticksHiW] = ticks[1][3];
         ticksHiW = (ticksHiW + 1) & 15;
     }

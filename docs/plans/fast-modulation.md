@@ -74,3 +74,21 @@ with nothing moving, and there were occasional clicks in the left ear.
   (AddressSanitizer: a heap buffer overflow), in the browser it made a NaN. It's rare and
   depends on where each channel's read head is, which would fit clicks in one ear. Every
   wet mode reads through it. It now wraps that case to the start.
+
+## Aliasing in the loop (15 November, from the user's recording)
+
+A loop heard alone at TAPE 0.5x, CLOCK 64 kHz (SMOOTH), WORN after the loop, after an
+overdub at 0.5x, was gritty. The recording's spectrum had bands at 16, 8 and 4 kHz (the
+4:3 ratio of 64 to 48 kHz) and a noise floor about 30 dB up across 1 to 6 kHz. Three causes:
+
+- **Overdubbing slower than 1x** is a decimation with nothing in front: an 18 kHz overdub at
+  0.5x came back as a 14 kHz alias louder than the tone. Now filtered (two 6th-order
+  sections at 40% of the rate it records at) below 1x only: 0.143 down to 0.0005.
+- **CLOCK above the host's rate** converts inside the core, where the host-rate filters
+  can't help, and the four-point curve can't reject the mirror image when squeezing down:
+  18 kHz came back with a 2 kHz alias 20 dB under it, and under WORN louder than the tone.
+  Now filters at the core's rate and the sinc path whenever CLOCK is above the host's
+  rate: 72 to 81 dB under. At or below the host's rate, output is bit-identical to before.
+  It costs about 0.2% of a core per channel at 64 kHz.
+- **ENV slices** didn't fade over the take's seam, so one reading across it clicked (the
+  sinc path made it plain). They take the lower of their own fade and the seam's.

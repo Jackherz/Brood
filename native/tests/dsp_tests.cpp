@@ -1371,6 +1371,78 @@ int main() {
             CHECK(std::isfinite(v) && std::fabs(v - buf[0]) < 1e-3, "readFrac(%g) reads the first sample (%.4f, want %.4f)", pos, v, buf[0]);
         }
     }
+    {   // Aliasing: CLOCK above the host's rate, and overdubbing slower than 1x
+        // How strong a tone is in the output, between two times (Goertzel).
+        auto toneAt = [](const std::vector<float>& o, double f, double from, double to) {
+            const double w = 2 * brood::kPi * f / FS, cw = 2 * std::cos(w);
+            double s1 = 0, s2 = 0; long n = 0;
+            for (size_t i = static_cast<size_t>(from * FS); i < static_cast<size_t>(to * FS); ++i, ++n) { const double v = o[i] + cw * s1 - s2; s2 = s1; s1 = v; }
+            return std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - cw * s1 * s2)) / static_cast<double>(n) * 2;
+        };
+        // An 18 kHz tone, caught and played back at CLOCK 64 kHz on a 48 kHz host: squeezed down with
+        // the four-point curve it came back with a 2 kHz alias 20 dB under it (WORN: louder than it).
+        for (int worn = 0; worn < 3; ++worn) {
+            brood::Core c; c.p.loopMode = 1; c.p.routing = 2; c.p.balance = 0; c.p.mix = 1; c.p.memory = 0.3; c.p.clock = 1; c.p.modLoop = 0.66;
+            c.p.classic = worn > 0; c.p.wearPost = worn == 2; c.p.wearNoise = 0;
+            c.p.mods[0].on = c.p.mods[1].on = false;
+            c.prepare(FS);
+            const Out o = render(c, 6, [](double t) { return t < 2.5 ? 0.3 * std::sin(2 * brood::kPi * 18000 * t) : 0.0; },
+                                 [](brood::Core& cc, long b) { if (b == blk(2.5)) tap(cc, 1); });
+            const double alias = std::max(toneAt(o.L, 2000, 3.5, 6), toneAt(o.L, 14000, 3.5, 6));
+            CHECK(alias < 0.001, "CLOCK 64 kHz on 48 kHz%s: an 18 kHz tone leaves no alias (%.5f; it was up to 0.026)",
+                  worn == 0 ? "" : worn == 1 ? ", WORN" : ", WORN after the loop", alias);
+        }
+        // An 18 kHz overdub at TAPE 0.5x: recording at half the rate, it folded back to 14 kHz louder
+        // than the tone itself.
+        {
+            brood::Core c; c.p.loopMode = 1; c.p.routing = 2; c.p.balance = 0; c.p.mix = 1; c.p.memory = 0.3; c.p.clock = 1;
+            c.p.modLoop = 0.5; c.p.fade = 1;
+            c.p.mods[0].on = c.p.mods[1].on = false;
+            c.prepare(FS);
+            const Out o = render(c, 9, [](double t) { return t < 2 ? 0.001 * std::sin(2 * brood::kPi * 300 * t) : t > 2.5 && t < 5.5 ? 0.3 * std::sin(2 * brood::kPi * 18000 * t) : 0.0; },
+                                 [](brood::Core& cc, long b) {
+                                     if (b == blk(2.0)) tap(cc, 1);
+                                     if (b == blk(2.5)) cc.p.overdubLatch = true;
+                                     if (b == blk(5.5)) cc.p.overdubLatch = false;
+                                 });
+            const double alias = toneAt(o.L, 14000, 6.5, 9);
+            CHECK(alias < 0.003, "overdub at TAPE 0.5x: an 18 kHz layer doesn't fold back to 14 kHz (%.5f; it was 0.143)", alias);
+        }
+    }
+    {   // A transport loop at TAPE 0.5x under the host's loop brace: each time the brace jumps the song
+        // back two bars, the playhead moves back two bars' worth of take at 0.5x, not at 1x
+        brood::Core c; c.p.clock = 1; c.p.loopMode = 1; c.p.modLoop = 0.5; c.p.memory = 0.8; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2;
+        c.p.bpm = 120; c.p.hostPlaying = true; c.prepare(FS);
+        double ppq = 0, before = -1;
+        int checked = 0, wrong = 0;
+        double worst = 0;
+        float x[B], L[B], R[B];
+        for (int i = 0; i < B; ++i) x[i] = 0.2f;
+        const double tick = B / FS;   // seconds a block
+        for (long b = 0; b < static_cast<long>(30 / tick); ++b) {
+            c.p.ppq = ppq;
+            if (b == blk(1.0)) tap(c, 1);   // a long take (several seconds), caught while the host plays
+            c.process(x, L, R, B);
+            const auto st = c.state();
+            const double at = st.pos / st.clockHz, W = st.winLen / st.clockHz;
+            ppq += tick * 2;
+            if (ppq >= 8) {   // the brace: two bars of 4/4 at 120 bpm, 4 s
+                ppq -= 8;
+                before = at;
+            } else if (before >= 0) {
+                // Two blocks after the wrap (the lock's 5 ms dip and move are done by then): two
+                // bars back at 0.5x is 2 s of take, plus the blocks since, at 0.5x.
+                static int since = 0;
+                if (++since == 2) {
+                    const double want = std::fmod(before - 2.0 + 2 * tick * 0.5 + 100 * W, W);
+                    double d = std::fabs(at - want); d = std::min(d, W - d);
+                    worst = std::max(worst, d); ++checked; if (d > 0.01) ++wrong;
+                    before = -1; since = 0;
+                }
+            }
+        }
+        CHECK(checked >= 5 && wrong == 0, "transport loop at 0.5x: the loop brace moves the playhead by its own rate (%d of %d off, worst %.3f s)", wrong, checked, worst);
+    }
     {   // TAPE ECHO
         auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };
