@@ -1,9 +1,8 @@
 # Installing Brood on macOS
 
-## From a release
+## From the installer
 
-Download `Brood-<version>-macOS.pkg` from the
-[latest release](https://github.com/Jackherz/Brood/releases/latest). It's Universal
+Download `Brood-<version>-macOS.pkg` from [jackherz.com](https://jackherz.com). It's Universal
 (Apple Silicon and Intel) and installs:
 
 | Format | Installed to |

@@ -51,8 +51,7 @@ on macOS; other hosts and platforms are untested.
 
 ## Install
 
-Download `Brood-<version>-macOS.pkg` from the
-[latest release](https://github.com/Jackherz/Brood/releases/latest). It works on
+Download `Brood-<version>-macOS.pkg` from [jackherz.com](https://jackherz.com). It works on
 Apple Silicon and Intel Macs, and installs the VST3, the Audio Unit and the standalone
 app. It's free, and not notarised by Apple, so macOS asks you to allow it once:
 
