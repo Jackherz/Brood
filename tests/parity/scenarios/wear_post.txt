@@ -1,6 +1,7 @@
 # WEAR after the loop: worn, with the take kept as clean as the pedal's. A loop is
-# caught and overdubbed while it wobbles, the wet side moves ahead of the looper (so the
-# hiss has to join after it), and the option and WEAR itself are switched mid-run.
+# caught and overdubbed while it wobbles, ROUTING goes to IN so the wet side is recorded
+# (and the hiss has to join after the looper), and the option and WEAR itself are
+# switched mid-run.
 rate 48000
 seconds 12
 0 param wetMode 0
@@ -20,7 +21,7 @@ seconds 12
 424 fs loop up
 520 fs loop down
 700 fs loop up
-800 param wetPre 1
+800 param routing 0
 950 param wearNoise 0.5
 1100 param wearPost 0
 1300 param wearPost 1

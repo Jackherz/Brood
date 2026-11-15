@@ -5,7 +5,7 @@ rate 48000
 seconds 16
 0 param mix 1
 0 param routing 2
-0 param balance 1
+0 param balance 0
 0 param clock 1
 0 param loopMode 1
 0 param recMode 1

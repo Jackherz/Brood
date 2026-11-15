@@ -278,12 +278,6 @@ input[type="range"]::-moz-range-thumb { width: 9px; height: 15px; background: va
 .mod-routes li { display: grid; grid-template-columns: 16px 72px minmax(0,1fr) 34px 16px; align-items: center; gap: 4px; padding: 2px 0; border-bottom: 1px dotted #cfcec4; white-space: nowrap; }
 .mod-routes b { font: 11px 'Terminal', monospace; text-align: right; }
 .mod-routes button { border: 0; background: transparent; padding: 0; font: 14px 'Terminal', monospace; }
-.wet-pre { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 0 0 9px; padding: 3px; border: 0; background: transparent; color: #5f5f57; font: 12px 'Terminal', monospace; letter-spacing: .04em; }
-.wet-pre i { display: block; width: 20px; height: 12px; border: 1px solid #181815; background: #181815; position: relative; }
-.wet-pre i::after { content: ''; position: absolute; left: 1px; top: 1px; width: 7px; height: 8px; background: #faf9f3; }
-.wet-pre.on { color: #181815; }
-.wet-pre.on i { background: var(--lit); }
-.wet-pre.on i::after { left: auto; right: 1px; background: #181815; }
 
 /* ── the preset browser: over the controls, the same in every plug-in ── */
 .preset-browser { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: #faf9f3; font: 15px 'Terminal', monospace; }

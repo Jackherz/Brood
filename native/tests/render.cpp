@@ -35,7 +35,6 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
         else if (f == "Sync") m.sync = v != 0; else if (f == "Hold") m.hold = v != 0;
         else for (int t = 0; t < brood::kModTargets; ++t) if (f == std::string("_") + brood::kModTargetIds[t]) m.depth[t] = v;
     }
-    else if (n == "wetPre") p.wetPre = v != 0;
     else if (n == "loopDb") p.loopDb = v;
     else if (n == "hiQ") p.hiQ = v != 0;
     else if (n == "envSoft") p.envSoft = v != 0;

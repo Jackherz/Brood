@@ -27,8 +27,9 @@ calibrated against the hardware. It is not affiliated with or endorsed by Chase 
 - **Loops that follow the host.** A loop made while the host (Live, say) plays stops when
   playback stops and comes back locked to the song, like a clip. One made with the host
   stopped loops freely.
-- **Routing:** the wet side hears the input, the loop, or both, and runs before or after
-  the looper. FREEZE holds the wet side ringing on its own.
+- **Routing:** one control for what the wet side hears (the input, the loop, or both) and
+  whether the loop keeps the wet sound. WET/LOOP blends the two sides, from the loop alone
+  to the wet side alone. FREEZE holds the wet side ringing on its own.
 - **Two modulation sources** with their own rate and shape, routed by dragging onto any
   knob.
 - **Tempo sync** for the wet side, ENV and the modulation rate.

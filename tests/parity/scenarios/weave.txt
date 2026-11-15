@@ -17,4 +17,4 @@ seconds 6
 700 fs loop up
 1600 param clock 0.5
 1800 param mix 0.85
-2000 param balance 0.7
+2000 param balance 0.3

@@ -52,7 +52,7 @@ const BASE = {
   trails: 0, smooth: 0, balance: 0.5,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0, recMode: 0, recBars: 0, tapeDelay: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
-  wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
+  envSoft: 0, loopDb: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
     [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Bounce`, 0], [`mod${n}Sweep`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
     ...MOD_TARGETS.map((t) => [`mod${n}_${t}`, 0]),
@@ -100,7 +100,7 @@ const WHISPERS = {
 const SHARED_WHISPER = {
   mix: 'how much of what you hear is not here',
   clock: 'the heartbeat everything obeys',
-  routing: 'what the wet side is allowed to hear',
+  routing: 'what the wet side hears, and what the loop keeps',
 };
 
 function safeRead(key) {
@@ -116,7 +116,7 @@ function sanitize(input) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
     else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
-    else if (['trails', 'smooth', 'sync', 'envSync', 'wetPre', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost', 'tapeDelay'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
+    else if (['trails', 'smooth', 'sync', 'envSync', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost', 'tapeDelay'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
     else if (key.includes('_')) out[key] = clamp(input[key], -1, 1);
     else if (key === 'loopDb') out[key] = clamp(input[key], -24, 12);
     else if (key === 'recMode') out[key] = input[key] ? 1 : 0;
@@ -730,19 +730,35 @@ function migrateStart(p) {
   return { ...p, start: oldAt >= room ? 1 : clamp(oldAt / (len - 64)) };
 }
 
+// Settings and presets from before version 3 had BEFORE THE LOOP, and WET/LOOP counted the
+// loop. Now ROUTING alone decides (BEFORE THE LOOP on becomes IN, off becomes LOOP), and
+// WET/LOOP counts the wet side, so it turns round, with any modulation of it. Mirrors
+// BroodProcessor::migrateRouting in native/plugin/PluginProcessor.cpp.
+function migrateRouting(p) {
+  if (!p || typeof p !== 'object') return p;
+  const out = { ...p, routing: p.wetPre ? 0 : 2 };
+  delete out.wetPre;
+  if (Number.isFinite(p.balance)) out.balance = 1 - p.balance;
+  for (const id of ['mod1_balance', 'mod2_balance']) if (Number.isFinite(p[id])) out[id] = -p[id];
+  return out;
+}
+
 function App() {
   const [params, setParams] = useState(() => {
-    const now = safeRead('brood-params-v2');
-    return sanitize(now ?? migrateStart(safeRead('brood-params-v1')));
+    const now = safeRead('brood-params-v3');
+    if (now) return sanitize(now);
+    const v2 = safeRead('brood-params-v2');
+    return sanitize(migrateRouting(v2 ?? migrateStart(safeRead('brood-params-v1'))));
   });
   // User presets, named and filed. Anything saved in the old slots becomes a preset.
   const [userPatches, setUserPatches] = useState(() => {
-    const saved = safeRead('brood-user-presets-v2');
-    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 2, params: sanitize(p.v >= 2 ? p.params : migrateStart(p.params)) }));
+    const saved = safeRead('brood-user-presets-v3') ?? safeRead('brood-user-presets-v2');
+    const upgrade = (p) => (p.v >= 3 ? p.params : migrateRouting(p.v >= 2 ? p.params : migrateStart(p.params)));
+    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 3, params: sanitize(upgrade(p)) }));
     const slots = safeRead('brood-user-patches-v1');
     const legacy = safeRead('brood-user-patch-v1');
     const old = Array.isArray(slots) ? slots : legacy ? [legacy] : [];
-    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 2, params: sanitize(migrateStart(p)) } : null)).filter(Boolean);
+    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 3, params: sanitize(migrateRouting(migrateStart(p))) } : null)).filter(Boolean);
   });
   const [favourites, setFavourites] = useState(() => { const f = safeRead('brood-favourites-v1'); return Array.isArray(f) ? f : []; });
   const [browsing, setBrowsing] = useState(null);   // the sound to go back to while the browser is open
@@ -773,7 +789,7 @@ function App() {
       if (message.type === 'fit') setParams((previous) => ({ ...previous, start: 1, loopEnd: 1, ...(message.length ? { length: 1 } : {}) }));
     }, (message) => setNotice(message));
   }
-  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v2', params); }, [params]);
+  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v3', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
   const update = React.useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
   const help = React.useCallback((label, text) => ({
@@ -809,7 +825,7 @@ function App() {
   const stepPatch = (d) => loadPatch(preset + d);
   const openBrowser = () => setBrowsing({ params, preset });
   // Every preset kept here is in today's form (v 2: START counts from the oldest audio in every mode).
-  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 2 })); setUserPatches(marked); safeWrite('brood-user-presets-v2', marked); };
+  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 3 })); setUserPatches(marked); safeWrite('brood-user-presets-v3', marked); };
   const savePatch = (category) => {
     const name = (window.prompt('A name for this sound:', currentPatch.factory ? '' : currentPatch.name) || '').trim().toUpperCase();
     if (!name) return;
@@ -912,8 +928,6 @@ function App() {
                   toggle={params.wetMode === 1 ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }, { id: 'tapeDelay', name: 'Tape echo: TIME bends the pitch', label: 'TAPE' }] : params.wetMode === 3 ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }] : null}/>
                 <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} modSource={modSource} dark/>
               </div>
-              <button type="button" className={`wet-pre ${params.wetPre ? 'on' : ''}`} role="switch" aria-checked={!!params.wetPre} onClick={() => update('wetPre', params.wetPre ? 0 : 1)}
-                {...help('BEFORE THE LOOP', 'on: the wet side runs into the looper, so catches and overdubs keep it. off: the loop stays clean and the wet side plays over it.')}><i/>BEFORE THE LOOP</button>
               <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
             </div>
             <div className="channel-column global-column">
@@ -922,7 +936,7 @@ function App() {
                 <Knob id="mix" title="MIX" sub={SHARED_WHISPER.mix} value={params.mix} params={params} onChange={update} onTouch={touch} modSource={modSource}/>
                 <Knob id="clock" title="CLOCK" sub={params.smooth ? 'the heartbeat, breathing freely' : SHARED_WHISPER.clock} value={params.clock} params={params} onChange={update} onTouch={touch} modSource={modSource}/>
               </div>
-              <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)} help={help} hint="what the wet side is allowed to hear: the input, the loop, or both. with PRE on it hears only the input." disabled={!!params.wetPre}/>
+              <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)} help={help} hint="in: the wet side hears the input, and the loop keeps it. in + loop: it hears the input and the loop, and the loop keeps it. loop: it hears only the loop, and the loop keeps only the input."/>
               <div className="between-card"><div className="between-art"><span>IN</span><span className="between-dash">···▶</span><Spark size={18}/><span className="between-dash">▶···</span><span>OUT</span></div><p>ONE CLOCK. TWO WORLDS.</p></div>
             </div>
             <div className="channel-column loop-column">
@@ -976,7 +990,7 @@ function App() {
                 onChange={(e) => update('bpm', clamp(Math.round(Number(e.target.value) || 120), 40, 300))}/>
               <b>BPM</b>
             </label>
-            <label className="level-row balance-row" data-mod-target="balance" {...help('WET / LOOP', 'a crossfade between the two worlds. hard right is the loop on its own.')}><span>WET / LOOP</span><input aria-label="Wet and loop balance" type="range" min="0" max="1" step="0.01" value={params.balance} onChange={(e) => update('balance', Number(e.target.value))}/><b>{Math.round(params.balance * 100)}</b></label>
+            <label className="level-row balance-row" data-mod-target="balance" {...help('WET / LOOP', 'how much of the wet side you hear. hard left: the loop alone. hard right: the wet side alone. in the middle, both at full level.')}><span>WET / LOOP</span><input aria-label="Wet and loop balance" type="range" min="0" max="1" step="0.01" value={params.balance} onChange={(e) => update('balance', Number(e.target.value))}/><b>{Math.round(params.balance * 100)}</b></label>
             <ModPanel params={params} onChange={update} help={help} source={modSource} setSource={setModSource} state={state}/>
             <HoodPanel params={params} onChange={update} help={help}/>
             <div className="side-note"><Heart size={15}/><span>GOOD THINGS HAPPEN<br/>WHEN YOU GET LOST.</span><Spark size={14}/></div>
@@ -1006,7 +1020,6 @@ function App() {
           <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
           <div><dt>MODULATION <span>/ two sources</span></dt><dd>Two sources, each with its own rate and shape. Drag one onto any knob or WET / LOOP to route it, and it moves that control around where the knob sits. Drag up or down around a knob, or Alt-drag it, to set depth; a negative depth inverts it. Double-click a ring to remove that source, or press Delete on a clicked knob to remove both. <b>UNI</b> keeps the swing above the knob, <b>BOUNCE</b> reflects it so it never snaps back, <b>SWEEP</b> drops the shape and just climbs, <b>SYNC</b> makes a turn a division of the beat, and <b>HOLD</b> stops it where it is.</dd></div>
           <div><dt>SOFT <span>/ under LENGTH, in ENV</span></dt><dd>The slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. A rounder, less percussive stutter. Off is the sharp cut the pedal makes.</dd></div>
-          <div><dt>BEFORE THE LOOP <span>/ wet channel</span></dt><dd>Puts the wet side before the looper: input, then wet, then loop. Catches and overdubs keep the wet sound, and it hears only the input, so ROUTING stands aside. Off, the loop stays clean and the wet side plays over it.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>
       </div>

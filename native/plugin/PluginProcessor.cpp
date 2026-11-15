@@ -95,7 +95,6 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APC>(juce::ParameterID("recMode", 1), "Rec Mode", juce::StringArray{"Capture", "Record"}, 0));
           layout.add(loopParam("recBars", "Rec Bars", 0.f));
           layout.add(std::make_unique<APB>(juce::ParameterID("recAtTap", 1), "Rec At Tap", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("wetPre", 1), "Pre-Loop", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze", false));
           // The ramp engine: two generators, one per channel.
           // The two modulation sources: a rate, a shape and five switches each, and a
@@ -196,7 +195,7 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         if (loopMode == 1) return "tape " + fmtSpeed(brood::speedMap(v, 0.04));
         return "stretch " + fmtSpeed(brood::stretchMap(v)) + ", same pitch";
     }
-    if (id == "balance") return "wet " + pct(std::min(1.0, 2.0 * (1 - v))) + " / loop " + pct(std::min(1.0, 2.0 * v));
+    if (id == "balance") return "wet " + pct(std::min(1.0, 2.0 * v)) + " / loop " + pct(std::min(1.0, 2.0 * (1 - v)));
     if (id == "memory") {
         if (v <= 0.001f) return "pedal " + fmtTime(brood::kLoopSamples / hz);
         return "up to " + fmtTime(brood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
@@ -394,7 +393,6 @@ void BroodProcessor::pullParams() {
     p.hiQ = param("character") < 0.25f;
     p.wearNoise = param("wearNoise");
     p.wearPost = param("wearPost") > 0.5f;
-    p.wetPre = param("wetPre") > 0.5f;
     p.overdubLatch = param("overdub") > 0.5f;
     p.loopDb = param("loopDb");
     p.envSoft = param("envSoft") > 0.5f;
@@ -566,7 +564,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             // WEAR: 0 is the pedal as built, anything above it worn (the pedal's CLASSIC switch).
             else if (cc == 71) { if (auto* parameter = apvts.getParameter("character")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.5f); }
-            else if (cc == 28) { if (auto* parameter = apvts.getParameter("balance")) parameter->setValueNotifyingHost(value / 127.f); }   // the pedal's LEVEL BALANCE
+            else if (cc == 28) { if (auto* parameter = apvts.getParameter("balance")) parameter->setValueNotifyingHost(value / 127.f); }   // the pedal's LEVEL BALANCE: 0 the loop alone, 127 the wet side alone
             else if (cc == 105) id = "freeze";
             if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
         }
@@ -842,6 +840,22 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
                 takeLength = juce::jmax(64, static_cast<int>(takes.getChild(0)["samples"]));
             migrateStart(state, takeLength);
         }
+        // Sets from before version 3 had PRE-LOOP, and WET/LOOP ran the other way.
+        if (static_cast<int>(state.getProperty("stateVersion", 1)) < 3) {
+            auto param = [&state](const char* id) {
+                for (auto child : state) if (child.hasType("PARAM") && child["id"].toString() == id) return child;
+                return juce::ValueTree();
+            };
+            migrateRouting(
+                [&](const char* id) { const auto c = param(id); return c.isValid() ? c["value"] : juce::var(); },
+                [&](const char* id, double v) {
+                    auto c = param(id);
+                    if (!c.isValid()) { c = juce::ValueTree("PARAM"); c.setProperty("id", juce::String(id), nullptr); state.appendChild(c, nullptr); }
+                    c.setProperty("value", v, nullptr);
+                },
+                [&](const char* id) { if (auto c = param(id); c.isValid()) state.removeChild(c, nullptr); },
+                true);
+        }
         // The takes are ours, not parameters: keep them out of the parameter tree
         // (they were decoded above into the pending slots).
         for (auto takeTree = state.getChildWithName("TAKES"); takeTree.isValid(); takeTree = state.getChildWithName("TAKES"))
@@ -865,6 +879,22 @@ void BroodProcessor::migrateStart(juce::ValueTree& state, int takeLength) {
     if (!mode.isValid() || !start.isValid() || juce::roundToInt(static_cast<float>(mode["value"])) != 1) return;
     const double len = length.isValid() ? static_cast<double>(length["value"]) : 0.72;
     start.setProperty("value", brood::migrateTapeStart(static_cast<double>(start["value"]), len, takeLength), nullptr);
+}
+
+void BroodProcessor::migrateRouting(const std::function<juce::var(const char*)>& get,
+                                    const std::function<void(const char*, double)>& set,
+                                    const std::function<void(const char*)>& drop, bool raw) {
+    // PRE-LOOP on: the wet side was recorded and heard only the input, which is ROUTING IN now.
+    // Off: the loop kept only the input, which only ROUTING LOOP does now.
+    const juce::var pre = get("wetPre");
+    const bool wasPre = !pre.isVoid() && static_cast<double>(pre) > 0.5;
+    set("routing", wasPre ? 0.0 : (raw ? 2.0 : 1.0));   // a choice of three: 2 raw, 1 as 0..1
+    drop("wetPre");
+    // WET/LOOP counted the loop; it counts the wet side now. Its middle stays put.
+    if (const juce::var b = get("balance"); !b.isVoid()) set("balance", 1.0 - static_cast<double>(b));
+    // A modulation of WET/LOOP pushed it the other way: turn it round too (0..1 when not raw).
+    for (const char* id : {"mod1_balance", "mod2_balance"})
+        if (const juce::var d = get(id); !d.isVoid()) set(id, raw ? -static_cast<double>(d) : 1.0 - static_cast<double>(d));
 }
 
 juce::AudioProcessorEditor* BroodProcessor::createEditor() { return new BroodEditor(*this); }

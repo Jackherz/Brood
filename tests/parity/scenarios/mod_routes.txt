@@ -14,7 +14,7 @@ seconds 10
 0 param mod1_time 0.3
 0 param mod1_length -0.4
 0 param mod2_modWet 0.5
-0 param mod2_balance -0.3
+0 param mod2_balance 0.3
 0 fs wet down
 3 fs wet up
 80 fs loop down

@@ -404,9 +404,11 @@ int main() {
             CHECK(trailsShown(0.f) && trailsShown(1.f) && trailsShown(3.f), "TRAILS in REVERB, DELAY and WEAVE");
             CHECK(!trailsShown(2.f), "and not in SLIP");
             restored.apvts.getParameter("wetMode")->setValueNotifyingHost(0.f);
+            // PRE-LOOP is gone: ROUTING alone decides, and it's never greyed out.
             bool wetPosition = false;
             for (auto* child : editor->getChildren()) wetPosition = wetPosition || child->getTitle() == "Wet position";
-            CHECK(wetPosition, "the wet side's position is on the panel, by name");
+            CHECK(!wetPosition, "no PRE-LOOP / POST-LOOP switch on the panel");
+            CHECK(restored.apvts.getParameter("wetPre") == nullptr, "and no PRE-LOOP parameter");
             if (const char* path = std::getenv("BROOD_TEST_SCREENSHOT")) {
                 juce::FileOutputStream output { juce::File(juce::String::fromUTF8(path)) };
                 juce::PNGImageFormat png;
@@ -577,6 +579,50 @@ int main() {
         head2.playing = true;
         for (int k = 0; k < 4; ++k) { r.processBlock(rb, m); head2.ppq += size / rate * 2.0; }
         CHECK(r.ui.loopLed.load() == static_cast<int>(brood::LoopLed::Play) && !r.ui.parked.load(), "and plays when the host does");
+    }
+    {   // Sets and presets from before version 3: PRE-LOOP becomes ROUTING, WET/LOOP turns round
+        auto oldSet = [&](bool pre) {
+            BroodProcessor src; src.setPlayConfigDetails(2, 2, rate, size); src.prepareToPlay(rate, size);
+            src.apvts.getParameter("routing")->setValueNotifyingHost(0.5f);          // IN + LOOP
+            src.apvts.getParameter("balance")->setValueNotifyingHost(0.3f);          // old: 30% towards the loop
+            src.apvts.getParameter("mod1_balance")->setValueNotifyingHost(0.7f);     // +40%
+            auto state = src.apvts.copyState();
+            state.setProperty("stateVersion", 2, nullptr);
+            juce::ValueTree preParam("PARAM"); preParam.setProperty("id", "wetPre", nullptr); preParam.setProperty("value", pre ? 1.0 : 0.0, nullptr);
+            state.appendChild(preParam, nullptr);
+            juce::MemoryBlock block;
+            if (auto xml = state.createXml()) juce::AudioProcessor::copyXmlToBinary(*xml, block);
+            BroodProcessor dst; dst.setPlayConfigDetails(2, 2, rate, size); dst.prepareToPlay(rate, size);
+            dst.setStateInformation(block.getData(), static_cast<int>(block.getSize()));
+            const int routing = juce::roundToInt(dst.apvts.getRawParameterValue("routing")->load());
+            const float bal = dst.apvts.getRawParameterValue("balance")->load(), dep = dst.apvts.getRawParameterValue("mod1_balance")->load();
+            return std::tuple<int, float, float>{routing, bal, dep};
+        };
+        const auto [rPre, bPre, dPre] = oldSet(true);
+        const auto [rPost, bPost, dPost] = oldSet(false);
+        CHECK(rPre == 0, "an old set with PRE-LOOP on loads on ROUTING IN");
+        CHECK(rPost == 2, "an old set with PRE-LOOP off loads on ROUTING LOOP");
+        CHECK(std::fabs(bPre - 0.7f) < 1e-4f && std::fabs(bPost - 0.7f) < 1e-4f, "its WET/LOOP turns round (0.3 to 0.7)");
+        CHECK(std::fabs(dPre + 0.4f) < 1e-4f, "and so does a modulation of it (+40%% to -40%%)");
+        // A user preset from before version 3 (values 0..1).
+        BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
+        BroodPresets presets(q);
+        juce::XmlElement preset("BroodPreset");
+        preset.setAttribute("version", 2);
+        auto* values = preset.createNewChildElement("PARAMS");
+        values->setAttribute("wetPre", 1.0); values->setAttribute("balance", 0.25); values->setAttribute("mod2_balance", 0.25);
+        presets.apply(preset, "Old");
+        CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 0, "an old preset with PRE-LOOP on loads on ROUTING IN");
+        CHECK(std::fabs(q.apvts.getRawParameterValue("balance")->load() - 0.75f) < 1e-4f, "its WET/LOOP turns round");
+        CHECK(std::fabs(q.apvts.getRawParameterValue("mod2_balance")->load() - 0.5f) < 1e-4f, "and its modulation of it (-50%% to +50%%)");
+        values->setAttribute("wetPre", 0.0);
+        presets.apply(preset, "Old");
+        CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 2, "an old preset with PRE-LOOP off loads on ROUTING LOOP");
+        // Today's presets aren't touched.
+        preset.setAttribute("version", BroodProcessor::kStateVersion);
+        values->setAttribute("balance", 0.25);
+        presets.apply(preset, "New");
+        CHECK(std::fabs(q.apvts.getRawParameterValue("balance")->load() - 0.25f) < 1e-4f, "a preset of today keeps its WET/LOOP");
     }
     return failures ? 1 : 0;
 }

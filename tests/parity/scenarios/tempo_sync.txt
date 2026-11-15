@@ -17,6 +17,6 @@ seconds 6
 1400 param bpm 140
 500 fs loop down
 700 fs loop up
-1600 param balance 1
+1600 param balance 0
 1900 param balance 0.5
 2200 param sync 0

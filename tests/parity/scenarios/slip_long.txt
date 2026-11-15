@@ -9,7 +9,7 @@ seconds 24
 0 param smooth 1
 0 param wetDiv 1
 0 param routing 0
-0 param balance 0
+0 param balance 1
 0 param mix 1
 0 param mod1On 0
 0 param mod2On 0

@@ -545,7 +545,7 @@ class BroodCore {
       // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
       // Bars start at the next bar line while the host plays, unless recAtTap.
       recMode: 0, recBars: 0, recAtTap: 0, barQuarters: 4, hostPlaying: 0, ppq: 0, barStartPpq: 0,
-      wetPre: 0, envSoft: 0, loopDb: 0, hiQ: 0,
+      envSoft: 0, loopDb: 0, hiQ: 0,
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
       // 0 is no route) for each control it can move.
       ...Object.fromEntries([1, 2].flatMap((n) => [
@@ -591,6 +591,7 @@ class BroodCore {
     this.loopDbSeen = 0; this.loopLevelTarget = 1; this.loopLevel = 1;
     this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
+    this.lastWet = 0;                          // the wet side's last tick, for an overdub to layer
     this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
     this.decor = [new Allpass(Math.round(113 * CORE_FS / 48000), 0.6), new Allpass(Math.round(337 * CORE_FS / 48000), 0.6)];
 
@@ -1333,14 +1334,14 @@ class BroodCore {
 
   coreTick(x) {
     const p = this.p, e = this.e;
-    // PRE: input, then wet, then loop, so the wet side is recorded into whatever the
-    // looper keeps. It comes first, so it hears only the input and ROUTING stands
-    // aside: feeding the loop to a wet side that feeds the loop would never settle.
-    const pre = !!p.wetPre;
-    let loopOut = pre ? 0 : this.loopTick(x, x);
-
-    // Routing only changes the wet input when the loop is playing.
-    const wetSrc = pre || this.loopState !== 'play' ? x : p.routing === 0 ? x : p.routing === 1 ? x + loopOut : loopOut;
+    // ROUTING decides what the wet side hears and what the looper keeps (see brood.h):
+    // IN and IN + LOOP record the wet side with the input; LOOP records only the input,
+    // and the wet side hears only the loop.
+    const recordWet = p.routing !== 2;
+    // The loop is read before the wet side runs, so an overdub layers the wet side from the
+    // tick before.
+    const loopOut = this.loopTick(x, recordWet ? softClip(x + this.lastWet) : x);
+    const wetSrc = p.routing === 2 ? loopOut : p.routing === 1 ? x + loopOut : x;
     // The FREEZE switch is the hold gesture without the holding: it brings the wet
     // side up and freezes it, so a reverb can be left ringing on its own.
     const held = p.freeze > 0.5;
@@ -1357,9 +1358,9 @@ class BroodCore {
     const wdiv = divMap(p.wetDiv);
     // CLASSIC: the MK I clock was noisy, most of all when it was slow.
     const hiss = p.classic ? (this.rand() * 2 - 1) * (0.0006 + 0.01 * (1 - this.clockRatio)) * clamp(p.wearNoise, 0, 1) : 0;
-    // WORN after the loop, with the wet side ahead of the looper: hiss fed to the wet side
-    // would be recorded with it, so it joins the output after the looper instead.
-    const hissAfter = pre && !!p.wearPost;
+    // WORN after the loop, with the wet side recorded: hiss fed to the wet side would be
+    // recorded with it, so it joins the output after the looper instead.
+    const hissAfter = recordWet && !!p.wearPost;
     const wIn = wetSrc * this.wetIn + (hissAfter ? 0 : hiss);
     let wl = 0, wr = 0;
     const fs = CORE_FS;
@@ -1422,15 +1423,13 @@ class BroodCore {
       wr += (this.toneR - wr) * toneAmt;
     }
     wl *= this.wetOut; wr *= this.wetOut;
-    if (pre) loopOut = this.loopTick(x, softClip(x + (wl + wr) * 0.5));
 
     // The history always advances, whether or not a loop is playing: pausing it
     // left a splice in the buffer, and every extra tap stitched in another one,
-    // which is what put clicks inside the next loop. While a loop plays only the
-    // dry input is recorded — feeding the loop back would be a feedback path —
-    // and while listening the live wet channel is caught as well, as before.
-    const listening = this.loopState === 'off';
-    const kept = softClip(x + (pre ? (wl + wr) * 0.5 : 0));
+    // which is what put clicks inside the next loop. It keeps the wet side too, unless
+    // ROUTING is on LOOP.
+    const kept = softClip(x + (recordWet ? (wl + wr) * 0.5 : 0));
+    this.lastWet = (wl + wr) * 0.5;
     this.hist[this.histW] = kept;
     // The strip's picture of it: read only, never heard. (Float32, as the C++ keeps it.)
     const col = Math.floor(this.histW / LIVE_COL_TICKS);
@@ -1454,8 +1453,9 @@ class BroodCore {
     // simply swallowed the loop in the middle of the travel. Where the wet side
     // does hand the loop back, it arrives as an effect on top of it, which is what
     // the blend is for. At 100 % loop the wet side is gone and the loop is whole.
+    // WET/LOOP is how much of the wet side you hear: 0 the loop alone, 1 the wet side alone.
     const bal = e.balance;
-    const wetLvl = Math.min(1, 2 * (1 - bal)), loopLvl = Math.min(1, 2 * bal);
+    const wetLvl = Math.min(1, 2 * bal), loopLvl = Math.min(1, 2 * (1 - bal));
     const ld = loopOut * loopLvl;
     for (const ch of this.ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
     const hissOut = hissAfter ? hiss * this.wetOut : 0;

@@ -649,7 +649,6 @@ struct Params {
     bool envSoft = false;                           // ENV's slices fade in and out instead of cutting
     bool hiQ = false;                               // HI-Q: sinc conversion into and out of the clock
     double loopDb = 0;                              // GAIN on the loop, -24..+12 dB
-    bool wetPre = false;                            // the wet side runs into the looper instead of beside it
 };
 
 struct State {
@@ -685,7 +684,7 @@ public:
         xinHiW = ticksHiW = 0; hiMix = 0;
         reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs); weave.init(kCoreFs);
         wetOn = freeze = wetMomentary = false;
-        wetIn = wetOut = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
+        wetIn = wetOut = 0; lastWet = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
         // The loop survives a re-prepare. A host calls prepareToPlay again for a
@@ -1110,6 +1109,7 @@ private:
     Reverb reverb; Delay delay; Slip slip; Weave weave;
     bool wetOn = false, freeze = false, wetMomentary = false;
     double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
+    double lastWet = 0;   // the wet side's last tick, for an overdub to layer
     Allpass decor[2];
 
     std::vector<float> hist, loopBuf, liveCols;
@@ -1722,12 +1722,17 @@ private:
     }
 
     void coreTick(double x) {
-        // PRE: input, then wet, then loop, so the wet side is recorded into whatever the
-        // looper keeps. It comes first, so it hears only the input and ROUTING stands
-        // aside: feeding the loop to a wet side that feeds the loop would never settle.
-        const bool pre = p.wetPre;
-        double loopOut = pre ? 0.0 : loopTick(x, x);
-        const double wetSrc = pre || loopState != LoopState::Play ? x : p.routing == 0 ? x : p.routing == 1 ? x + loopOut : loopOut;
+        // ROUTING decides what the wet side hears and what the looper keeps.
+        //   IN:        the wet side hears the input;            the looper keeps input + wet.
+        //   IN + LOOP: the wet side hears the input and loop;   the looper keeps input + wet.
+        //   LOOP:      the wet side hears only the loop;        the looper keeps the input.
+        // In LOOP the wet side isn't recorded, so the loop is never fed back to itself through
+        // it, and the live input reaches the output only as the dry signal (MIX).
+        const bool recordWet = p.routing != 2;
+        // The loop is read before the wet side runs, so an overdub layers the wet side from the
+        // tick before (1/64000 s at most: inaudible).
+        double loopOut = loopTick(x, recordWet ? softClip(x + lastWet) : x);
+        const double wetSrc = p.routing == 2 ? loopOut : p.routing == 1 ? x + loopOut : x;
         // The FREEZE switch is the hold gesture without the holding: it brings the
         // wet side up and freezes it, so a reverb can be left ringing on its own.
         const bool held = p.freezeLatch > 0.5;
@@ -1744,9 +1749,9 @@ private:
         const double wdiv = divMap(p.wetDiv);
         // CLASSIC: the MK I clock was noisy, most of all when it was slow.
         const double hiss = p.classic ? (rand01() * 2 - 1) * (0.0006 + 0.01 * (1 - clockRatio)) * clampd(p.wearNoise, 0, 1) : 0.0;
-        // WORN after the loop, with the wet side ahead of the looper: hiss fed to the wet side
-        // would be recorded with it, so it joins the output after the looper instead.
-        const bool hissAfter = pre && p.wearPost;
+        // WORN after the loop, with the wet side recorded: hiss fed to the wet side would be
+        // recorded with it, so it joins the output after the looper instead.
+        const bool hissAfter = recordWet && p.wearPost;
         const double wIn = wetSrc * wetIn + (hissAfter ? 0.0 : hiss);
         double wl = 0, wr = 0;
         if (modeGain[0] > 1e-4) {
@@ -1807,13 +1812,13 @@ private:
             wr += (toneR - wr) * toneAmt;
         }
         wl *= wetOut; wr *= wetOut;
-        if (pre) loopOut = loopTick(x, softClip(x + (wl + wr) * 0.5));
 
         // The history always advances, whether or not a loop is playing: pausing it
         // left a splice in the buffer and every extra tap stitched in another one,
-        // which is what put clicks inside the next loop. It's clean unless PRE puts the
-        // wet side ahead of the looper.
-        const float kept = static_cast<float>(softClip(x + (pre ? (wl + wr) * 0.5 : 0)));
+        // which is what put clicks inside the next loop. It keeps the wet side too, unless
+        // ROUTING is on LOOP.
+        const float kept = static_cast<float>(softClip(x + (recordWet ? (wl + wr) * 0.5 : 0)));
+        lastWet = (wl + wr) * 0.5;
         hist[static_cast<size_t>(histW)] = kept;
         // The strip's picture of it: read only, never heard.
         float& col = liveCols[static_cast<size_t>(histW / kLiveColTicks)];
@@ -1835,8 +1840,9 @@ private:
         // always returns it late — and in SLIP and WEAVE it returns very little —
         // so the duck swallowed the loop in the middle of the travel. Mirrors
         // coreTick() in src/brood-worklet.js.
+        // WET/LOOP is how much of the wet side you hear: 0 the loop alone, 1 the wet side alone.
         const double bal = e.balance;
-        const double wetLvl = std::min(1.0, 2 * (1 - bal)), loopLvl = std::min(1.0, 2 * bal);
+        const double wetLvl = std::min(1.0, 2 * bal), loopLvl = std::min(1.0, 2 * (1 - bal));
         const double ld = loopOut * loopLvl;
         for (auto& ch : ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
         const double hissOut = hissAfter ? hiss * wetOut : 0.0;

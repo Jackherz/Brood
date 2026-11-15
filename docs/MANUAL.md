@@ -51,8 +51,7 @@ pedal this follows has none. It reads in three tiers:
 
 1. **The pedal**: the take along the top, with its START and END markers; under it the
    two footswitches, the six knobs under three column names (WET CHANNEL, SHARED,
-   MICRO-LOOPER) and the mode selectors. FREEZE, TRAILS and PRE-LOOP / POST-LOOP sit
-   under the wet column, SMOOTH under CLOCK, and WEAR between the two footswitches.
+   MICRO-LOOPER) and the mode selectors. FREEZE and TRAILS sit under the wet column, SMOOTH under CLOCK, and WEAR between the two footswitches.
    With WEAR on WORN, an **AFTER LOOP** switch appears under it. Off, worn is recorded into
    the loop as it always was. On, worn is heard but not recorded: the loop keeps a take as
    clean as PEDAL's (overdubs don't follow the wobble, and the hiss stays out of the take),
@@ -100,8 +99,8 @@ pedal this follows has none. It reads in three tiers:
 **Before there's a take, the strip shows what's coming in.** The input scrolls past with
 the newest audio at the right edge, over the window a tap would keep (MEMORY's length,
 so a slow CLOCK scrolls more slowly and holds more). It shows what the looper hears: the
-wet side too when it's PRE-LOOP, and WEAR's worn sound when WEAR is before the loop, but
-nothing that comes after the looper. In CAPTURE all of it is bright, since a tap keeps
+wet side too when ROUTING is on IN or IN + LOOP, and WEAR's worn sound when WEAR is before
+the loop, but nothing that comes after the looper. In CAPTURE all of it is bright, since a tap keeps
 it. In RECORD it stays dim until you tap. While a recording or a CAPTURE hold runs, a
 START rule marks where the take begins and rides left as it grows, and the heading
 counts the seconds kept. The same live view takes over from a take you've stopped
@@ -202,7 +201,7 @@ the effect. Changes are applied at audio-block boundaries:
 | 53, 54 | Wet and loop clock division |
 | 71 | WEAR: pedal (`0`) or worn (`1–127`) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
-| 28 | WET/LOOP balance (the pedal's LEVEL BALANCE) |
+| 28 | WET/LOOP balance (the pedal's LEVEL BALANCE): `0` the loop alone, `127` the wet side alone |
 | 75, 78 | Trails, Smooth (`0` off, `1–127` on) |
 | 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
 | 105 | Wet freeze, the same as the FREEZE switch (`0` off, `1–127` on) |
@@ -248,7 +247,7 @@ current mode's set.
 | MODIFY | how softly it must speak to be caught | which way the tape runs, and how fast | how far the grains drift from now |
 
 Shared: **MIX** — *how much of what you hear is not here*; **CLOCK** — *the
-heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to hear*.
+heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what the loop keeps*.
 
 ## Sound model
 
@@ -270,9 +269,8 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   (Until round 17 both outputs came from the engines' *left* sides, which made all
   of that dual mono on any mono source.)
 - Wet modes: **Reverb**, **Delay**, **Slip** and **Weave**; loop modes: **Env**,
-  **Tape** and **Stretch**. Three-way routing selects input, input + loop, or loop for the
-  wet side. When the loop is listening, its recent history includes active wet
-  audio; overdubs use the clean input.
+  **Tape** and **Stretch**. ROUTING, three ways, decides what the wet side hears and what
+  the loop keeps (below).
 - **WEAVE** is an addition, not one of the pedal's modes: a re-sampler in the spirit of the
   [Fieldtone Weaver](https://fieldtone.co). Three threads read a three-second
   memory at once, each with its own pitch (drawn from a root-sympathetic set of
@@ -353,10 +351,19 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
   head, and a moving LENGTH glides, so nothing clicks. It's a rounder, less percussive
   stutter; off is the sharp cut the pedal makes. Both cores agree
   (`tests/parity/scenarios/env_soft.txt`).
-- **PRE-LOOP / POST-LOOP**, in the wet column (BEFORE THE LOOP in the browser version): PRE-LOOP puts the wet side ahead of the looper: input,
-  then wet, then loop. Catches and overdubs keep the wet sound, and the Bench's SEND
-  carries it. It hears only the input then, so ROUTING stands aside. POST-LOOP, the loop stays
-  clean and the wet side plays over it (`tests/parity/scenarios/wet_pre.txt`).
+- **ROUTING** is the one control for where the wet side sits, as on the pedal:
+  - **IN**: the wet side hears the input, and the loop keeps the input with the wet side
+    on it. Catches and overdubs keep the wet sound, and the Bench's SEND carries it.
+  - **IN + LOOP**: the wet side hears the input and the loop, and the loop keeps the
+    input with the wet side on it.
+  - **LOOP**: the wet side hears only the loop, and the loop keeps only the input, so a
+    loop is never fed back to itself through the wet side. With MIX at all FX, no live
+    input reaches the output at all; with no loop caught, the wet side has nothing to hear.
+
+  The loop itself always plays at full level; WET/LOOP blends it with the wet side. There
+  used to be a separate PRE-LOOP / POST-LOOP switch. Sets and presets saved with it load
+  as they were meant: PRE-LOOP on becomes IN, off becomes LOOP
+  (`tests/parity/scenarios/wet_pre.txt`).
 - **HI-Q**, in the switches, uses longer filters for the crossings into and out of CLOCK: far
   fewer artifacts and a fuller top at low clocks. The wet side and the loop run a little later
   (eight clock ticks, so 1 ms at 8 kHz and 4 ms at 2 kHz); the dry side isn't delayed, so
@@ -373,9 +380,11 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side is allowed to he
 - **ENV** slices when it hears the input: LENGTH and MODIFY act on those slices, so with
   the loop playing and nothing coming in above MODIFY's threshold, they have nothing to
   move. The knob says so while you touch it.
-- **WET / LOOP** blends two complete worlds rather than fading one into the
-  other: the loop keeps its own level across the whole knob and the wet side adds
-  on top, so the middle hears both. It used to duck the direct loop against the
+- **WET / LOOP** is how much of the wet side you hear: hard left the loop alone, hard
+  right the wet side alone, and in the middle both at full level, so the middle hears
+  both. (It used to run the other way, with 0 meaning all wet; saved sets and presets
+  are turned round as they load, so they sound as they did. MIDI CC 28 follows the new
+  direction: 0 is the loop alone, 127 the wet side alone.) It used to duck the direct loop against the
   wet level, which meant the middle of the travel was the wet side only — and in
   SLIP and WEAVE, which hand back little of the loop, the loop vanished until the
   knob was nearly at LOOP. The duck is gone; both cores agree bit for bit

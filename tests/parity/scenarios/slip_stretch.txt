@@ -16,6 +16,6 @@ seconds 6
 1100 fs wet up
 1300 param wetMode 0
 1500 param loopMode 1
-1600 param balance 0.8
+1600 param balance 0.2
 1700 fs loop down
 1702 fs loop up

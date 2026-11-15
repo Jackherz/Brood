@@ -932,15 +932,6 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     envSoft.onClick = [this] { showReadout("SOFT / ENV", envSoft.getToggleState() ? "slices fade" : "slices cut"); };
     addChildComponent(envSoft);
     envSoftAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "envSoft", envSoft);
-    // PRE lives with the wet channel, under what it changes.
-    // Where the wet side sits against the looper, in the order the signal goes: PRE on the left.
-    wetPre = std::make_unique<ThreeWay>(*proc.apvts.getParameter("wetPre"), juce::StringArray{"Pre-loop", "Post-loop"}, nullptr, true);
-    wetPre->setTitle("Wet position");
-    wetPre->setDescription("Pre-loop records the wet side into the loop. Post-loop keeps the loop clean.");
-    wetPre->clicked = [this] {
-        showReadout("WET POSITION", wetPre->index == 0 ? "PRE-LOOP: THE WET SIDE IS RECORDED INTO THE LOOP" : "POST-LOOP: THE LOOP STAYS CLEAN, THE WET SIDE PLAYS OVER IT");
-    };
-    addAndMakeVisible(*wetPre);
     // Modulation: two sources, the selected one's controls showing.
     for (int k = 0; k < 2; ++k) {
         const juce::String m = "mod" + juce::String(k + 1), who = "MOD " + juce::String(k + 1);
@@ -1283,11 +1274,10 @@ void BroodEditor::updateBench() {
 void BroodEditor::updateModeControls() {
     const int wm = juce::roundToInt(proc.apvts.getRawParameterValue("wetMode")->load());
     const int lm = juce::roundToInt(proc.apvts.getRawParameterValue("loopMode")->load());
-    const int pre = proc.apvts.getRawParameterValue("wetPre")->load() > 0.5f ? 1 : 0;
     const int worn = proc.apvts.getRawParameterValue("character")->load() > 0.75f ? 1 : 0;
     const int record = proc.apvts.getRawParameterValue("recMode")->load() > 0.5f ? 1 : 0;
-    if (wm == lastModeWet && lm == lastModeLoop && pre == lastPre && worn == lastWorn && record == lastRec) return;
-    lastModeWet = wm; lastModeLoop = lm; lastPre = pre; lastWorn = worn; lastRec = record;
+    if (wm == lastModeWet && lm == lastModeLoop && worn == lastWorn && record == lastRec) return;
+    lastModeWet = wm; lastModeLoop = lm; lastWorn = worn; lastRec = record;
     recBars->setVisible(record == 1);   // bars and the bar line are RECORD's alone
     // MEMORY is CAPTURE's: RECORD's length is the bars, or the second tap, up to 32 s.
     memory.setEnabled(record == 0);
@@ -1295,9 +1285,6 @@ void BroodEditor::updateModeControls() {
     repaintDesign(loopArea);
     recAtTap.setVisible(record == 1);
     wearPost.setVisible(worn == 1);   // only WORN has anything to keep out of the loop
-    // With the wet side before the loop it hears only the input, so ROUTING stands aside.
-    routing->setEnabled(pre == 0);
-    routing->setAlpha(pre == 0 ? 1.f : 0.35f);
     wetSync.setVisible(wm == 1 || wm == 3);
     tapeDelay.setVisible(wm == 1);
     resized();   // SYNC moves over to share its row with TAPE in DELAY
@@ -1388,15 +1375,13 @@ void BroodEditor::resized() {
     place(*wetMode, wetModeDesign);
     place(*routing, routingDesign);
     place(*loopMode, loopModeDesign);
-    // The switches, each with what it acts on: FREEZE, TRAILS and the wet side's place in the
-    // signal under the wet column, SMOOTH under CLOCK.
+    // The switches, each with what it acts on: FREEZE and TRAILS under the wet column, SMOOTH
+    // under CLOCK.
     const int switchY = knobDesign[3].getBottom() + 18;
     dipCellDesign[2] = {cx[0] - 124, switchY, 54, 19};   // FREEZE
     dipCellDesign[0] = {cx[0] - 66, switchY, 54, 19};    // TRAILS
-    wetPreDesign = {cx[0] - 8, switchY, 132, 21};
     dipCellDesign[1] = juce::Rectangle<int>(66, 19).withCentre({cx[1], switchY + 10});   // SMOOTH
     for (size_t i = 0; i < dips.size(); ++i) place(*dips[i].button, dipCellDesign[i]);
-    place(*wetPre, wetPreDesign);
 
     // ── the side column ──
     // The readout, then four numbered panels in the order you reach for them while
@@ -1543,7 +1528,6 @@ void BroodEditor::rebuildHoverHelp() {
     };
     static const char* rampSwitchNames[] = {"UNIPOLAR", "BOUNCE", "SWEEP", "MOD SYNC", "MOD HOLD"};
     for (int i = 0; i < 5; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
-    add(wetPreDesign, "WET POSITION", "pre-loop: the wet side goes into the loop, so catches and overdubs keep it and SEND carries it. post-loop: the loop stays clean and the wet side plays over it.");
 
     add(memoryDesign.expanded(0, 2), "LOOP MEMORY", "in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal's own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.");
     add(gainDesign, "LOOP GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
@@ -1553,15 +1537,14 @@ void BroodEditor::rebuildHoverHelp() {
         add(recBarsDesign, "BARS", "free records until the next tap. a number records that many bars, then plays. longer than MEMORY allows, MEMORY wins.");
         add(recAtTapDesign, "AT TAP", "off: a bar count starts on the next bar line while the host plays, so loops land on the grid. on: it starts the moment you tap.");
     }
-    add(balanceDesign.expanded(0, 2), "WET / LOOP", "the loop keeps its level across the whole travel and the wet side is added on top. drop a source here: its bar is the swing, the small tab is where it is now.");
+    add(balanceDesign.expanded(0, 2), "WET / LOOP", "how much of the wet side you hear. left: the loop alone. right: the wet side alone. in the middle, both at full level. drop a source here: its bar is the swing, the small tab is where it is now.");
 
     add(sourceBoxDesign, "SOURCE", "what it listens to: the track, a phrase made here, or a file.");
     add(loadButtonDesign, "LOAD FILE", "drop a recording in. it starts playing from the moment it arrives.");
     add(inputGainDesign.expanded(0, 3), "LEVEL", "how hard the input hits the machine. past the middle it's driven into old tape: rounder, duller, a little hiss.");
 
     add(wetModeDesign, "WET MODE", "four ways of treating time: reverb, delay, slip, weave.");
-    if (lastPre == 1) add(routingDesign, "ROUTING", "off in pre-loop: the wet side only hears the input. switch to post-loop to choose.");
-    else add(routingDesign, "ROUTING", "what the wet side is allowed to hear: the input, the loop, or both.");
+    add(routingDesign, "ROUTING", "in: the wet side hears the input, and the loop keeps it. in + loop: it hears the input and the loop, and the loop keeps it. loop: it hears only the loop, and the loop keeps only the input.");
     add(loopModeDesign, "LOOP MODE", "three ways of holding a moment: envelope, tape, stretch.");
 
     add(fsWetDesign, "WET FOOTSWITCH", "tap for the wet side, hold to freeze it where it stands. key A.");

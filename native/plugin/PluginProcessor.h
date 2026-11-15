@@ -39,7 +39,15 @@ public:
     void setStateInformation(const void* data, int size) override;
     // 2: START counts from the oldest audio in every loop mode. Older sets and presets
     // stored TAPE's START from the newest, and are rewritten when they load.
-    static constexpr int kStateVersion = 2;
+    // 3: ROUTING alone decides what the wet side hears and what the loop keeps (PRE-LOOP
+    // gone), and WET/LOOP counts the wet side (0 the loop alone, 1 the wet side alone).
+    static constexpr int kStateVersion = 3;
+    // A set or preset from before version 3, in place: PRE-LOOP on becomes ROUTING IN, off
+    // becomes ROUTING LOOP; WET/LOOP and any modulation of it turn round. `raw` says whether
+    // the values are the parameters' own (a set) or 0..1 (a preset).
+    static void migrateRouting(const std::function<juce::var(const char*)>& get,
+                               const std::function<void(const char*, double)>& set,
+                               const std::function<void(const char*)>& drop, bool raw);
     // RECORD's bar counts, in the order the stepper steps through them. 0 is FREE.
     static constexpr int kRecBarCounts[9] = {0, 1, 2, 3, 4, 6, 8, 12, 16};
     static int recBarsFor(float v) { return kRecBarCounts[brood::rampIndexOfValue(v, 9)]; }

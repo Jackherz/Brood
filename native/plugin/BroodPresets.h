@@ -46,6 +46,7 @@ public:
         auto xml = std::make_unique<juce::XmlElement>("BroodPreset");
         xml->setAttribute("name", f.name);
         xml->setAttribute("category", f.category);
+        xml->setAttribute("version", BroodProcessor::kStateVersion);   // written in today's terms below
         auto* values = xml->createNewChildElement("PARAMS");
         for (const auto& [id, value] : f.values)
             if (auto* prm = proc.apvts.getParameter(id)) values->setAttribute(id, prm->convertTo0to1(value));
@@ -68,11 +69,22 @@ public:
         // A user preset saved before START meant the same in every mode: in TAPE its START
         // counted back from the newest audio. Factory presets set no START, so they need nothing.
         std::unique_ptr<juce::XmlElement> migrated;
+        // Before version 3: PRE-LOOP becomes ROUTING, and WET/LOOP turns round.
+        if (values != nullptr && xml.getIntAttribute("version", 1) < 3) {
+            migrated = std::make_unique<juce::XmlElement>(*values);
+            auto* m = migrated.get();
+            BroodProcessor::migrateRouting(
+                [m](const char* id) { return m->hasAttribute(id) ? juce::var(m->getDoubleAttribute(id)) : juce::var(); },
+                [m](const char* id, double v) { m->setAttribute(id, v); },
+                [m](const char* id) { m->removeAttribute(id); },
+                false);
+            values = m;
+        }
         if (values != nullptr && xml.getIntAttribute("version", 1) < 2 && values->hasAttribute("start")) {
             auto* modeP = proc.apvts.getParameter("loopMode");
             const float modeV = values->hasAttribute("loopMode") ? static_cast<float>(values->getDoubleAttribute("loopMode")) : modeP->getDefaultValue();
             if (juce::roundToInt(modeP->convertFrom0to1(modeV)) == 1) {
-                migrated = std::make_unique<juce::XmlElement>(*values);
+                if (migrated == nullptr) migrated = std::make_unique<juce::XmlElement>(*values);
                 const double length = values->getDoubleAttribute("length", proc.apvts.getParameter("length")->getDefaultValue());
                 const int take = proc.ui.lsrc.load() > 0 ? proc.ui.lsrc.load() : brood::kLoopSamples;
                 migrated->setAttribute("start", brood::migrateTapeStart(values->getDoubleAttribute("start"), length, take));
@@ -120,11 +132,11 @@ private:
             {"Loose Thread", "STITCHES", {{"time", .5f}, {"mix", .55f}, {"modWet", .45f}, {"wetMode", 3}, {"clock", .8f}}},
             {"Sewing Machine", "STITCHES", {{"time", .3f}, {"mix", .55f}, {"modWet", .92f}, {"wetMode", 3}, {"clock", .75f}, {"tone", .6f}}},
             {"Moth Holes", "STITCHES", {{"time", .9f}, {"mix", .6f}, {"modWet", .7f}, {"wetMode", 3}, {"clock", .5f}, {"tone", .45f}, {"character", 1}}},
-            {"Tape Reel", "LOOPS", {{"length", .8f}, {"modLoop", .66f}, {"mix", .7f}, {"balance", .7f}, {"clock", .9f}}},
-            {"Half Speed Sunday", "LOOPS", {{"length", .75f}, {"modLoop", .32f}, {"mix", .75f}, {"balance", .7f}, {"clock", .85f}, {"tone", .6f}}},
-            {"Stuck Moment", "LOOPS", {{"length", .2f}, {"modLoop", .55f}, {"mix", .8f}, {"balance", .8f}, {"loopMode", 2}, {"clock", .9f}}},
-            {"Slow Glass", "LOOPS", {{"length", .6f}, {"modLoop", .3f}, {"mix", .7f}, {"balance", .65f}, {"loopMode", 2}, {"time", .75f}, {"routing", 1}}},
-            {"Fading Photograph", "LOOPS", {{"length", .85f}, {"fade", .35f}, {"mix", .65f}, {"balance", .6f}, {"clock", .5f}, {"tone", .4f}, {"routing", 2}, {"time", .7f}}},
+            {"Tape Reel", "LOOPS", {{"length", .8f}, {"modLoop", .66f}, {"mix", .7f}, {"balance", .3f}, {"clock", .9f}}},
+            {"Half Speed Sunday", "LOOPS", {{"length", .75f}, {"modLoop", .32f}, {"mix", .75f}, {"balance", .3f}, {"clock", .85f}, {"tone", .6f}}},
+            {"Stuck Moment", "LOOPS", {{"length", .2f}, {"modLoop", .55f}, {"mix", .8f}, {"balance", .2f}, {"loopMode", 2}, {"clock", .9f}}},
+            {"Slow Glass", "LOOPS", {{"length", .6f}, {"modLoop", .3f}, {"mix", .7f}, {"balance", .35f}, {"loopMode", 2}, {"time", .75f}, {"routing", 1}}},
+            {"Fading Photograph", "LOOPS", {{"length", .85f}, {"fade", .35f}, {"mix", .65f}, {"balance", .4f}, {"clock", .5f}, {"tone", .4f}, {"routing", 2}, {"time", .7f}}},
             {"Wax Cylinder", "WORN", {{"clock", .18f}, {"mix", .6f}, {"length", .7f}, {"time", .4f}, {"tone", .35f}, {"character", 1}}},
             {"Dying Battery", "WORN", {{"clock", .08f}, {"smooth", 1}, {"mix", .65f}, {"time", .55f}, {"modWet", .7f}, {"character", 1}}},
             {"Pawn Shop Pedal", "WORN", {{"clock", .35f}, {"mix", .55f}, {"time", .6f}, {"modWet", .75f}, {"wetMode", 1}, {"character", 1}}},

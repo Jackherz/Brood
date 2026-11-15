@@ -6,7 +6,7 @@ seconds 14
 0 param wetMode 0
 0 param mix 1
 0 param routing 2
-0 param balance 1
+0 param balance 0
 0 param clock 1
 0 param memory 0.6
 0 param loopMode 1

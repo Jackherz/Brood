@@ -254,7 +254,6 @@ private:
     int targetAt(juce::Point<int> screen, juce::Point<float>& design) const;
     juce::Rectangle<int> targetDesign(int t) const;
     // PRE: the wet side runs into the looper. It belongs to the wet column.
-    std::unique_ptr<ThreeWay> wetPre;
     // RECORD, in 01 LOOP: CAPTURE or RECORD, and in RECORD the bars and whether they wait
     // for the bar line.
     std::unique_ptr<ThreeWay> recMode;
@@ -271,7 +270,6 @@ private:
     void updateTakeControls();
     juce::Rectangle<int> recModeDesign, recBarsDesign, recAtTapDesign;
     int lastRec = -1;
-    juce::Rectangle<int> wetPreDesign;
     // Tempo switches that belong to one knob each, and only appear in the modes that
     // can use the beat: DELAY and WEAVE for the wet side, ENV for the loop.
     juce::ToggleButton wetSync, envSync, envSoft;
@@ -280,7 +278,7 @@ private:
     juce::Rectangle<int> tapeDelayDesign;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wetSyncAtt, envSyncAtt, envSoftAtt;
     juce::Rectangle<int> wetSyncDesign, envSyncDesign, envSoftDesign;
-    int lastModeWet = -1, lastModeLoop = -1, lastPre = -1;
+    int lastModeWet = -1, lastModeLoop = -1;
     // Under the hood: the five sliders the pedal hides behind both footswitches, and NOISE.
     // They live along the bottom of the window, so there is no second page.
     struct HoodControl { juce::Slider slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
