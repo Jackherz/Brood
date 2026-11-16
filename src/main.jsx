@@ -484,6 +484,20 @@ function Txt({ r, align = 'left', cls = 'nm', size, color, children, style, fit 
   </div>;
 }
 
+// Help on the screen: the screen's own size when it fits, and a little smaller when a long
+// one wouldn't, so the whole sentence is always there to read rather than cut off.
+function HelpText({ r, text }) {
+  const el = useRef(null);
+  useLayoutEffect(() => {
+    const node = el.current;
+    for (let n = 17; n >= 12; n -= 0.5) {
+      node.style.fontSize = sf(n).fontSize;
+      if (node.scrollHeight <= node.clientHeight + 1) break;
+    }
+  }, [text, r[2]]);
+  return <div ref={el} className="abs lcd-help sc" style={{ ...at(r), ...sf(17) }}>{text}</div>;
+}
+
 // A pointer drag on a design-sized element, in design units.
 function designPoint(element, event, width) {
   const box = element.getBoundingClientRect();
@@ -1180,16 +1194,6 @@ function tourHoles(step, L, overlayOpen) {
   if (overlayOpen) out.push(L.overlay);
   return out.filter(Boolean).map((r) => grow(r, 6));
 }
-function TourVeil({ L, holes }) {
-  const h = L.phone ? L.H : H;
-  return <svg className="abs veil" style={at([0, 0, L.W, h])} width={L.W} height={h} aria-hidden="true">
-    <defs><mask id="tour-holes">
-      <rect width={L.W} height={h} fill="#fff"/>
-      {holes.map((r, i) => <rect key={i} x={r[0]} y={r[1]} width={r[2]} height={r[3]} rx="8" fill="#000"/>)}
-    </mask></defs>
-    <rect width={L.W} height={h} fill="#efebe0" fillOpacity=".84" mask="url(#tour-holes)"/>
-  </svg>;
-}
 // The tour's own strip: where we are, what this part does, one thing to try, and the way on.
 function TourBar({ step, phone, help, go, end, clearHelp, quiet }) {
   const s = TOUR[step], last = TOUR.length - 1;
@@ -1470,12 +1474,16 @@ function App() {
   const holes = tour >= 0 ? tourHoles(tour, L, overlayOpen) : null;
   const open = (x, y) => !holes || holes.some((h) => inside(h, x, y));
   useEffect(() => { safeWrite('brood-tour-v1', { open: tour >= 0, step: Math.max(0, tour) }); }, [tour]);
-  // Veiled controls are out of reach for the mouse, a finger and the Tab key alike.
+  // A step's parts are the controls whose middles sit in its open areas. Every other control
+  // fades as a whole (no cut-out shapes, so nothing is ever half covered) and is out of reach
+  // for the mouse, a finger and the Tab key alike. The bare paper behind the panel stays.
   useLayoutEffect(() => {
     for (const el of stage.current?.children || []) {
       if (!(el instanceof HTMLElement)) continue;
-      const keep = el.matches('.tourbar, .menu, input[type=file]') || !holes;
-      el.inert = !keep && !open(el.offsetLeft + el.offsetWidth / 2, el.offsetTop + el.offsetHeight / 2);
+      const keep = el.matches('.tourbar, .menu, input[type=file], .sheet:empty') || !holes;
+      const off = !keep && !open(el.offsetLeft + el.offsetWidth / 2, el.offsetTop + el.offsetHeight / 2);
+      el.inert = off;
+      el.classList.toggle('tour-off', off);
     }
   });
   // What would keep the wet side silent in the wet steps, and the least that puts it right.
@@ -1693,7 +1701,7 @@ function App() {
           <Txt fit r={[10, 6, lcdW - 72, 16]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)">{helping ? hover.label : lcdLabel}</Txt>
           <i className="chip-label sc" style={sf(15)}>{helping ? 'HELP' : 'LIVE'}</i>
           {helping
-            ? <div className="abs lcd-help sc" style={{ ...at([10, 22, lcdW - 20, 84]), ...sf(17) }}>{hover.text}</div>
+            ? <HelpText r={[10, 22, lcdW - 20, 84]} text={hover.text}/>
             : <>
               <Txt fit r={[10, 22, lcdW - 20, 69]} cls="sc" size={sf(28)} color={PAPER}>{lcdValue}{blink ? '_' : ''}</Txt>
               <Txt r={[10, 91, lcdW - 20, 15]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)" style={{ whiteSpace: 'pre' }}>{meta}</Txt>
@@ -1795,7 +1803,6 @@ function App() {
           {chipDrag.target >= 0 && <div className="abs drop" style={{ ...at(targetRect(chipDrag.target)), borderColor: MOD_COLOURS[chipDrag.k] }}/>}
           <div className="abs drag-tag vl" style={{ ...at(centred(58, 20, chipDrag.x, chipDrag.y - 16)), background: MOD_COLOURS[chipDrag.k], ...vf(16) }}>MOD {chipDrag.k + 1}</div>
         </>}
-        {holes && <TourVeil L={L} holes={holes}/>}
         {tour >= 0 && !phone && <TourBar step={tour} phone={false} quiet={quiet} go={goTour} end={() => setTour(-1)}/>}
         <Menu menu={menu} close={() => setMenu(null)}/>
       </div>

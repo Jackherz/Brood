@@ -96,7 +96,7 @@ button, input { font: inherit; color: inherit; }
 /* the screen */
 .lcd { background: var(--ink); border-radius: 6px; color: var(--paper); }
 .chip-label { position: absolute; right: 10px; top: 6px; height: 16px; padding: 0 5px; border-radius: 3px; background: var(--paper); color: var(--ink); font-style: normal; line-height: 16px; }
-.lcd-help { color: var(--paper); line-height: 1.12; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.lcd-help { color: var(--paper); line-height: 1.12; overflow: hidden; }
 
 /* modulation */
 .chip { border-radius: 5px; background: rgba(24, 24, 21, .05); cursor: grab; touch-action: none; }
@@ -165,7 +165,9 @@ html.phone, html.phone body { height: auto; overflow-x: hidden; overflow-y: auto
 .stage, .stage * { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
 
 /* the tour: a veil over what this step isn't about, and its own strip */
-.veil { z-index: 15; pointer-events: none; }
+/* what a step isn't about fades as a whole */
+.stage > * { transition: filter .25s ease-out; }
+.stage > .tour-off { filter: opacity(.22); }
 .tourbar { z-index: 16; }
 .tourbar h2 { margin: 0; font-weight: 500; letter-spacing: .06em; line-height: 1.15; color: var(--ink); }
 .tour-body { overflow-y: auto; color: var(--muted); line-height: 1.36; }
@@ -182,4 +184,4 @@ html.phone, html.phone body { height: auto; overflow-x: hidden; overflow-y: auto
 @keyframes tour-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .tourbar-holder { position: fixed; left: 0; bottom: 0; transform-origin: 0 100%; z-index: 50; }
 .tourbar-phone { position: absolute; inset: 0; border-radius: 6px 6px 0 0; box-shadow: 0 -1px 0 var(--rule); }
-@media (prefers-reduced-motion: reduce) { .tour-text { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .tour-text { animation: none; } .stage > * { transition: none; } }
