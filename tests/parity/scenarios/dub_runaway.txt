@@ -1,0 +1,31 @@
+# OVERDUB in IN + LOOP with the wet side on: the loop comes back through the wet side, so the
+# layer replaces the old one by the wet share and GAIN stays out of what is re-recorded. The
+# owner's settings from the bug: SLIP at RATE +1.50, WET DIV 4x, TAPE at 0.5x, LOOP DIV 4x,
+# GAIN +4 dB, CLOCK 64 kHz, WORN after the loop, BALANCE loop 100 / wet 20.
+rate 48000
+seconds 30
+0 param mix 1
+0 param routing 1
+0 param wetMode 2
+0 param time 0.62
+0 param modWet 0.896
+0 param wetDiv 1
+0 param loopMode 1
+0 param modLoop 0.55
+0 param loopDiv 1
+0 param loopDb 4
+0 param clock 1
+0 param classic 1
+0 param wearPost 1
+0 param wearNoise 0.29
+0 param balance 0.1
+0 param width 1
+0 param memory 0.4
+0 fs wet down
+2 fs wet up
+300 fs loop down
+304 fs loop up
+1200 param overdubLatch 1
+# Then the input stops while the overdub carries on: the loop is only resampled through the
+# wet side, which must not grow it.
+4000 param inputGain 0

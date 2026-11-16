@@ -688,7 +688,7 @@ public:
         xinHiW = ticksHiW = 0; hiMix = 0;
         reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs); weave.init(kCoreFs);
         wetOn = freeze = wetMomentary = false;
-        wetIn = wetOut = 0; lastWet = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
+        wetIn = wetOut = 0; lastWet = 0; loopBare = 0; dubReplace = 0; routeLoop = 0; feedPow = wetPow = 0; dubCeil = 1; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
         // The loop survives a re-prepare. A host calls prepareToPlay again for a
@@ -1136,6 +1136,10 @@ private:
     bool wetOn = false, freeze = false, wetMomentary = false;
     double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
     double lastWet = 0;   // the wet side's last tick, for an overdub to layer
+    double loopBare = 0;  // the loop's last tick before GAIN, for the wet side in IN + LOOP
+    double routeLoop = 0; // 1 in IN + LOOP, faded across a ROUTING change
+    double dubReplace = 0;   // how much of the old layer an overdub replaces (IN + LOOP, wet on)
+    double feedPow = 0, wetPow = 0, dubCeil = 1;   // IN + LOOP's ceiling on the re-recorded wet side
     Allpass decor[2];
 
     std::vector<float> hist, loopBuf, liveCols;
@@ -1486,9 +1490,10 @@ private:
             loopGain = 0; dubGain = 0; dubLast = -1;
             if (pendingOp != LoopOp::None) settlePending();   // faded out: CLEAR or UNDO now
             heardAt(false, nullptr, nullptr);
+            loopBare = 0;
             return 0;
         }
-        if (lsrc < 64) { heardAt(false, nullptr, nullptr); return 0; }
+        if (lsrc < 64) { heardAt(false, nullptr, nullptr); loopBare = 0; return 0; }
 
         // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
         // which keeps its share of the window, never runs faster than four times normal
@@ -1783,7 +1788,9 @@ private:
             const int q = std::min(dubW - 1, static_cast<int>(std::floor(dubPos)));
             // FADE: how much of the old loop survives each overdub pass. 0 keeps
             // the pedal's slow decay; 1 lets the new layer replace it completely.
-            const double loss = 1 - 0.97 * (1 - clampd(s.fade, 0, 1));
+            // IN + LOOP with the wet side on: the old loop comes back in through the wet side, so
+            // the layer replaces it by that share instead of stacking a second copy on top.
+            const double loss = 1 - 0.97 * (1 - clampd(s.fade, 0, 1)) * (1 - dubReplace);
             const double dubF = std::min(0.004 * kCoreFs, dubW / 4.0);
             auto write = [&](int cellQ, double v) {
                 const double amount = dubGain * std::min({1.0, cellQ / dubF, (dubW - cellQ) / dubF});
@@ -1807,7 +1814,8 @@ private:
         // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
         if (p.loopDb != loopDbSeen) { loopDbSeen = p.loopDb; loopLevelTarget = std::pow(10.0, p.loopDb / 20.0); }
         loopLevel += (loopLevelTarget - loopLevel) * 0.003;
-        return y * loopGain * loopLevel * lockGain;
+        loopBare = y * loopGain * lockGain;
+        return loopBare * loopLevel;
     }
 
     void coreTick(double x) {
@@ -1818,10 +1826,19 @@ private:
         // In LOOP the wet side isn't recorded, so the loop is never fed back to itself through
         // it, and the live input reaches the output only as the dry signal (MIX).
         const bool recordWet = p.routing != 2;
+        // IN + LOOP: the wet side hears the loop, so what an overdub keeps of the wet side follows
+        // WET/LOOP (what you hear of it), and the layer replaces the old one by that share times
+        // the wet side being on. A pass then brings the loop back at most at the wet side's own
+        // gain, where stacking it on 97% of the old layer ran away. Faded across a ROUTING change.
+        routeLoop += ((p.routing == 1 ? 1.0 : 0.0) - routeLoop) * 0.003;
+        const double wetShare = routeLoop * std::min(1.0, 2 * e.balance);
+        dubReplace = wetShare * wetIn;
         // The loop is read before the wet side runs, so an overdub layers the wet side from the
         // tick before (1/64000 s at most: inaudible).
-        double loopOut = loopTick(x, recordWet ? softClip(x + lastWet) : x);
-        const double wetSrc = p.routing == 2 ? loopOut : p.routing == 1 ? x + loopOut : x;
+        double loopOut = loopTick(x, recordWet ? softClip(x + lastWet * (1 - routeLoop + wetShare) * (1 - routeLoop * (1 - dubCeil))) : x);
+        // GAIN is the loop's level as you hear it: the wet side hears the loop before it, so
+        // turning it up can't push the loop up on every overdub pass.
+        const double wetSrc = p.routing == 2 ? loopOut : p.routing == 1 ? x + loopBare : x;
         // The FREEZE switch is the hold gesture without the holding: it brings the
         // wet side up and freezes it, so a reverb can be left ringing on its own.
         const bool held = p.freezeLatch > 0.5;
@@ -1908,6 +1925,15 @@ private:
         // ROUTING is on LOOP.
         const float kept = static_cast<float>(softClip(x + (recordWet ? (wl + wr) * 0.5 : 0)));
         lastWet = (wl + wr) * 0.5;
+        // IN + LOOP's ceiling: over a quarter second, what the wet side gives back may not be
+        // louder than what it was fed, so a wet mode that builds on itself (a delay near full
+        // FEEDBACK) can't grow the loop pass after pass. Lossy wet modes never reach it.
+        {
+            const double k = 1 / (0.25 * std::max(1.0, clockRatio * fs));
+            feedPow += (wIn * wIn - feedPow) * k;
+            wetPow += (lastWet * lastWet - wetPow) * k;
+            dubCeil = wetPow > feedPow && wetPow > 1e-12 ? std::sqrt(feedPow / wetPow) : 1.0;
+        }
         hist[static_cast<size_t>(histW)] = kept;
         // The strip's picture of it: read only, never heard.
         float& col = liveCols[static_cast<size_t>(histW / kLiveColTicks)];

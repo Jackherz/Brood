@@ -330,6 +330,28 @@ int main() {
         CHECK(keep > 0.005, "fade 0 keeps the loop (%.4f)", keep);
         CHECK(gone < keep * 0.05, "fade 1 wipes it (%.5f vs %.4f)", gone, keep);
     }
+    {   // IN + LOOP: a silent overdub resamples the loop through the wet side and never grows it,
+        // even with GAIN up or a delay near full FEEDBACK; with the wet side off it layers as before
+        // The loop is measured on its own (WET/LOOP all loop) either side, so the wet side's own
+        // ringing doesn't count.
+        auto growth = [](int wetMode, double modWet, double loopDb, bool wetOn) {
+            brood::Core c; c.p.routing = 1; c.p.wetMode = wetMode; c.p.modWet = modWet; c.p.time = 0.62; c.p.wetDiv = 1;
+            c.p.mix = 1; c.p.clock = 1; c.p.balance = 0; c.p.loopDb = loopDb; c.p.loopMode = 1;
+            c.prepare(FS);
+            if (wetOn) tap(c, 0);
+            render(c, 1.2, tone(200, 3), [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(1.1)) cc.footswitch(1, false); });
+            const auto silent = [](double) { return 0.0; };
+            const double before = rms(render(c, 2, silent).L, 1, 2);
+            c.p.balance = 0.5; c.p.overdubLatch = true;
+            render(c, 12, silent);
+            c.p.overdubLatch = false; c.p.balance = 0;
+            return rms(render(c, 2, silent).L, 1, 2) / before;
+        };
+        const double slip = growth(2, 0.9, 4, true), dly = growth(1, 0.95, 0, true), dry = growth(2, 0.9, 4, false);
+        CHECK(slip < 1.1, "IN + LOOP overdub through SLIP with GAIN +4 dB holds its level (x%.2f)", slip);
+        CHECK(dly < 1.2, "IN + LOOP overdub through a delay at high FEEDBACK holds its level (x%.2f)", dly);
+        CHECK(dry > 0.5 && dry < 1.05, "IN + LOOP overdub with the wet side off layers as before (x%.2f)", dry);
+    }
     {   // CLASSIC: the slow clock is noisy
         auto noise = [](bool classic, double level = 1) {
             brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic; c.p.wearNoise = level;

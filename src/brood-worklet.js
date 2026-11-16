@@ -594,6 +594,10 @@ class BroodCore {
     this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
     this.lastWet = 0;                          // the wet side's last tick, for an overdub to layer
+    this.loopBare = 0;                         // the loop's last tick before GAIN (IN + LOOP's wet side)
+    this.routeLoop = 0;                        // 1 in IN + LOOP, faded across a ROUTING change
+    this.dubReplace = 0;                       // how much of the old layer an overdub replaces
+    this.feedPow = 0; this.wetPow = 0; this.dubCeil = 1;   // IN + LOOP's ceiling on the re-recorded wet side
     this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
     this.decor = [new Allpass(Math.round(113 * CORE_FS / 48000), 0.6), new Allpass(Math.round(337 * CORE_FS / 48000), 0.6)];
 
@@ -1076,9 +1080,10 @@ class BroodCore {
       this.loopGain = 0;
       if (this.pendingOp) this.settlePending();   // faded out: CLEAR or UNDO now
       this.heardAt(false);
+      this.loopBare = 0;
       return 0;
     }
-    if (this.lsrc < 64) { this.heardAt(false); return 0; }
+    if (this.lsrc < 64) { this.heardAt(false); this.loopBare = 0; return 0; }
 
     // TAPE: the window follows LENGTH at up to three samples a tick, so the playhead,
     // which keeps its share of the window, never runs faster than four times normal
@@ -1360,7 +1365,9 @@ class BroodCore {
       const q = Math.min(dubW - 1, Math.floor(this.dubPos));
       // FADE: how much of the old loop survives each overdub pass. 0 keeps the
       // pedal's slow decay; 1 lets the new layer replace it completely.
-      const loss = 1 - 0.97 * (1 - clamp(this.s.fade, 0, 1));
+      // IN + LOOP with the wet side on: the old loop comes back through the wet side, so the
+      // layer replaces it by that share instead of stacking a second copy (see brood.h).
+      const loss = 1 - 0.97 * (1 - clamp(this.s.fade, 0, 1)) * (1 - this.dubReplace);
       const dubF = Math.min(0.004 * fs, dubW / 4);
       const write = (cellQ, v) => {
         const amount = this.dubGain * Math.min(1, cellQ / dubF, (dubW - cellQ) / dubF);
@@ -1383,7 +1390,8 @@ class BroodCore {
     // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
     if (this.p.loopDb !== this.loopDbSeen) { this.loopDbSeen = this.p.loopDb; this.loopLevelTarget = Math.pow(10, this.p.loopDb / 20); }
     this.loopLevel += (this.loopLevelTarget - this.loopLevel) * 0.003;
-    return y * this.loopGain * this.loopLevel * this.lockGain;
+    this.loopBare = y * this.loopGain * this.lockGain;
+    return this.loopBare * this.loopLevel;
   }
 
   coreTick(x) {
@@ -1392,10 +1400,16 @@ class BroodCore {
     // IN and IN + LOOP record the wet side with the input; LOOP records only the input,
     // and the wet side hears only the loop.
     const recordWet = p.routing !== 2;
+    // IN + LOOP: what an overdub keeps of the wet side follows WET/LOOP, and the layer replaces
+    // the old one by that share times the wet side being on, so a pass can't run away (brood.h).
+    this.routeLoop += ((p.routing === 1 ? 1 : 0) - this.routeLoop) * 0.003;
+    const wetShare = this.routeLoop * Math.min(1, 2 * e.balance);
+    this.dubReplace = wetShare * this.wetIn;
     // The loop is read before the wet side runs, so an overdub layers the wet side from the
     // tick before.
-    const loopOut = this.loopTick(x, recordWet ? softClip(x + this.lastWet) : x);
-    const wetSrc = p.routing === 2 ? loopOut : p.routing === 1 ? x + loopOut : x;
+    const loopOut = this.loopTick(x, recordWet ? softClip(x + this.lastWet * (1 - this.routeLoop + wetShare) * (1 - this.routeLoop * (1 - this.dubCeil))) : x);
+    // The wet side hears the loop before GAIN, so GAIN can't push it up on every overdub pass.
+    const wetSrc = p.routing === 2 ? loopOut : p.routing === 1 ? x + this.loopBare : x;
     // The FREEZE switch is the hold gesture without the holding: it brings the wet
     // side up and freezes it, so a reverb can be left ringing on its own.
     const held = p.freeze > 0.5;
@@ -1484,6 +1498,13 @@ class BroodCore {
     // ROUTING is on LOOP.
     const kept = softClip(x + (recordWet ? (wl + wr) * 0.5 : 0));
     this.lastWet = (wl + wr) * 0.5;
+    // IN + LOOP's ceiling: the wet side may not give back more than it was fed (brood.h).
+    {
+      const k = 1 / (0.25 * Math.max(1, this.clockRatio * this.fs));
+      this.feedPow += (wIn * wIn - this.feedPow) * k;
+      this.wetPow += (this.lastWet * this.lastWet - this.wetPow) * k;
+      this.dubCeil = this.wetPow > this.feedPow && this.wetPow > 1e-12 ? Math.sqrt(this.feedPow / this.wetPow) : 1;
+    }
     this.hist[this.histW] = kept;
     // The strip's picture of it: read only, never heard. (Float32, as the C++ keeps it.)
     const col = Math.floor(this.histW / LIVE_COL_TICKS);

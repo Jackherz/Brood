@@ -78,11 +78,13 @@ int main(int argc, char** argv) {
     std::vector<float> heads;
     float x[B], L[B], R[B];
     long songStart = 0;
+    double inputGain = 1;   // `param inputGain <g>`: the test input's level from there
     for (long b = 0; b < nBlocks; ++b) {
         auto it = events.find(b);
         if (it != events.end())
             for (const auto& e : it->second) {
                 if (e.isParam && e.a == "songStart") songStart = static_cast<long>(e.value);   // the song restarts from bar 1 here
+                else if (e.isParam && e.a == "inputGain") inputGain = e.value;
                 else if (e.isParam) setParam(core.p, e.a, e.value);
                 else if (e.isOp) { if (e.a == "clear") core.clearLoop(); else if (e.a == "undo") core.undoLoop(); }
                 else core.footswitch(e.a == "wet" ? 0 : 1, e.b == "down");
@@ -93,7 +95,7 @@ int main(int argc, char** argv) {
             core.p.ppq = static_cast<double>((b - songStart) * B) / rate * core.p.bpm / 60;
             core.p.barStartPpq = std::floor(core.p.ppq / core.p.barQuarters) * core.p.barQuarters;
         }
-        for (int i = 0; i < B; ++i) x[i] = input(b * B + i, rate);
+        for (int i = 0; i < B; ++i) x[i] = static_cast<float>(input(b * B + i, rate) * inputGain);
         core.process(x, L, R, B);
         for (int i = 0; i < B; ++i) { out[static_cast<size_t>(2 * (b * B + i))] = L[i]; out[static_cast<size_t>(2 * (b * B + i) + 1)] = R[i]; }
         if (argc > 3) {

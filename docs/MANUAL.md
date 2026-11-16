@@ -374,7 +374,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   - **IN**: the wet side hears the input, and the loop keeps the input with the wet side
     on it. Catches and overdubs keep the wet sound, and the Bench's SEND carries it.
   - **IN + LOOP**: the wet side hears the input and the loop, and the loop keeps the
-    input with the wet side on it.
+    input with the wet side on it. An overdub here resamples the loop through the wet side:
+    the old layer comes back in through it, so the new layer replaces the old one by as much
+    of the wet side as BALANCE lets you hear (with the wet side off it layers as usual). A
+    pass can never bring the loop back louder than it went in, GAIN only changes what you
+    hear, and a wet mode that builds on itself (a delay near full FEEDBACK) is held at that
+    ceiling. Both cores agree (`tests/parity/scenarios/dub_runaway.txt`).
   - **LOOP**: the wet side hears only the loop, and the loop keeps only the input, so a
     loop is never fed back to itself through the wet side. With MIX at all FX, no live
     input reaches the output at all; with no loop caught, the wet side has nothing to hear.
