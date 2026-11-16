@@ -6,7 +6,7 @@
 @font-face { font-family: 'Chivo Mono'; src: url('../assets/fonts/ChivoMono-Regular.ttf') format('truetype'); font-display: block; }
 :root {
   --page: #efebe0; --paper: #f6f3ea; --ink: #181815; --muted: #5f5f57; --rule: #bdb9ab;
-  --lit: #c98f2e; --accent: #8f5f12;
+  --lit: #c98f2e; --accent: #8f5f12; --moss: #5d7046;
   color: var(--ink); background: var(--page); font-synthesis: none; -webkit-font-smoothing: antialiased;
 }
 * { box-sizing: border-box; }
@@ -17,6 +17,7 @@ button, input { font: inherit; color: inherit; }
 .stage { position: absolute; left: 0; top: 0; width: 1200px; height: 820px; transform-origin: 0 0; user-select: none; -webkit-user-select: none; touch-action: none; }
 .abs { position: absolute; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+html.pointer-input :focus-visible { outline: none; }
 
 /* the three faces: names, figures on the paper, the screen */
 .nm { font-family: 'Overpass', sans-serif; font-weight: 500; letter-spacing: .06em; }
@@ -183,5 +184,30 @@ html.phone, html.phone body { height: auto; overflow-x: hidden; overflow-y: auto
 .tour-text { animation: tour-in .24s ease-out both; }
 @keyframes tour-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .tourbar-holder { position: fixed; left: 0; bottom: 0; transform-origin: 0 100%; z-index: 50; }
-.tourbar-phone { position: absolute; inset: 0; border-radius: 6px 6px 0 0; box-shadow: 0 -1px 0 var(--rule); }
-@media (prefers-reduced-motion: reduce) { .tour-text { animation: none; } .stage > * { transition: none; } }
+/* a phone's tour bar: three compact rows, as tall as its words need */
+.tourbar-phone { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 10px; border-radius: 6px 6px 0 0; box-shadow: 0 -1px 0 var(--rule); }
+.tp-head { display: flex; align-items: center; gap: 8px; }
+.tp-title { flex: 1; min-width: 0; min-height: 34px; display: flex; align-items: center; gap: 10px; border: 0; padding: 0; background: none; color: var(--ink); text-align: left; letter-spacing: .06em; cursor: pointer; }
+.tp-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-title i { flex: none; font-style: normal; color: var(--muted); letter-spacing: 0; }
+.tp-chev { flex: none; color: var(--muted); transition: transform .2s; }
+.tp-title[aria-expanded="true"] .tp-chev { transform: rotate(180deg); }
+.tp-key { flex: none; height: 34px; padding: 0 12px; border: 0; border-radius: 4px; background: rgba(24, 24, 21, .08); color: var(--ink); letter-spacing: .06em; cursor: pointer; white-space: nowrap; }
+.tp-key:active { background: rgba(24, 24, 21, .2); }
+.tp-key:disabled { opacity: .35; cursor: default; }
+.tp-text p { margin: 0 0 3px; color: var(--muted); line-height: 1.36; }
+.tp-text p:last-child { margin-bottom: 0; }
+.tp-nav { display: flex; align-items: center; gap: 4px; }
+.tp-nav .tp-key { width: 84px; padding: 0; }
+.tp-dots { flex: 1; display: flex; justify-content: center; }
+.tp-dot { width: 24px; height: 36px; border: 0; padding: 0; background: none; display: grid; place-items: center; cursor: pointer; }
+.tp-dot i { width: 8px; height: 8px; border-radius: 50%; background: rgba(24, 24, 21, .25); }
+.tp-dot.all i { border-radius: 2px; }
+.tp-dot.on i { width: 11px; height: 11px; background: var(--ink); }
+/* the one control a step asks for: a soft ochre ring, pulsing; bright for a moment when done */
+.tour-ring { z-index: 17; pointer-events: none; border-radius: 8px; box-shadow: 0 0 0 1.5px rgba(201, 143, 46, .85), 0 0 6px 1px rgba(201, 143, 46, .22); animation: tour-ring 2.4s ease-in-out infinite; }
+/* every task in the step done: NEXT lights up, the same soft ring */
+.tour-ready { border-radius: 5px; box-shadow: 0 0 0 1.5px rgba(201, 143, 46, .85), 0 0 6px 1px rgba(201, 143, 46, .22); animation: tour-ring 2.4s ease-in-out infinite; }
+@keyframes tour-ring { 50% { box-shadow: 0 0 0 1.5px rgba(201, 143, 46, .5), 0 0 4px 0 rgba(201, 143, 46, .12); } }
+.tour-try.done b { color: var(--moss); }
+@media (prefers-reduced-motion: reduce) { .tour-text, .tour-ring, .tour-ready { animation: none; } .stage > * { transition: none; } .tp-chev { transition: none; } }

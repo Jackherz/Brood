@@ -590,8 +590,8 @@ function Plate({ r, text, on, onClick, label, disabled = false }) {
 }
 
 // A key: a plate, faint at rest, stronger under the mouse (the kit's frameless TextButton).
-function Key({ r, children, onClick, label, disabled = false, pressed }) {
-  return <button type="button" className="abs key" style={at(r)} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>
+function Key({ r, children, onClick, label, disabled = false, pressed, cls = '' }) {
+  return <button type="button" className={`abs key ${cls}`} style={at(r)} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>
     <span className="nm" style={nf(clamp(r[3] * 0.62, 13, 18))}>{children}</span>
   </button>;
 }
@@ -1147,44 +1147,64 @@ function PresetBrowser({ L, patches, current, favourites, onChoose, onStar, onKe
 // explaining whatever is pointed at. The last step is the whole panel.
 const TOUR_DESK_H = 140;                       // the tour's strip under the desktop panel
 const TOUR_BAR = [24, H + 4, 1152, 124];
-const PHONE_BAR_H = 272;                       // the tour's bar along the bottom of a phone
 const deskColumn = (c) => [24 + c * 276, 268, 276, 388];
+// A knob with its name above and its readout below, for the tour's ring: as wide as the
+// readout, and stopping short of the switch under it.
+const knobCell = (L, i) => {
+  const k = L.knob[i];
+  if (!k) return undefined;
+  const w = L.phone ? k[2] + 20 : 190;
+  return [k[0] + k[2] / 2 - w / 2, k[1] - 26, w, k[3] + (L.phone ? 50 : 40)];
+};
+// Each step: its title, a sentence or two, one thing to try (desktop and phone wording where
+// they differ), the phone tab it needs, the parts it leaves open, and its tasks in order: the
+// control each one lights up, and what doing it means (now, against how things stood when the
+// step began).
 const TOUR = [
   { title: 'START WITH SOUND',
-    body: 'To start things off, let\'s hear something, press START AUDIO.\n\nIf you don\'t like what you hear feel free to load your own sounds using LOAD FILE or even use your own voice with MIC.',
-    try: 'press START AUDIO and listen for a moment.',
-    holes: (L) => [L.phone ? [12, 1403, 366, 224] : [24, 744, 1152, 60], L.loopView] },
-  { title: 'SHAPE THE LOOP', tab: 2,
-    body: 'Tap LOOP and brood keeps the length of audio you specify using the MEMORY slider. tap LOOP again to stop, hold it to overdub. ENV, TAPE and STRETCH are different ways to change how the loop plays back.',
-    try: 'Pick TAPE, then turn SPEED left: the loop plays backwards.',
-    holes: (L) => [L.loopView, L.fsLoop, L.overdub, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(2)])] },
+    body: 'Brood plays a demo loop, or your own file, or your voice with MIC.',
+    try: 'Press START AUDIO.',
+    holes: (L) => [L.phone ? [12, 1403, 366, 224] : [24, 744, 1152, 60], L.loopView],
+    tasks: [{ target: (L) => L.src.start, done: (now) => now.running }] },
+  { title: 'CATCH A LOOP', tab: 2,
+    body: 'Brood is always listening: LOOP keeps the last few seconds, and MEMORY sets how many.',
+    try: 'Tap LOOP (key L) on a phrase you like.',
+    tryPhone: 'Tap LOOP on a phrase you like.',
+    holes: (L) => [L.loopView, L.fsLoop, L.overdub, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(2)])],
+    tasks: [{ target: (L) => L.fsLoop, done: (now, was) => now.loop === 'play' && (was.loop !== 'play' || now.take !== was.take) }] },
   { title: 'START AND END', tab: 2,
-    body: 'the two markers in the window are START and END. drag one to trim what plays, or drag between them to slide the window along the take. double-click the window to open the whole take again. every move crossfades, so nothing clicks.',
-    bodyPhone: 'the two markers in the window are START and END. drag one to trim what plays, or drag between them to slide the window along the take. every move crossfades, so nothing clicks.',
-    try: 'catch a long loop, then drag END in until a single phrase repeats.',
-    holes: (L) => [L.loopView, L.fsLoop, ...(L.phone ? [L.tabs, L.tabSheet] : [grow(L.knob[2], 10)])] },
+    body: 'Drag START or END to trim the loop, or drag between them to slide it.',
+    try: 'Drag END in until one phrase repeats.',
+    holes: (L) => [L.loopView, L.fsLoop, ...(L.phone ? [L.tabs, L.tabSheet] : [grow(L.knob[2], 10)])],
+    tasks: [{ target: (L) => L.loopView, done: (now, was) => !!now.take && (now.start !== was.start || now.loopEnd !== was.loopEnd) }] },
   { title: 'IN BETWEEN', tab: 1,
-    body: 'MIX moves between the input and the recorded loop, BALANCE between the loop and the full WET signal. ROUTING picks what WET affects: IN the input, IN + LOOP both, LOOP only the loop, leaving the input clean. CLOCK is the rate both sides run at: lower is darker and grittier, like pitching down on an old sampler.',
-    try: 'with a loop playing, turn CLOCK down a little at a time, then set WEAR to WORN.',
-    holes: (L) => (L.phone ? [L.tabs, L.tabSheet, L.loopArea] : [deskColumn(1), [300, 216, 276, 54], L.loopArea]) },
+    body: 'MIX sets dry against Brood, BALANCE the loop against WET, ROUTING what WET hears. CLOCK is the sample rate.',
+    try: 'Turn CLOCK down for an old-sampler sound.',
+    holes: (L) => (L.phone ? [L.tabs, L.tabSheet, L.loopArea] : [deskColumn(1), [300, 216, 276, 54], L.loopArea]),
+    tasks: [{ target: (L) => knobCell(L, 4), done: (now, was) => Math.abs(now.clock - was.clock) >= 0.05 }] },
   { title: 'ADD SOME SPACE', tab: 0, wet: true,
-    body: 'WET switches on the space around the sound, and TIME sets how long it lasts. the screen names each knob as you turn it.',
-    try: 'tap WET (key A), then turn TIME up slowly.',
-    tryPhone: 'tap WET, then turn TIME up slowly.',
-    holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [0, 1].map((i) => [L.knob[i][0] - 20, L.knob[i][1] - 8, L.knob[i][2] + 40, L.knob[i][3] + 40]))] },
+    body: 'WET adds space around the sound, and TIME sets how long it lasts.',
+    try: 'Tap WET (key A), then turn TIME up.',
+    tryPhone: 'Tap WET, then turn TIME up.',
+    holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [0, 1].map((i) => [L.knob[i][0] - 20, L.knob[i][1] - 8, L.knob[i][2] + 40, L.knob[i][3] + 40]))],
+    tasks: [{ target: (L) => L.fsWet, done: (now) => now.wetOn },
+      { target: (L) => knobCell(L, 0), done: (now, was) => Math.abs(now.time - was.time) >= 0.05 }] },
   { title: 'FOUR KINDS OF SPACE', tab: 0, wet: true,
-    body: 'REVERB, DELAY, SLIP and WEAVE treat time four ways, and the knob under TIME changes its job with them. hold WET to freeze the space; let go and it moves on.',
-    try: 'pick DELAY, set TIME short, then hold WET.',
-    holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(0)])] },
-  { title: 'MOVEMENT AND PATCHES',
-    body: 'MOD 1 and MOD 2 turn knobs for you: drag a chip onto a knob or BALANCE to route it, and click it for its shape and rate. the arrows by the patch name step through sounds.',
-    try: 'drag MOD 1 onto TIME, then click MOD 1 and raise its RATE.',
-    tryPhone: 'in ROUTES, add MOD 1 on TIME, then tap MOD 1 and raise its RATE.',
-    holes: (L) => [L.rampArea, L.presetBar, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : L.knob.map((r) => grow(r, 8)))] },
+    body: 'REVERB, DELAY, SLIP and WEAVE each treat time differently. Hold WET to freeze it.',
+    try: 'Pick DELAY, then hold WET.',
+    holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(0)])],
+    tasks: [{ target: (L) => L.wetMode, done: (now) => now.wetMode === 1 },
+      { target: (L) => L.fsWet, done: (now, was) => now.freeze && !was.freeze }] },
+  { title: 'MOVEMENT',
+    body: 'MOD 1 and MOD 2 move knobs for you.',
+    try: 'Drag MOD 1 onto TIME.',
+    tryPhone: 'In ROUTES, add MOD 1 on TIME.',
+    holes: (L) => [L.rampArea, L.presetBar, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : L.knob.map((r) => grow(r, 8)))],
+    tasks: [{ target: (L) => (L.phone ? L.routes : L.chip0), done: (now, was) => now.routes > was.routes }] },
   { title: 'ALL OF BROOD', all: true,
-    body: 'that is the whole panel. point at anything and the screen says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
-    bodyPhone: 'that is the whole panel. tap anything and this bar says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
-    try: 'SAVE keeps a sound on this device. TOUR, under the panel, brings this strip back.' },
+    body: 'That is the whole panel. Point at anything and the screen says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
+    bodyPhone: 'That is the whole panel. Tap anything and this bar says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
+    try: 'SAVE keeps a sound on this device. TOUR, under the panel, brings the tour back.' },
 ];
 // The open parts of a step, a little larger than the controls; null for the whole panel.
 function tourHoles(step, L, overlayOpen) {
@@ -1194,40 +1214,65 @@ function tourHoles(step, L, overlayOpen) {
   if (overlayOpen) out.push(L.overlay);
   return out.filter(Boolean).map((r) => grow(r, 6));
 }
-// The tour's own strip: where we are, what this part does, one thing to try, and the way on.
-function TourBar({ step, phone, help, go, end, clearHelp, quiet }) {
+// The tour's strip under the desktop panel: where we are, what this part does, one thing to
+// try, and the way on.
+function TourBar({ step, go, end, quiet, done }) {
   const s = TOUR[step], last = TOUR.length - 1;
-  const r = phone ? [0, 0, PW, PHONE_BAR_H] : TOUR_BAR;
-  const box = phone
-    ? { count: [12, 8, 110, 24], dots: (i) => [124 + i * 26, 8, 22, 24], all: [310, 8, 68, 24], title: [12, 38, 366, 22], text: [12, 64, 366, 160],
-      back: [12, 230, 112, 34], end: [132, 230, 112, 34], next: [252, 230, 126, 34] }
-    : { count: [14, 10, 190, 16], dots: (i) => [860 + i * 22, 10, 18, 24], all: [1014, 10, 38, 24], title: [14, 30, 200, 56], text: [224, 8, 620, 110],
-      back: [860, 78, 138, 36], end: [1058, 10, 84, 24], next: [1004, 78, 138, 36] };
+  const box = { count: [14, 10, 190, 16], dots: (i) => [860 + i * 22, 10, 18, 24], all: [1014, 10, 38, 24], title: [14, 30, 200, 56], text: [224, 8, 620, 110],
+    back: [860, 78, 138, 36], end: [1058, 10, 84, 24], next: [1004, 78, 138, 36] };
   const keys = (event) => {
     if (/INPUT|TEXTAREA/.test(event.target.tagName)) return;
     if (event.key === 'ArrowRight' && step < last) { event.preventDefault(); go(step + 1); }
     if (event.key === 'ArrowLeft' && step > 0) { event.preventDefault(); go(step - 1); }
   };
-  // A phone's screen is often scrolled away, so a tap's help comes up here instead.
-  const showing = phone && help;
-  return <section className={`${phone ? 'tourbar-phone' : 'abs'} tourbar sheet`} style={phone ? undefined : at(r)} aria-label="Tour" onKeyDown={keys} onPointerDown={clearHelp}>
+  return <section className="abs tourbar sheet" style={at(TOUR_BAR)} aria-label="Tour" onKeyDown={keys}>
     <Txt r={box.count} cls="vl" size={vf(16)} color={MUTED}>{s.all ? 'TOUR  THE END' : `TOUR  ${step + 1} / ${last}`}</Txt>
     {TOUR.slice(0, last).map((t, i) => <button key={t.title} type="button" className={`abs tour-dot vl ${i === step ? 'on' : ''}`} style={{ ...at(box.dots(i)), ...vf(16) }}
       aria-label={`Step ${i + 1}: ${t.title.toLowerCase()}`} aria-current={i === step ? 'step' : undefined} onClick={() => go(i)}>{i + 1}</button>)}
     <Key r={box.all} pressed={step === last} label="All of Brood: the whole panel" onClick={() => go(last)}>ALL</Key>
-    <div key={showing ? `help-${help.label}` : step} className="abs tour-text" style={at([box.title[0], box.title[1], box.title[2], box.text[1] + box.text[3] - box.title[1]])} aria-live="polite">
-      <h2 className="abs nm" style={{ ...at([0, 0, box.title[2], box.title[3]]), ...nf(phone ? 24 : 22) }}>{showing ? help.label : s.title}</h2>
+    <div key={step} className="abs tour-text" style={at([box.title[0], box.title[1], box.title[2], box.text[1] + box.text[3] - box.title[1]])} aria-live="polite">
+      <h2 className="abs nm" style={{ ...at([0, 0, box.title[2], box.title[3]]), ...nf(22) }}>{s.title}</h2>
       <div className="abs tour-body vl" style={{ ...at([box.text[0] - box.title[0], box.text[1] - box.title[1], box.text[2], box.text[3]]), ...vf(17) }}>
-        {showing ? <><p>{help.text}</p><p className="tour-aside">tap this bar for the step again.</p></> : <>
-          {(phone && s.bodyPhone ? s.bodyPhone : s.body).split('\n\n').map((para) => <p key={para}>{para}</p>)}
-          <p><b className="nm" style={nf(16)}>TRY</b> {phone && s.tryPhone ? s.tryPhone : s.try}</p>
-          {s.wet && quiet && <p className="tour-quiet">the wet side is quiet with these settings: {quiet.why}. <button type="button" className="tour-fix nm" style={nf(15)} onClick={quiet.fix}>SET IT UP</button></p>}
-        </>}
+        {s.body.split('\n\n').map((para) => <p key={para}>{para}</p>)}
+        <p className={done ? 'tour-try done' : 'tour-try'}><b className="nm" style={nf(16)}>{done ? 'DONE' : 'TRY'}</b> {s.try}</p>
+        {s.wet && quiet && <p className="tour-quiet">the wet side is quiet with these settings: {quiet.why}. <button type="button" className="tour-fix nm" style={nf(15)} onClick={quiet.fix}>SET IT UP</button></p>}
       </div>
     </div>
     <Key r={box.back} disabled={step === 0} onClick={() => go(step - 1)}>BACK</Key>
-    <Key r={box.next} disabled={step === last} onClick={() => go(step + 1)}>NEXT</Key>
+    <Key r={box.next} cls={done && step < last ? 'tour-ready' : ''} disabled={step === last} onClick={() => go(step + 1)}>NEXT</Key>
     <Key r={box.end} onClick={end}>END TOUR</Key>
+  </section>;
+}
+// A phone's tour bar: as little of the screen as it can take. The title row opens and closes
+// the step's sentence; the TRY line is always there; then back, a dot per step and next. It is
+// laid out as ordinary flowing text, so its height is what its words need on this phone.
+function PhoneTourBar({ step, go, end, quiet, done, help, clearHelp, open, setOpen }) {
+  const s = TOUR[step], last = TOUR.length - 1;
+  const body = s.bodyPhone || s.body;
+  return <section className="tourbar tourbar-phone sheet" aria-label="Tour" onPointerDown={clearHelp}>
+    <div className="tp-head">
+      <button type="button" className="tp-title nm" style={nf(20)} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>{help ? help.label : s.title}</span>
+        <i className="vl" style={vf(15)}>{s.all ? 'THE END' : `${step + 1} / ${last}`}</i>
+        <svg className="tp-chev" width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path d="M-4 -2L0 2L4 -2" fill="none" stroke="currentColor" strokeWidth="1.6"/></svg>
+      </button>
+      <button type="button" className="tp-key nm" style={nf(15)} onClick={end}>END TOUR</button>
+    </div>
+    <div key={help ? `help-${help.label}` : step} className="tp-text vl tour-text" style={vf(17)} aria-live="polite">
+      {help ? <p>{help.text}</p> : <>
+        {open && body.split('\n\n').map((para) => <p key={para}>{para}</p>)}
+        <p className={done ? 'tour-try done' : 'tour-try'}><b className="nm" style={nf(15)}>{done ? 'DONE' : 'TRY'}</b> {s.tryPhone || s.try}</p>
+        {s.wet && quiet && <p className="tour-quiet">the wet side is quiet with these settings: {quiet.why}. <button type="button" className="tour-fix nm" style={nf(15)} onClick={quiet.fix}>SET IT UP</button></p>}
+      </>}
+    </div>
+    <div className="tp-nav">
+      <button type="button" className="tp-key nm" style={nf(16)} aria-label="BACK" disabled={step === 0} onClick={() => go(step - 1)}>{'\u2039'} BACK</button>
+      <div className="tp-dots">
+        {TOUR.map((t, i) => <button key={t.title} type="button" className={`tp-dot ${i === step ? 'on' : ''} ${i === last ? 'all' : ''}`}
+          aria-label={i === last ? 'All of Brood: the whole panel' : `Step ${i + 1}: ${t.title.toLowerCase()}`} aria-current={i === step ? 'step' : undefined} onClick={() => go(i)}><i/></button>)}
+      </div>
+      <button type="button" className={`tp-key nm ${done && step < last ? 'tour-ready' : ''}`} style={nf(16)} aria-label="NEXT" disabled={step === last} onClick={() => go(step + 1)}>NEXT {'\u203a'}</button>
+    </div>
   </section>;
 }
 
@@ -1293,6 +1338,11 @@ function App() {
   const [hover, setHover] = useState(null);
   // On a phone in the tour, a tap's help borrows the tour bar for a few seconds.
   const [barHelp, setBarHelp] = useState(null);
+  // The phone's tour bar: its height on screen, measured, and whether the step's sentence is open.
+  // Short screens (most phones inside the site's frame) start with it closed.
+  const [barPx, setBarPx] = useState(0);
+  const [tourOpen, setTourOpen] = useState(() => window.innerHeight >= 640);
+  const holder = useRef(null);
   useEffect(() => { if (!barHelp) return undefined; const id = setTimeout(() => setBarHelp(null), 5000); return () => clearTimeout(id); }, [barHelp]);
   const [hoverKnob, setHoverKnob] = useState(-1);
   const [activeKnob, setActiveKnob] = useState(-1);   // the knob a finger is turning
@@ -1307,6 +1357,15 @@ function App() {
     return t.open ? clamp(Math.round(t.step), 0, TOUR.length - 1) : -1;
   });
   const { scale, phone } = useScale(tour >= 0);
+  // The focus outline is for the keyboard. A finger or a mouse focuses a knob too, and phones
+  // then leave the outline standing, so it shows only after a key, until the next touch or click.
+  useEffect(() => {
+    const root = document.documentElement;
+    const pointer = () => root.classList.add('pointer-input');
+    const keys = (e) => { if (!e.metaKey && !e.ctrlKey && !e.altKey) root.classList.remove('pointer-input'); };
+    window.addEventListener('pointerdown', pointer, true); window.addEventListener('keydown', keys, true);
+    return () => { window.removeEventListener('pointerdown', pointer, true); window.removeEventListener('keydown', keys, true); };
+  }, []);
   const stage = useRef(null);
   const traces = useRef([new Array(64).fill(0), new Array(64).fill(0)]);
   const loopFlash = useRef({ cycles: -1, until: 0 });
@@ -1480,7 +1539,7 @@ function App() {
   useLayoutEffect(() => {
     for (const el of stage.current?.children || []) {
       if (!(el instanceof HTMLElement)) continue;
-      const keep = el.matches('.tourbar, .menu, input[type=file], .sheet:empty') || !holes;
+      const keep = el.matches('.tourbar, .tour-ring, .menu, input[type=file], .sheet:empty') || !holes;
       const off = !keep && !open(el.offsetLeft + el.offsetWidth / 2, el.offsetTop + el.offsetHeight / 2);
       el.inert = off;
       el.classList.toggle('tour-off', off);
@@ -1500,20 +1559,69 @@ function App() {
       showReadout('TOUR', 'set up to hear the wet side');
     },
   } : null;
+  // A step's lit control, centred in the room left between the top of the screen and the
+  // phone's tour bar, or its top shown first if it's taller than that room.
+  const showTarget = (step, onTab, task = 0) => {
+    const target = TOUR[step]?.tasks?.[task]?.target(phone ? phoneLayout(params, onTab) : L);
+    if (!phone || !target || !stage.current) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    // Inside the site's frame, first make sure the frame's bottom (where the bar is) is on screen.
+    try {
+      const frame = window.frameElement, host = window.parent;
+      if (frame && host && host !== window) {
+        const box = frame.getBoundingClientRect(), over = box.bottom - host.innerHeight;
+        if (over > 0) host.scrollBy({ top: Math.min(over, Math.max(0, box.top)), behavior: reduce ? 'auto' : 'smooth' });
+      }
+    } catch (_) { /* another site's frame: leave it */ }
+    const bar = holder.current?.getBoundingClientRect().height || 0;
+    const room = window.innerHeight - bar;
+    const top = stage.current.getBoundingClientRect().top + window.scrollY + target[1] * scale, tall = target[3] * scale;
+    const y = tall > room - 16 ? top - 8 : top + tall / 2 - room / 2;
+    window.scrollTo({ top: Math.max(0, y), behavior: reduce ? 'auto' : 'smooth' });
+  };
   const goTour = (i) => {
     const next = clamp(i, 0, TOUR.length - 1);
     setTour(next); setHover(null); setBarHelp(null);
     if (!phone) return;
+    const onTab = TOUR[next].tab ?? tab;
     if (TOUR[next].tab != null) { setTab(TOUR[next].tab); setActiveKnob(-1); }
-    // A phone's page is long: bring the step's first open part into view.
-    const first = TOUR[next].holes?.(phoneLayout(params, TOUR[next].tab ?? tab))[0];
-    if (!first) return;
-    requestAnimationFrame(() => {
-      const top = stage.current.getBoundingClientRect().top + window.scrollY;
-      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      window.scrollTo({ top: Math.max(0, top + (first[1] - 12) * scale), behavior: reduce ? 'auto' : 'smooth' });
-    });
+    // After the new step (and its tab) has drawn and the bar has its new height.
+    setTimeout(() => showTarget(next, onTab), 80);
   };
+  // The bar's height on screen, as it changes with its words and with an open sentence.
+  useEffect(() => {
+    const el = holder.current;
+    if (!el || !('ResizeObserver' in window)) { setBarPx(0); return undefined; }
+    const ro = new ResizeObserver(() => setBarPx(el.getBoundingClientRect().height));
+    ro.observe(el.firstChild || el);
+    return () => ro.disconnect();
+  }, [tour >= 0, phone]);
+  // Opening or closing the sentence changes the room: keep the lit control in view.
+  useEffect(() => { if (phone && tour >= 0) { const id = setTimeout(() => showTarget(tour, tab, tourTask), 80); return () => clearTimeout(id); } return undefined; }, [tourOpen]);
+
+  // The tour watches what Brood does, not taps: each step's tasks are read from Brood itself,
+  // as changes from how things stood when the step began. The ring sits on the first task
+  // still to do; once they're all done, TRY says DONE and NEXT lights up. It never moves on
+  // by itself.
+  const routeCount = routeMask[0].filter(Boolean).length + routeMask[1].filter(Boolean).length;
+  const tourNow = {
+    running, loop: running ? state?.loop || 'off' : 'off', take: running ? state?.lsrc || 0 : 0, time: params.time,
+    start: params.start, loopEnd: params.loopEnd, clock: params.clock,
+    wetOn: running && !!state?.wetOn, freeze: running && !!state?.freeze, wetMode: params.wetMode, routes: routeCount,
+  };
+  const tourWas = useRef(null);
+  const [tourTask, setTourTask] = useState(0);   // the first task in this step still to do
+  useEffect(() => { tourWas.current = tour >= 0 ? { ...tourNow } : null; setTourTask(0); }, [tour]);
+  const tasks = TOUR[tour]?.tasks || [];
+  useEffect(() => {
+    // A task, once done, stays done; take the ring on to the next one still to do.
+    let i = tourTask;
+    while (i < tasks.length && tourWas.current && tasks[i].done(tourNow, tourWas.current)) i += 1;
+    if (i !== tourTask) setTourTask(i);
+  });
+  const tourDone = tasks.length > 0 && tourTask >= tasks.length;
+  // The ring moving on to the step's next task brings that control into view too.
+  useEffect(() => { if (phone && tour >= 0 && tourTask > 0 && tourTask < tasks.length) { const id = setTimeout(() => showTarget(tour, tab, tourTask), 120); return () => clearTimeout(id); } return undefined; }, [tourTask]);
   // A phone that opens on step 1 goes straight down to START AUDIO, as pressing 1 would.
   const openedAt = useRef(false);
   useEffect(() => {
@@ -1633,7 +1741,7 @@ function App() {
       <Txt r={[720, 30, 48, 34]} align="right" size={nf(17)} color={MUTED}>PATCH</Txt>
     </>;
 
-  return <div className={`page ${phone ? 'phone' : ''}`} style={phone && tour >= 0 ? { paddingBottom: PHONE_BAR_H * scale } : undefined}>
+  return <div className={`page ${phone ? 'phone' : ''}`} style={phone && tour >= 0 ? { paddingBottom: barPx } : undefined}>
     <div className="frame" style={{ width: L.W * scale, height: L.H * scale }}>
       <div ref={stage} className="stage" style={{ width: L.W, height: L.H, transform: `scale(${scale})` }}
         onPointerMove={onStageMove} onPointerDownCapture={onStageDown} onPointerUpCapture={onStageUp} onPointerLeave={() => { if (!phone) { setHover(null); setHoverKnob(-1); } }}>
@@ -1803,12 +1911,14 @@ function App() {
           {chipDrag.target >= 0 && <div className="abs drop" style={{ ...at(targetRect(chipDrag.target)), borderColor: MOD_COLOURS[chipDrag.k] }}/>}
           <div className="abs drag-tag vl" style={{ ...at(centred(58, 20, chipDrag.x, chipDrag.y - 16)), background: MOD_COLOURS[chipDrag.k], ...vf(16) }}>MOD {chipDrag.k + 1}</div>
         </>}
-        {tour >= 0 && !phone && <TourBar step={tour} phone={false} quiet={quiet} go={goTour} end={() => setTour(-1)}/>}
+        {tour >= 0 && !phone && <TourBar step={tour} quiet={quiet} done={tourDone} go={goTour} end={() => setTour(-1)}/>}
+        {tour >= 0 && !tourDone && (() => { const t = tasks[tourTask]?.target(L); return t && <div key={`${tour}-${tourTask}`} className="abs tour-ring" style={at(grow(t, 2))} aria-hidden="true"/>; })()}
         <Menu menu={menu} close={() => setMenu(null)}/>
       </div>
     </div>
-    {tour >= 0 && phone && <div className="tourbar-holder" style={{ width: PW, height: PHONE_BAR_H, transform: `scale(${scale})` }}>
-      <TourBar step={tour} phone quiet={quiet} help={barHelp} clearHelp={() => { setHover(null); setBarHelp(null); }} go={goTour} end={() => setTour(-1)}/>
+    {tour >= 0 && phone && <div ref={holder} className="tourbar-holder" style={{ width: PW, transform: `scale(${scale})` }}>
+      <PhoneTourBar step={tour} quiet={quiet} done={tourDone} help={barHelp} clearHelp={() => { setHover(null); setBarHelp(null); }} go={goTour} end={() => setTour(-1)}
+        open={tourOpen} setOpen={setTourOpen}/>
     </div>}
   </div>;
 }

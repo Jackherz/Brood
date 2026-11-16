@@ -69,8 +69,14 @@ let browser;
  const tourTitle = () => page.locator('.tourbar h2').textContent();
  assert.equal(await tourTitle(), 'START WITH SOUND');
  assert.equal(await veiled('TIME'), true);
+ // Doing a step's task lights NEXT up; the tour never moves on by itself.
+ assert.equal(await page.locator('.tour-ring').count(), 1);
+ await page.getByRole('button',{name:'START AUDIO'}).click();
+ await page.waitForSelector('.tour-ready', {timeout: 6000});
+ assert.equal(await page.locator('.tour-ring').count(), 0);
+ assert.equal(await tourTitle(), 'START WITH SOUND');
  await page.getByRole('button',{name:'NEXT',exact:true}).click();
- assert.equal(await tourTitle(), 'SHAPE THE LOOP');
+ assert.equal(await tourTitle(), 'CATCH A LOOP');
  assert.equal(await veiled('LENGTH'), false);
  assert.equal(await veiled('TIME'), true);
  await page.getByRole('button',{name:'Step 5: add some space'}).click();
