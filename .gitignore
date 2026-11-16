@@ -9,3 +9,7 @@ assets/fonts/*.ttf
 *.log
 native/build-release/
 release/
+
+# The font trial page's local copies (the repo never carries font files)
+docs/plans/font-trial/fonts/*.ttf
+docs/plans/font-trial/fonts/*.woff2

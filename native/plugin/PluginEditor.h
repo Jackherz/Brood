@@ -58,6 +58,7 @@ public:
         std::array<float, 64> trace {};
         int written = 0;
         bool dragging = false;
+        bool clickable = false;   // a plain click on the chip, not its ON square or a menu
     };
     // A key on the take strip's dark heading (CLEAR, UNDO): its word in the strip's pale ink in
     // a faint outline, lit under the mouse and while pressed.
@@ -96,6 +97,8 @@ public:
     static juce::Colour modColour(int k) { return k == 0 ? juce::Colour(0xffb4452a) : juce::Colour(0xff2f6f8f); }
     juce::RangedAudioParameter* depthParam(int k, int t) const;
     void selectSource(int k);
+    void chipClicked(int k);   // opens that source's controls, or closes them if they are its
+    void drawSection(juce::Graphics&, juce::Rectangle<int>, juce::Colour mark, const juce::String& name, const juce::String& tail) const;
     int selectedSource() const { return selectedMod; }
     void chipDragged(int k, juce::Point<int> screen);
     void chipDropped(int k, juce::Point<int> screen);
@@ -107,6 +110,7 @@ public:
     ~BroodEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    void drawMasthead(juce::Graphics&) const;
     bool keyPressed(const juce::KeyPress&) override;
     bool keyStateChanged(bool isKeyDown) override;
 
@@ -137,6 +141,7 @@ public:
         void step(int by);
         juce::RangedAudioParameter& param;
         juce::String cap;
+        int capWidth = 44;   // the widest the caption may be
         juce::StringArray names;
         juce::ParameterAttachment attach;
         int index = 0;
@@ -215,9 +220,10 @@ private:
     std::unique_ptr<GainBox> gainBox;
     juce::Rectangle<int> gainDesign;
 
-    juce::ComboBox sourceBox;
-    juce::TextButton loadButton { "LOAD FILE" };
-    juce::Slider inputGain;
+    juce::Slider inputGain;   // LEVEL, first in the bottom strip
+    std::unique_ptr<Stepper> wetDivStep, loopDivStep;   // WET DIV and LOOP DIV at the foot of their columns
+    juce::Rectangle<int> wetDivDesign, loopDivDesign;
+    bool modOpen = false;   // a source's controls show only after its chip is clicked
     ModSlider balance;
     // Loop edit: the capture ceiling. START and END are the markers on the waveform.
     juce::Slider memory;
@@ -228,8 +234,7 @@ private:
     std::array<Dip, 3> dips;
     std::unique_ptr<Stepper> character;
     // WORN after the loop: shown under WEAR, in the caption's place, only while WEAR is WORN.
-    juce::ToggleButton wearPost { "AFTER LOOP" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> wearPostAtt;
+    std::unique_ptr<ThreeWay> wearPost;   // PRE LOOP / POST LOOP, shown on WORN
     juce::Rectangle<int> wearPostDesign;
     int lastWorn = -1;
     juce::String knobName(size_t knob) const;
@@ -282,11 +287,11 @@ private:
     // Under the hood: the five sliders the pedal hides behind both footswitches, and NOISE.
     // They live along the bottom of the window, so there is no second page.
     struct HoodControl { juce::Slider slider; std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att; };
-    std::array<HoodControl, 6> hood;   // tone, fade, width, wet division, loop division, worn noise
+    std::array<HoodControl, 4> hood;   // tone, fade, width, worn noise
 
     // All of these are in DESIGN coordinates (the 1200x820 panel); view maps them
     // into the real window. Paint and layout both work in that space.
-    juce::Rectangle<int> mastheadArea, pedalArea, lcdArea, meterArea, loopArea;
+    juce::Rectangle<int> mastheadArea, pedalArea, lcdArea, loopArea;
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
     juce::Rectangle<int> inputGainDesign, balanceDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopViewDesign;
@@ -296,7 +301,7 @@ private:
     juce::String activeKnobText;
     std::array<juce::String, 6> knobValues;
     void updateKnobValues();
-    juce::Rectangle<int> hoodArea, hoodCellDesign[6], dipCellDesign[5];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains
@@ -308,8 +313,8 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> characterDesign, srcArea, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
-    juce::Rectangle<int> rampWaveDesign, sourceBoxDesign, loadButtonDesign;
+    juce::Rectangle<int> characterDesign, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
+    juce::Rectangle<int> rampWaveDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.
     float viewScale = 1.f;
@@ -320,7 +325,6 @@ private:
     juce::String lcdMeta;
     bool blink = false;
     uint32_t lastCycles = 0; double flashUntil = 0; int lastLoopLed = 0;
-    float meterIn = 0, meterOut = 0;
     bool keyA = false, keyL = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BroodEditor)

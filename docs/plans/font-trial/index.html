@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brood Font Trial</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&family=DotGothic16&family=Doto:wght@100..900&family=Handjet:wght@100..900&family=Pixelify+Sans:wght@400..700&family=Share+Tech+Mono&family=Jersey+10&family=Barlow+Semi+Condensed:wght@400;500;600&family=Archivo+Narrow:wght@400..700&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=Overpass:wght@400..700&family=Atkinson+Hyperlegible+Next:wght@400..700&family=Familjen+Grotesk:wght@400..700&family=Overpass+Mono:wght@400..700&family=IBM+Plex+Mono:wght@400;500&family=Chivo+Mono:wght@400..700&family=Atkinson+Hyperlegible+Mono:wght@400..700&display=swap">
+<style>
+/* Local faces: the two the plug-in ships today, and one that is not on Google Fonts. */
+@font-face { font-family: "Brood VT323"; src: url("fonts/VT323-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Brood Glyph Grotesque"; src: url("fonts/GlyphGrotesque-Regular.ttf") format("truetype"); }
+@font-face { font-family: "Departure Mono"; src: url("fonts/DepartureMono-Regular.woff2") format("woff2"); }
+
+/* The page around the mock follows the browser theme. The mock keeps Brood's own colours. */
+:root {
+  --bg: #e4e0d4; --fg: #181815; --muted: #5f5f57; --card: #f3efe4; --line: #c4c0b2;
+  --accent: #8f5f12; --cut: #b4452a; --squash: #c98f2e; --ok: #4f6b3a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141412; --fg: #e8e3d5; --muted: #a49f91; --card: #1e1d1a; --line: #3b3933;
+    --accent: #d9a548; --cut: #e0795c; --squash: #d9a548; --ok: #94b07a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141412; --fg: #e8e3d5; --muted: #a49f91; --card: #1e1d1a; --line: #3b3933;
+  --accent: #d9a548; --cut: #e0795c; --squash: #d9a548; --ok: #94b07a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif; overflow-x: hidden; }
+.wrap { max-width: 1480px; margin: 0 auto; padding: 20px 16px 64px; }
+h1 { font: 600 13px/1.2 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 4px; }
+.lede { color: var(--muted); max-width: 72ch; margin: 0 0 16px; }
+h2 { font: 600 12px/1.2 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; margin: 28px 0 10px; color: var(--muted); }
+button, select { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; min-height: 30px; }
+button:hover, select:hover { border-color: var(--muted); }
+button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+label.chk { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+
+/* controls */
+.roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+.role { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px; display: grid; gap: 6px; min-width: 0; }
+.role .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.role .head b { font: 600 11px/1 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.role select { width: 100%; min-width: 0; }
+.role .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.role .row select { width: auto; flex: 1; }
+.role .nudge { display: inline-flex; align-items: center; gap: 4px; }
+.role .nudge button { width: 30px; padding: 0; }
+.role .nudge span { min-width: 54px; text-align: center; font-variant-numeric: tabular-nums; }
+.role .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.status { font: 600 11px/1 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .06em; padding: 3px 5px; border-radius: 3px; white-space: nowrap; }
+.status.ok { color: var(--ok); border: 1px solid currentColor; }
+.status.bad { color: var(--cut); border: 1px solid currentColor; }
+.status.wait { color: var(--muted); border: 1px solid currentColor; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 12px 0; }
+.bar .grp { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bar .grp > span { color: var(--muted); font-size: 12px; }
+.sets button { text-align: left; }
+
+/* the mock */
+.stage { position: relative; overflow: hidden; border-radius: 8px; margin-top: 4px; }
+.mock { position: absolute; left: 0; top: 0; width: 1200px; height: 750px; transform-origin: 0 0; background: #efebe0; color: #181815; overflow: hidden; }
+.mock * { box-sizing: border-box; }
+.abs { position: absolute; }
+.t { position: absolute; display: flex; align-items: center; white-space: nowrap; overflow: visible; }
+.t > span { display: inline-block; white-space: pre; }
+.t.c { justify-content: center; } .t.l { justify-content: flex-start; } .t.r { justify-content: flex-end; }
+.t.top { align-items: flex-start; }
+.t.multi { overflow: hidden; }
+.t.multi > span { white-space: normal; width: 100%; }
+.sheet { position: absolute; background: #f6f3ea; border-radius: 6px; }
+.plate { position: absolute; border-radius: 4px; }
+.mock.show-fit .t.squash { outline: 1.5px dashed #c98f2e; outline-offset: 0; background: rgba(201,143,46,.12); }
+.mock.show-fit .t.cut { outline: 2px solid #c2391b; outline-offset: 0; background: rgba(194,57,27,.12); }
+.mock.show-roles [data-role="retro"] { box-shadow: inset 0 0 0 1px rgba(47,111,143,.9); }
+.mock.show-roles [data-role="label"] { box-shadow: inset 0 0 0 1px rgba(79,107,58,.9); }
+.mock.show-roles [data-role="value"] { box-shadow: inset 0 0 0 1px rgba(180,69,42,.9); }
+.mock.show-roles [data-role="word"] { box-shadow: inset 0 0 0 1px rgba(143,95,18,.9); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.legend i { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; border-radius: 2px; }
+
+.fitlist { font-size: 13px; margin: 8px 0 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 6px; }
+.fitlist ul { margin: 6px 0 0; padding-left: 18px; }
+.fitlist .cut { color: var(--cut); } .fitlist .squash { color: var(--squash); }
+
+.screens { display: flex; flex-wrap: wrap; gap: 12px; }
+.screenbox { position: relative; width: 312px; height: 112px; background: #181815; border-radius: 6px; color: #f6f3ea; flex: none; }
+.screenwrap { display: grid; gap: 4px; }
+.screenwrap small { color: var(--muted); }
+
+/* specimens: shown at 1x, Brood's paper behind them */
+.spec { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+.specbox { background: #f6f3ea; color: #181815; border-radius: 6px; padding: 12px 14px; min-width: 0; }
+.specbox h3 { font: 600 11px/1 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 10px; color: #5f5f57; }
+.specline { display: grid; grid-template-columns: 54px 1fr; gap: 8px; align-items: baseline; padding: 3px 0; border-top: 1px solid #e3dfd2; }
+.specline .sz { font: 11px/1.2 "IBM Plex Mono", ui-monospace, monospace; color: #5f5f57; }
+.specline .tx { overflow-wrap: anywhere; white-space: normal; }
+.dark { background: #181815; color: #f6f3ea; border-radius: 6px; padding: 6px 10px; }
+
+table.results { border-collapse: collapse; width: 100%; font-size: 13px; }
+.results th, .results td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.results th { font: 600 11px/1.2 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.results .cut { color: var(--cut); } .results .squash { color: var(--squash); } .results .ok { color: var(--ok); }
+.scroll-x { overflow-x: auto; }
+.note { color: var(--muted); font-size: 12px; max-width: 90ch; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Brood font trial</h1>
+  <p class="lede">The panel at its 1200 px design width, set in each candidate. Sizes follow the plug-in: each number is the JUCE height the code asks for (ascent plus descent), so a face with tall metrics renders smaller, as it would in the plug-in. Outlines show text that would not fit its box: amber is squashed by the plug-in to fit, red is cut off or dropped.</p>
+
+  <div class="roles" id="roles"></div>
+
+  <div class="bar">
+    <div class="grp sets"><span>Sets</span>
+      <button data-set="0">A. Departure</button>
+      <button data-set="1">B. Overpass</button>
+      <button data-set="2">C. Atkinson</button>
+      <button data-set="3">D. Owner's pick</button>
+    </div>
+    <div class="grp"><button id="current" aria-pressed="false">Show current look</button></div>
+    <div class="grp"><span>Size by</span>
+      <select id="sizemode">
+        <option value="juce">plug-in height (as coded)</option>
+        <option value="cap">same cap height as today</option>
+      </select>
+    </div>
+    <div class="grp"><span>Screen</span>
+      <select id="screen"><option value="live">live</option><option value="help">help</option></select>
+      <select id="helptext"></select>
+      <select id="helplines" aria-label="help lines allowed"><option value="3">3 lines (as coded)</option><option value="4">4 lines (fits the box)</option></select>
+    </div>
+    <div class="grp"><span>Scale</span>
+      <select id="scale"><option value="fit">fit (eighths, like the plug-in)</option><option value="1">1x</option><option value="1.25">1.25x</option><option value="1.5">1.5x</option><option value="2">2x</option></select>
+    </div>
+    <div class="grp">
+      <label class="chk"><input type="checkbox" id="showfit" checked> overflow outlines</label>
+      <label class="chk"><input type="checkbox" id="showroles"> role outlines</label>
+    </div>
+  </div>
+
+  <div id="stagehost"><div class="stage" id="stage"><div class="mock show-fit" id="mock"></div></div></div>
+  <div class="legend">
+    <span><i style="background:rgba(47,111,143,.9)"></i>Retro</span>
+    <span><i style="background:rgba(79,107,58,.9)"></i>Label</span>
+    <span><i style="background:rgba(180,69,42,.9)"></i>Value</span>
+    <span><i style="background:rgba(143,95,18,.9)"></i>Wordmark</span>
+    <span><i style="outline:1.5px dashed #c98f2e"></i>squashed to fit</span>
+    <span><i style="outline:2px solid #c2391b"></i>cut or dropped</span>
+  </div>
+  <div class="fitlist" id="fitlist"></div>
+
+  <h2>The dark screen, both states</h2>
+  <div class="screens" id="screens"></div>
+
+  <h2>Specimens at real sizes (1x)</h2>
+  <div class="spec" id="spec"></div>
+
+  <h2>Check every candidate</h2>
+  <p class="note">Puts each candidate into its role with the other roles at today's faces, waits for the font, then checks it really loaded (a face that fell back measures the same as the generic family) and counts boxes that overflow at the default sizes. The last row uses a name that does not exist, to prove the fallback check catches it.</p>
+  <div class="bar"><button id="checkall">Run the check</button><select id="checkhelp" aria-label="help text used in the check"><option value="SYNC">with the SYNC help (three lines in VT323)</option><option value="WEAR">with the WEAR help (the longest)</option></select><span class="note" id="checkstate"></span></div>
+  <div class="scroll-x"><table class="results" id="results"></table></div>
+</div>
+
+<script>
+// ───────── the faces ─────────
+// hem: (ascent + descent) / em from each font's own metrics (hhea, or OS/2 typo where the
+// font asks for it), read with fontTools. JUCE 8 sizes a font so ascent + descent equals the
+// height asked for, so CSS size = JUCE height / hem. Lucida Grande is measured in the page.
+const F = {
+  "VT323":                    { fam: '"Brood VT323"', hem: 1.000, w: [400], src: "kit/fonts (shipping today)", lic: "OFL", tab: "default" },
+  "Glyph Grotesque":          { fam: '"Brood Glyph Grotesque"', hem: 1.000, w: [400], src: "kit/fonts (shipping today)", lic: "OFL" },
+  "Lucida Grande":            { fam: '"Lucida Grande"', hem: null, w: [400, 700], src: "macOS system (JUCE 8 default sans on Mac)", lic: "system, not embeddable" },
+  "Departure Mono":           { fam: '"Departure Mono"', hem: 1.273, w: [400], src: "local fonts/ (not on Google Fonts)", lic: "OFL", tab: "default", url: "https://departuremono.com" },
+  "Share Tech Mono":          { fam: '"Share Tech Mono"', hem: 1.127, w: [400], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "B612 Mono":                { fam: '"B612 Mono"', hem: 1.215, w: [400, 700], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "DotGothic16":              { fam: '"DotGothic16"', hem: 1.448, w: [400], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Handjet":                  { fam: '"Handjet"', hem: 1.118, w: [300, 400, 500, 600], dw: 500, src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Doto":                     { fam: '"Doto"', hem: 1.200, w: [500, 600, 700, 800, 900], dw: 800, src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Pixelify Sans":            { fam: '"Pixelify Sans"', hem: 1.200, w: [400, 500, 600, 700], src: "Google Fonts", lic: "OFL", tab: "none" },
+  "Jersey 10":                { fam: '"Jersey 10"', hem: 1.071, w: [400], src: "Google Fonts", lic: "OFL" },
+  "Barlow Semi Condensed":    { fam: '"Barlow Semi Condensed"', hem: 1.200, w: [400, 500, 600], dw: 500, src: "Google Fonts", lic: "OFL", tab: "tnum" },
+  "Archivo Narrow":           { fam: '"Archivo Narrow"', hem: 1.347, w: [400, 500, 600, 700], dw: 500, src: "Google Fonts", lic: "OFL", tab: "default" },
+  "IBM Plex Sans Condensed":  { fam: '"IBM Plex Sans Condensed"', hem: 1.300, w: [400, 500, 600], dw: 500, src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Overpass":                 { fam: '"Overpass"', hem: 1.266, w: [400, 500, 600, 700], dw: 500, src: "Google Fonts", lic: "OFL", tab: "tnum" },
+  "Atkinson Hyperlegible Next": { fam: '"Atkinson Hyperlegible Next"', hem: 1.300, w: [400, 500, 600, 700], src: "Google Fonts", lic: "OFL", tab: "tnum" },
+  "Familjen Grotesk":         { fam: '"Familjen Grotesk"', hem: 1.250, w: [400, 500, 600, 700], dw: 500, src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Overpass Mono":            { fam: '"Overpass Mono"', hem: 1.266, w: [400, 500, 600, 700], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "IBM Plex Mono":            { fam: '"IBM Plex Mono"', hem: 1.300, w: [400, 500], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Chivo Mono":               { fam: '"Chivo Mono"', hem: 1.190, w: [400, 500, 600, 700], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Atkinson Hyperlegible Mono": { fam: '"Atkinson Hyperlegible Mono"', hem: 1.300, w: [400, 500, 600, 700], src: "Google Fonts", lic: "OFL", tab: "default" },
+  "Not A Real Font 7Q": { fam: '"Not A Real Font 7Q"', hem: 1.0, w: [400], src: "deliberately wrong name", lic: "-" },
+};
+const ROLES = {
+  retro: { name: "Retro", what: "dark screen, take strip", current: "VT323",
+    list: ["VT323", "Departure Mono", "Share Tech Mono", "B612 Mono", "DotGothic16", "Handjet", "Doto", "Pixelify Sans"] },
+  label: { name: "Label", what: "names, headings, switch captions", current: "Lucida Grande",
+    list: ["Lucida Grande", "Barlow Semi Condensed", "Archivo Narrow", "IBM Plex Sans Condensed", "Overpass", "Atkinson Hyperlegible Next", "Familjen Grotesk"] },
+  value: { name: "Value", what: "readouts on the paper", current: "VT323",
+    list: ["VT323", "Overpass Mono", "B612 Mono", "Departure Mono", "IBM Plex Mono", "Chivo Mono", "Atkinson Hyperlegible Mono", "Archivo Narrow", "IBM Plex Sans Condensed", "Barlow Semi Condensed"] },
+  word: { name: "Wordmark", what: '"BROOD."', current: "Glyph Grotesque",
+    list: ["Glyph Grotesque", "Doto", "Jersey 10"] },
+};
+const SETS = [
+  { retro: ["Departure Mono", 400], label: ["Barlow Semi Condensed", 500], value: ["Departure Mono", 400] },
+  { retro: ["Share Tech Mono", 400], label: ["Overpass", 500], value: ["Overpass Mono", 400] },
+  { retro: ["DotGothic16", 400], label: ["Atkinson Hyperlegible Next", 500], value: ["Atkinson Hyperlegible Mono", 400] },
+  // The owner's pick from the trial, 16 November 2026.
+  { retro: ["B612 Mono", 400, 0], label: ["Overpass", 500, 0], value: ["Chivo Mono", 400, -2], word: ["Glyph Grotesque", 400, 2] },
+];
+const HELP = {
+  "WEAR": "one line from clean to worn. clean: fuller top, far fewer artifacts, the wet side a little later. worn: the MK I in the room, a noisy clock, a restless loop and a longer reverb.",
+  "SYNC": "TIME becomes a division of the beat: in DELAY the echo lands on the grid, in WEAVE so does how far back the threads reach.",
+  "FREEZE": "the hold gesture without the holding: the wet side comes up frozen and rings on its own.",
+  "BALANCE": "the loop against the wet side. left: the loop alone. right: the wet side alone. in the middle, both in full. drop a source here: its bar is the swing, the small tab is where it is now.",
+  "UNDO": "one step back: a clear, a new take, or the last overdub layer. press again to redo.",
+  "TONE": "a hi-cut on the wet side. right is open, left is soft and far away.",
+};
+
+const state = {};
+for (const r in ROLES) state[r] = { font: ROLES[r].current, weight: 400, nudge: 0 };
+let showCurrent = false, sizeMode = "juce", screenMode = "live", helpKey = "WEAR", helpLines = 3;
+
+// ───────── measuring faces ─────────
+const cv = document.createElement("canvas").getContext("2d");
+const PROBE = "BROOD 0123456789 sensitivity %/+-";
+function loadedNow(name, weight) {
+  // A face that fell back measures like its generic family: test against two generics.
+  const f = F[name].fam;
+  cv.font = `${weight} 40px ${f}, monospace`; const a = cv.measureText(PROBE).width;
+  cv.font = `${weight} 40px ${f}, serif`; const b = cv.measureText(PROBE).width;
+  return Math.abs(a - b) < 0.01;
+}
+async function ensure(name, weight) {
+  try { await document.fonts.load(`${weight} 40px ${F[name].fam}`, PROBE); } catch (e) {}
+  const ok = loadedNow(name, weight);
+  if (ok && F[name].hem == null) {
+    cv.font = `${weight} 100px ${F[name].fam}`;
+    const m = cv.measureText("H");
+    F[name].hem = (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent) / 100;
+  }
+  if (ok && F[name].cap == null) {
+    cv.font = `${weight} 100px ${F[name].fam}`;
+    F[name].cap = cv.measureText("H").actualBoundingBoxAscent / 100;
+  }
+  if (F[name].hem == null) F[name].hem = 1.19;
+  return ok;
+}
+function eff(role) {
+  return showCurrent ? { font: ROLES[role].current, weight: 400, nudge: 0 } : state[role];
+}
+function cssSize(role, h) {
+  const s = eff(role), H = h + s.nudge, f = F[s.font], cur = F[ROLES[role].current];
+  if (sizeMode === "cap" && f.cap && cur.cap && cur.hem) return (H / cur.hem) * cur.cap / f.cap;
+  return H / (f.hem || 1);
+}
+
+// ───────── building the mock ─────────
+const INK = "#181815", PAPER = "#f6f3ea", PAGE = "#efebe0", MUTED = "#5f5f57", RULE = "#bdb9ab", LIT = "#c98f2e", MOSS = "#5d7046";
+const mock = document.getElementById("mock");
+let fits = [];
+function el(parent, cls, css, html) {
+  const d = document.createElement("div"); if (cls) d.className = cls;
+  Object.assign(d.style, css || {}); if (html != null) d.innerHTML = html; parent.appendChild(d); return d;
+}
+function box(x, y, w, h, fill, radius, parent) {
+  return el(parent || mock, "abs", { left: x + "px", top: y + "px", width: w + "px", height: h + "px", background: fill, borderRadius: (radius || 0) + "px" });
+}
+// A line of text in a box, as JUCE draws it: justified in the box, one size, one role.
+// min: the narrowest the plug-in squashes it before cutting (1 = drawText, never squashed).
+function T(x, y, w, h, text, role, jh, o = {}) {
+  const d = el(o.parent || mock, "t " + (o.align || "c") + (o.top ? " top" : "") + (o.multi ? " multi" : ""),
+    { left: x + "px", top: y + "px", width: w + "px", height: h + "px", color: o.color || INK, opacity: o.alpha == null ? 1 : o.alpha });
+  const s = document.createElement("span"); s.textContent = text; d.appendChild(s);
+  d.dataset.role = role; d.dataset.h = jh;
+  if (o.lines) d.dataset.lines = o.lines;
+  if (!o.nofit) { d.dataset.min = o.min == null ? 1 : o.min; d.dataset.n = o.n || text; if (!o.parent || mock.contains(o.parent)) fits.push(d); }  return d;
+}
+function plateCells(x, y, w, h, labels, chosen, n) {
+  // One plate across the column, the chosen cell a solid block.
+  box(x, y, w - 2, h - 2, "rgba(24,24,21,.08)", 5);
+  const bw = w - 2;
+  labels.forEach((t, i) => {
+    const x0 = x + Math.floor(bw * i / labels.length), x1 = x + Math.floor(bw * (i + 1) / labels.length);
+    if (i === chosen) box(x0 + 2, y + 2, x1 - x0 - 4, h - 6, INK, 4);
+    T(x0 + 2, y, x1 - x0 - 4, h - 2, t, "label", 11.52, { color: i === chosen ? PAPER : INK, min: 0.8, n: n + ": " + t });
+  });
+}
+function plateSwitch(x, y, w, h, text, on) {
+  box(x + .5, y + .5, w - 1, h - 1, on ? LIT : "rgba(24,24,21,.08)", 3);
+  T(x, y, w, h, text, "label", 10.8, { color: INK, n: text + " switch" });
+}
+function knob(cx, top, pos, dark) {
+  const s = 104, r = 48, face = 37, a0 = -135, span = 270;
+  const ang = a => (a - 90) * Math.PI / 180;
+  const pt = (rad, a) => [52 + rad * Math.cos(ang(a)), 52 + rad * Math.sin(ang(a))];
+  const arc = (rad, from, to) => { const [x0, y0] = pt(rad, from), [x1, y1] = pt(rad, to); return `M${x0} ${y0} A${rad} ${rad} 0 ${to - from > 180 ? 1 : 0} 1 ${x1} ${y1}`; };
+  const at = a0 + span * pos, [px0, py0] = pt(face - 22, at), [px1, py1] = pt(face - 6, at);
+  const svg = `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">
+    <path d="${arc(r, a0, a0 + span)}" stroke="${RULE}" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="${arc(r, a0, at)}" stroke="${INK}" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <circle cx="52" cy="54" r="${face}" fill="rgba(24,24,21,.12)"/>
+    <circle cx="52" cy="52" r="${face}" fill="${dark ? INK : "#ebe7dc"}" stroke="rgba(24,24,21,.28)"/>
+    <line x1="${px0}" y1="${py0}" x2="${px1}" y2="${py1}" stroke="${dark ? PAPER : INK}" stroke-width="3" stroke-linecap="round"/></svg>`;
+  el(mock, "abs", { left: cx - 52 + "px", top: top + "px" }, svg);
+}
+function slider(x, y, w, h, pos) {
+  const cy = y + h / 2, left = x + 6, right = x + w - 6, at = left + (right - left) * pos;
+  box(left, cy - .5, right - left, 1, RULE);
+  box(left, cy - 1.5, at - left, 3, INK, 1.5);
+  box(at - 6, cy - 6, 12, 12, INK, 6);
+}
+function pill(x, y, w, h, text, on) {
+  const cy = y + h / 2;
+  box(x, cy - 6, 18, 12, on ? LIT : "rgba(24,24,21,.24)", 6);
+  box(x + 9 + (on ? 3 : -3) - 4, cy - 4, 8, 8, on ? INK : PAPER, 4);
+  T(x + 21, y, w - 21, h, text, "label", 10.8, { align: "l", color: on ? INK : MUTED, min: 0.8, n: text + " toggle" });
+}
+function stepper(x, y, w, h, cap, value, n) {
+  // As BroodEditor::Stepper: plate, arrows each side, caption then the value.
+  const bx = x + 2, by = y + 2, bw = w - 6, bh = h - 6;
+  box(bx, by, bw, bh, "rgba(24,24,21,.08)", 4);
+  const ix = bx + 2, iw = bw - 4, iy = by + 2, ih = bh - 4;
+  const arrow = Math.max(12, Math.min(20, Math.floor((w - 6) / 6)));
+  const tri = (zx, right) => el(mock, "abs", { left: zx + arrow / 2 - 2 + "px", top: iy + ih / 2 - 3.5 + "px", width: 0, height: 0,
+    borderTop: "3.5px solid transparent", borderBottom: "3.5px solid transparent",
+    [right ? "borderLeft" : "borderRight"]: "4px solid " + MUTED });
+  tri(ix, false); tri(ix + iw - arrow, true);
+  let cx = ix + arrow + 3; const cw = iw - 2 * arrow - 3;
+  const capW = Math.min(Math.floor(cw / 2), 44);
+  T(cx, iy, capW, ih, cap, "label", 11.52, { align: "l", color: MUTED, min: 0.7, n: n + " caption" });
+  const vx = cx + capW + 2 + 2, vw = cw - capW - 2 - 4;
+  T(vx, iy, vw, ih, value, "value", 18, { min: 0.7, n: n + " value" });
+}
+function panelHead(x, y, w, name, mark, tail) {
+  const row = { x: x + 8, y: y + 1, w: w - 16, h: 24 };
+  box(row.x, row.y + 7, 10, 10, mark, 2);
+  const nm = T(row.x + 16, row.y, 200, row.h, name, "label", 11.52, { align: "l", nofit: true });
+  nm.dataset.measure = "name";
+  if (tail) T(row.x + row.w - 170, row.y, 170, row.h, tail, "value", 14, { align: "r", color: MUTED, n: name + " readout" });
+  const lead = el(mock, "abs", { top: row.y + 12 + "px", height: 0, borderTop: "1px dotted " + RULE });
+  lead.dataset.leader = "1"; lead._x = row.x + 16; lead._r = row.x + row.w - (tail ? 0 : 0); lead._tail = !!tail;
+}
+
+function screen(parent, mode, x, y) {
+  const p = parent; const ox = x || 0, oy = y || 0;
+  // inner = r.reduced(10, 6): 292 wide. Title line 16 high, chip at the right.
+  const chipText = mode === "help" ? "HELP" : "LIVE";
+  const chip = el(p, "t c", { left: ox + 10 + "px", top: oy + 6 + "px", width: "292px", height: "16px", justifyContent: "flex-end" });
+  const cs = document.createElement("span"); cs.textContent = chipText;
+  Object.assign(cs.style, { background: PAPER, color: INK, borderRadius: "3px", padding: "0 5px", height: "16px", display: "inline-flex", alignItems: "center" });
+  chip.appendChild(cs); chip.dataset.role = "retro"; chip.dataset.h = 15;
+  const title = mode === "help" ? helpKey : "NOISE";
+  T(ox + 10, oy + 6, 240, 16, title, "retro", 15, { parent: p, align: "l", color: PAPER, alpha: .75, min: 0.8, n: "screen title" });
+  if (mode === "help") {
+    T(ox + 10, oy + 22, 292, 84, HELP[helpKey], "retro", 17, { parent: p, align: "l", top: true, multi: true, lines: helpLines, color: PAPER, min: 0.85, n: "help text (" + helpKey + ")" });
+  } else {
+    T(ox + 10, oy + 91, 292, 15, "48.0 kHz    loop 1.33 s    cpu 2.1%", "retro", 15, { parent: p, align: "l", color: PAPER, alpha: .75, n: "screen meta line" });
+    T(ox + 10, oy + 22, 292, 69, "WORN HISS 100%", "retro", 28, { parent: p, align: "l", color: PAPER, min: 0.6, n: "live value" });
+  }
+}
+
+function wave(x, y, w, h) {
+  const c = document.createElement("canvas"); c.width = w * 2; c.height = h * 2;
+  Object.assign(c.style, { position: "absolute", left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+  mock.appendChild(c);
+  const g = c.getContext("2d"); g.scale(2, 2);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const mid = h / 2 + 2, hits = [0.21, 0.46, 0.71, 0.97];
+  for (let i = 0; i < w; i++) {
+    const t = i / w; let env = 0.12 + rnd() * 0.08;
+    for (const hp of hits) { const d = t - hp; if (d >= 0 && d < 0.12) env = Math.max(env, (0.85 - d * 5) * (0.75 + rnd() * 0.25)); }
+    const a = env * (h / 2 - 8);
+    g.fillStyle = PAPER; g.fillRect(i, mid - a, 1, 2 * a + 1);
+  }
+  g.fillStyle = "rgba(246,243,234,.55)";
+  for (let t = 1; t < 1.33; t++) g.fillRect(w * t / 1.33, h - 6, 1, 6);
+  g.fillStyle = LIT; g.fillRect(w * 0.37, 0, 1, h);
+}
+
+function build() {
+  mock.innerHTML = ""; fits = [];
+  const sheet = (x, y, w, h) => el(mock, "sheet", { left: x + "px", top: y + "px", width: w + "px", height: h + "px" });
+
+  // ── masthead ──
+  const mast = el(mock, "abs", { left: "24px", top: "24px", height: "62px", display: "flex", alignItems: "center" });
+  const wm = document.createElement("div"); wm.className = "t"; Object.assign(wm.style, { position: "static", height: "62px" });
+  const ws = document.createElement("span"); ws.textContent = "BROOD."; wm.appendChild(ws); wm.dataset.role = "word"; wm.dataset.h = 48;
+  mast.appendChild(wm);
+  const lines = document.createElement("div"); Object.assign(lines.style, { marginLeft: "18px", width: "300px", position: "relative", height: "34px" });
+  mast.appendChild(lines);
+  T(0, 0, 300, 17, "GLYPH AUDIO", "label", 12.24, { parent: lines, align: "l", color: MUTED, nofit: true });
+  T(0, 17, 300, 17, "MICRO-LOOPER + SPACE", "label", 12.24, { parent: lines, align: "l", color: MUTED, nofit: true });
+  box(24, 94, 1152, 2, INK);
+  T(720, 30, 48, 34, "PATCH", "label", 12.24, { align: "r", color: MUTED });
+  box(777, 31, 28, 31, "rgba(24,24,21,.08)", 4); box(810, 31, 264, 31, "rgba(24,24,21,.08)", 4);
+  box(1078, 31, 28, 31, "rgba(24,24,21,.08)", 4); box(1119, 31, 54, 31, "rgba(24,24,21,.08)", 4);
+  el(mock, "abs", { left: "789px", top: "42px", borderTop: "4.5px solid transparent", borderBottom: "4.5px solid transparent", borderRight: "6px solid " + INK });
+  el(mock, "abs", { left: "1090px", top: "42px", borderTop: "4.5px solid transparent", borderBottom: "4.5px solid transparent", borderLeft: "6px solid " + INK });
+  T(814, 31, 256, 31, "A LITTLE DAYDREAM", "label", 12.96, { n: "patch name" });
+  T(1119, 31, 54, 31, "SAVE", "label", 12.96, {});
+
+  // ── main sheet ──
+  sheet(24, 108, 828, 548);
+  box(38, 116, 800, 100, INK, 4);
+  wave(40, 132, 796, 84);
+  T(44, 116, 400, 16, "PLAYING  1.33 S", "retro", 14, { align: "l", color: PAPER, n: "take status" });
+  for (const [x, w, t] of [[590, 56, "CLEAR"], [648, 52, "UNDO"]]) {
+    el(mock, "abs", { left: x + .5 + "px", top: 116.5 + "px", width: w - 1 + "px", height: "14px", border: "1px solid rgba(246,243,234,.5)", borderRadius: "2px" });
+    T(x, 116, w, 15, t, "retro", 14, { color: PAPER });
+  }
+  T(708, 116, 126, 16, "GAIN 0.0 DB", "retro", 14, { align: "r", color: PAPER, n: "gain" });
+  box(40, 132, 2, 84, PAPER); box(834, 132, 2, 84, PAPER);
+  const tab = (x, y, text, end) => {
+    const d = el(mock, "t c", { left: end ? "auto" : x + "px", right: end ? (1200 - x) + "px" : "auto", top: y + "px", height: "13px", background: PAPER, color: INK, padding: "0 4px" });
+    const s = document.createElement("span"); s.textContent = text; d.appendChild(s); d.dataset.role = "retro"; d.dataset.h = 14;
+  };
+  tab(42, 132, "START", false); tab(834, 203, "END", true);
+
+  // footswitch row
+  const fs = (x, w, name, key, tap) => {
+    box(x, 222, w - 3, 43, "rgba(24,24,21,.08)", 6);
+    box(x + 13, 236.5, 14, 14, "rgba(24,24,21,.25)", 7);
+    T(x + 38, 222, 62, 43, name, "label", 17.28, { align: "l", n: name + " footswitch name" });
+    const kx = x + w - 3 - 12 - 36;
+    T(kx, 222, 36, 43, key, "value", 16, { align: "r", n: name + " key" });
+    if (tap) T(x + 100, 222, kx - x - 100, 43, "TAP / HOLD", "value", 16, { color: MUTED, n: "TAP / HOLD (dropped if it does not fit)" });
+  };
+  fs(38, 248, "WET", "[ A ]", true);
+  fs(590, 176, "LOOP", "[ L ]", false);
+  box(768.5, 222.5, 69, 42, "rgba(24,24,21,.08)", 3);
+  T(768, 222, 70, 43, "OVERDUB", "label", 10.8, {});
+  stepper(373, 222, 130, 24, "WEAR", "PEDAL", "WEAR");
+
+  // columns
+  ["WET CHANNEL", "SHARED", "MICRO-LOOPER"].forEach((t, c) => {
+    const x = 24 + c * 276;
+    if (c > 0) box(x, 274, 1, 381, RULE);
+    T(x, 272, 276, 16, t, "label", 10.8, { color: MUTED, n: t + " heading" });
+  });
+  plateCells(38, 292, 248, 28, ["REVERB", "DELAY", "SLIP", "WEAVE"], 1, "wet mode");
+  plateCells(314, 292, 248, 28, ["IN", "IN + LOOP", "LOOP"], 1, "routing");
+  plateCells(590, 292, 248, 28, ["ENV", "TAPE", "STRETCH"], 0, "loop mode");
+
+  const knobs = [["TIME", "DELAY 336 MS", .34], ["MIX", "DRY 100% / FX 100%", .5], ["LENGTH", "SLICE 367 MS", .3],
+                 ["FEEDBACK", "FEEDBACK 58%", .58], ["CLOCK", "SAMPLE RATE 48.0 KHZ", .86], ["SENSITIVITY", "SENSITIVITY 66%", .66]];
+  const cx = [162, 438, 714];
+  knobs.forEach(([name, val, pos], i) => {
+    const top = i < 3 ? 342 : 510, x = cx[i % 3];
+    knob(x, top, pos, i === 4);
+    T(x - 52, top - 20, 104, 20, name, "label", 14.4, { n: name + " knob name" });
+    T(x - 118, top + 102, 236, 18, val, "value", 16, { color: MUTED, min: 0.7, n: name + " readout" });
+  });
+  plateSwitch(106, 462, 54, 19, "SYNC", false);
+  plateSwitch(164, 462, 54, 19, "TAPE", true);
+  plateSwitch(658, 462, 54, 19, "SYNC", false);
+  plateSwitch(716, 462, 54, 19, "SOFT", true);
+  plateSwitch(38, 632, 54, 19, "FREEZE", false);
+  plateSwitch(96, 632, 54, 19, "TRAILS", true);
+  plateSwitch(405, 632, 66, 19, "SMOOTH", false);
+
+  // ── side ──
+  const lcd = el(mock, "abs", { left: "864px", top: "108px", width: "312px", height: "112px", background: INK, borderRadius: "6px" });
+  screen(lcd, screenMode);
+
+  sheet(864, 230, 312, 113);
+  panelHead(864, 230, 312, "LOOP", MOSS, "LOOP 100 / WET 60");
+  T(876, 266, 70, 21, "MEMORY", "label", 11.52, { align: "l" });
+  slider(950, 266, 170, 21, 0);
+  T(1124, 266, 40, 21, "PEDAL", "value", 14, { align: "r", color: MUTED, n: "MEMORY figure" });
+  T(876, 291, 70, 21, "BALANCE", "label", 11.52, { align: "l" });
+  T(950, 291, 32, 21, "LOOP", "label", 10.8, { align: "l", color: MUTED, n: "BALANCE left end" });
+  slider(982, 291, 138, 21, .6);
+  T(1124, 291, 40, 21, "WET", "label", 10.8, { align: "l", color: MUTED, n: "BALANCE right end" });
+  plateCells(876, 316, 120, 21, ["LOOK BACK", "RECORD"], 1, "loop take");
+  stepper(1002, 316, 104, 21, "BARS", "4", "BARS");
+  box(1112.5, 317.5, 51, 17, "rgba(24,24,21,.08)", 3);
+  T(1112, 317, 52, 18, "AT TAP", "label", 10.8, { n: "AT TAP switch" });
+
+  sheet(864, 353, 312, 194);
+  panelHead(864, 353, 312, "MODULATION", INK, null);
+  const chip = (x, k, sel) => {
+    const col = k === 0 ? "#b4452a" : "#2f6f8f";
+    box(x, 386, 108, 62, sel ? (k === 0 ? "rgba(180,69,42,.22)" : "rgba(47,111,143,.22)") : "rgba(24,24,21,.05)", 5);
+    box(x + 5, 390, 15, 15, col, 3);
+    T(x + 5, 390, 15, 15, String(k + 1), "value", 15, { color: PAPER, n: "MOD " + (k + 1) + " number" });
+    T(x + 24, 389, 62, 16, "0 ROUTES", "value", 14, { align: "l", color: MUTED, n: "MOD " + (k + 1) + " routes" });
+    box(x + 90, 391, 12, 12, LIT, 3);
+    const pts = []; for (let i = 0; i <= 40; i++) pts.push(`${6 + i * 96 / 40},${44 - 18 * (1 - Math.abs((i / 20) % 2 - 1))}`);
+    el(mock, "abs", { left: x + "px", top: "386px" }, `<svg width="108" height="62"><polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="1.5"/></svg>`);
+  };
+  chip(874, 0, true); chip(990, 1, false);
+  box(1106, 386, 58, 62, "rgba(24,24,21,.08)", 4);
+  T(1106, 386, 58, 62, "ROUTES", "label", 12.96, { n: "ROUTES button" });
+  stepper(874, 468, 142, 28, "SHAPE", "TRI", "SHAPE");
+  T(1024, 468, 34, 28, "RATE", "label", 11.52, { align: "l", color: MUTED });
+  slider(1060, 471, 66, 22, .35);
+  T(1126, 468, 40, 28, "2.0s", "value", 14, { align: "r", color: MUTED, n: "RATE figure" });
+  pill(874, 514, 97, 26, "UNI", false);
+  pill(971, 514, 97, 26, "SYNC", false);
+  pill(1068, 514, 98, 26, "HOLD", false);
+
+  // ── bottom strip ──
+  sheet(24, 668, 1152, 67);
+  T(36, 684, 80, 16, "UNDER", "label", 11.52, { align: "l" });
+  T(36, 701, 80, 16, "THE HOOD", "label", 11.52, { align: "l" });
+  box(112, 676, 1, 51, RULE);
+  [["TONE", "open", 1], ["FADE", "pedal", 0], ["WIDTH", "as built", .5], ["NOISE", "when worn", 1]].forEach(([n, v, p], i) => {
+    const x = 120 + i * 264;
+    const nm = T(x, 676, 120, 18, n, "label", 11.52, { align: "l", nofit: true }); nm.dataset.hood = i;
+    const vv = T(x + 60, 676, 190, 18, v, "value", 14, { align: "r", color: MUTED, min: 0.8, n: n + " caption" }); vv.dataset.hoodv = i;
+    slider(x, 698, 250, 26, p);
+  });
+  applyAll();
+}
+
+// ───────── styling and checking ─────────
+function styleEl(d) {
+  const role = d.dataset.role, h = parseFloat(d.dataset.h), s = eff(role), f = F[s.font];
+  const px = cssSize(role, h);
+  d.style.fontFamily = `${f.fam}, ${role === "label" ? "sans-serif" : "monospace"}`;
+  d.style.fontWeight = s.weight;
+  d.style.fontSize = px + "px";
+  d.style.letterSpacing = role === "label" ? (0.06 * (h + s.nudge)) + "px" : "0";
+  d.style.fontVariantNumeric = role === "value" ? "tabular-nums" : "normal";
+  if (d.dataset.lines) {
+    // JUCE's line spacing is the font height; the plug-in draws at most this many lines.
+    d.style.lineHeight = (h + s.nudge) + "px";
+    if (d.classList.contains("multi")) d.style.height = parseInt(d.dataset.lines, 10) * (h + s.nudge) + "px";
+  } else d.style.lineHeight = "normal";
+}
+function relayout() {
+  // Things whose place depends on a width the font sets: the panel name and its leader,
+  // and in the bottom strip the caption that starts after each name.
+  const leaders = [...mock.querySelectorAll("[data-leader]")];
+  const names = [...mock.querySelectorAll('[data-measure="name"]')];
+  leaders.forEach((lead, i) => {
+    const nm = names[i]; const x = parseFloat(nm.style.left) + nm.firstChild.offsetWidth + 6;
+    const tail = lead._tail ? lead.previousElementSibling : null;
+    const right = tail && tail.dataset.role === "value" ? parseFloat(tail.style.left) + 170 - tail.firstChild.offsetWidth - 6 : lead._r - 4;
+    lead.style.left = x + "px"; lead.style.width = Math.max(0, right - x) + "px";
+  });
+  mock.querySelectorAll("[data-hood]").forEach(nm => {
+    const w = nm.firstChild.offsetWidth + 2, x = parseFloat(nm.style.left);
+    const v = mock.querySelector(`[data-hoodv="${nm.dataset.hood}"]`);
+    v.style.left = (x + w + 8) + "px"; v.style.width = (250 - w - 8) + "px";
+  });
+}
+function measure(scope) {
+  const out = [];
+  for (const d of scope) {
+    d.classList.remove("squash", "cut"); d.title = "";
+    const s = d.firstChild, min = parseFloat(d.dataset.min || 1), avail = d.clientWidth;
+    let verdict = null, detail = "";
+    if (d.dataset.lines) {
+      const lh = parseFloat(d.style.lineHeight), max = parseInt(d.dataset.lines, 10);
+      const lines = Math.round(s.scrollHeight / lh);
+      if (lines > max) {
+        s.style.width = (avail / min) + "px";
+        const squashed = Math.round(s.scrollHeight / lh);
+        s.style.width = "";
+        verdict = squashed <= max ? "squash" : "cut";
+        detail = `needs ${lines} lines of ${max}` + (verdict === "squash" ? `, fits at ${Math.round(min * 100)}% width` : ", cut even squashed");
+      }
+    } else {
+      const need = s.offsetWidth;
+      if (need > avail + 0.5) {
+        const ratio = avail / need;
+        verdict = ratio >= min ? "squash" : "cut";
+        detail = `needs ${need.toFixed(0)} of ${avail} px` + (verdict === "squash" ? `, squashed to ${Math.round(ratio * 100)}%` : "");
+      }
+    }
+    if (verdict) { d.classList.add(verdict); d.title = detail; out.push({ n: d.dataset.n, role: d.dataset.role, verdict, detail }); }
+  }
+  return out;
+}
+function applyAll() {
+  document.querySelectorAll("[data-role]").forEach(styleEl);
+  relayout();
+  const res = measure(fits);
+  const scr = buildScreens();   // both screen states, so help text is always checked
+  for (const x of scr) if (!res.some(y => y.n === x.n)) res.push(x);
+  buildSpec();
+  const fl = document.getElementById("fitlist");
+  if (!res.length) fl.innerHTML = "<b>Everything fits</b> at these sizes.";
+  else fl.innerHTML = `<b>${res.length} box${res.length > 1 ? "es" : ""} overflow</b> at these sizes:<ul>` +
+    res.map(r => `<li class="${r.verdict}">${r.verdict === "cut" ? "cut" : "squashed"}: ${r.n} <span style="color:var(--muted)">(${ROLES[r.role].name}, ${r.detail})</span></li>`).join("") + "</ul>";
+  return res;
+}
+
+// ───────── screens and specimens ─────────
+function buildScreens() {
+  const host = document.getElementById("screens"); host.innerHTML = "";
+  const all = [];
+  for (const mode of ["live", "help"]) {
+    const w = el(host, "screenwrap"); const b = el(w, "screenbox");
+    screen(b, mode);
+    el(w, null, null, `<small>${mode === "live" ? "live: NOISE / WORN HISS 100%" : "help: " + helpKey}</small>`);
+    b.querySelectorAll("[data-role]").forEach(styleEl);
+    const r = measure([...b.querySelectorAll(".t[data-min]")]);
+    if (r.length) el(w, null, { color: "var(--cut)", fontSize: "12px", maxWidth: "312px" }, r.map(x => `${x.n}: ${x.detail}`).join("<br>"));
+    all.push(...r);
+  }
+  return all;
+}
+const HARD = ["0123456789", "100% / 0%", "1/16", "48.0 KHZ", "-12.5 DB", "IN + LOOP"];
+function buildSpec() {
+  const host = document.getElementById("spec"); host.innerHTML = "";
+  const block = (role, sizes, lines, extra) => {
+    const s = eff(role), b = el(host, "specbox");
+    el(b, null, null, `<h3>${ROLES[role].name}: ${s.font}${s.weight !== 400 ? " " + s.weight : ""}</h3>`);
+    for (const h of sizes) {
+      const row = el(b, "specline");
+      el(row, "sz", null, `${h}${s.nudge ? (s.nudge > 0 ? "+" : "") + s.nudge : ""}`);
+      const tx = el(row, "tx"); tx.textContent = lines(h); tx.dataset.role = role; tx.dataset.h = h; styleEl(tx);
+    }
+    if (extra) extra(b, s);
+  };
+  block("retro", [14, 15, 17, 28], h => h === 28 ? "WORN HISS 100%" : HARD.join("   "), b => {
+    const d = el(b, "dark", { marginTop: "8px", width: "312px", maxWidth: "100%" });
+    const t = el(d, null, { width: "292px", maxWidth: "100%" }); t.textContent = HELP.SYNC; t.dataset.role = "retro"; t.dataset.h = 17; t.dataset.lines = 3; styleEl(t);
+    t.style.lineHeight = (17 + eff("retro").nudge) + "px";
+    const lines = Math.round(t.scrollHeight / parseFloat(t.style.lineHeight));
+    el(b, "note", { marginTop: "4px", color: lines > 3 ? "#b4452a" : "#5f5f57" }, `three-line help sentence in a 292 px box at 17: ${lines} line${lines > 1 ? "s" : ""}`);
+  });
+  block("label", [10.8, 11.52, 12.24, 14.4, 17.28], h => "SENSITIVITY  MICRO-LOOPER  LOOK BACK  BALANCE  OVERDUB  " + HARD.slice(1).join("  "));
+  block("value", [14, 16, 18], h => HARD.join("   "), b => {
+    const row = el(b, "specline"); el(row, "sz", null, "16 live");
+    const tx = el(row, "tx"); tx.dataset.role = "value"; tx.dataset.h = 16; styleEl(tx); tx.id = "ticker";
+    tx.textContent = "DECAY 5.18 S   LOOP 100 / WET 60";
+    el(b, "note", { marginTop: "4px", color: "#5f5f57" }, "the live line ticks: if its end moves sideways, the digits are not fixed-width");
+  });
+  block("word", [48], () => "BROOD.");
+}
+let tick = 0;
+setInterval(() => {
+  const t = document.getElementById("ticker"); if (!t) return;
+  tick++; const d = (1.11 + (tick * 0.37) % 8.8).toFixed(2), w = (tick * 7) % 101;
+  t.textContent = `DECAY ${d} S   LOOP ${100 - (w % 41)} / WET ${w}`;
+}, 140);
+
+// ───────── controls ─────────
+function rolesUI() {
+  const host = document.getElementById("roles"); host.innerHTML = "";
+  for (const r in ROLES) {
+    const R = ROLES[r], card = el(host, "role");
+    el(card, "head", null, `<b>${R.name}</b><span class="status wait" id="st-${r}">checking</span>`);
+    el(card, "meta", null, R.what);
+    const sel = document.createElement("select"); sel.id = "sel-" + r; sel.setAttribute("aria-label", R.name + " face");
+    R.list.forEach(n => { const o = document.createElement("option"); o.value = n; o.textContent = n === R.current ? `${n} (current)` : n; sel.appendChild(o); });
+    card.appendChild(sel);
+    const row = el(card, "row");
+    const ws = document.createElement("select"); ws.id = "w-" + r; ws.setAttribute("aria-label", R.name + " weight"); row.appendChild(ws);
+    const ng = el(row, "nudge", null, `<button aria-label="smaller">-</button><span id="nv-${r}">0 px</span><button aria-label="larger">+</button>`);
+    const [minus, plus] = ng.querySelectorAll("button");
+    minus.onclick = () => { state[r].nudge = Math.max(-2, state[r].nudge - 1); sync(); };
+    plus.onclick = () => { state[r].nudge = Math.min(2, state[r].nudge + 1); sync(); };
+    el(card, "meta", null, "").id = "meta-" + r;
+    sel.onchange = () => { const f = F[sel.value]; state[r].font = sel.value; state[r].weight = f.dw || 400; sync(); };
+    ws.onchange = () => { state[r].weight = parseInt(ws.value, 10); sync(); };
+  }
+}
+async function sync() {
+  for (const r in ROLES) {
+    const s = state[r], f = F[s.font];
+    document.getElementById("sel-" + r).value = s.font;
+    const ws = document.getElementById("w-" + r); ws.innerHTML = "";
+    f.w.forEach(w => { const o = document.createElement("option"); o.value = w; o.textContent = "weight " + w; ws.appendChild(o); });
+    if (!f.w.includes(s.weight)) s.weight = f.w[0];
+    ws.value = s.weight;
+    document.getElementById("nv-" + r).textContent = (s.nudge > 0 ? "+" : "") + s.nudge + " px";
+    const tab = f.tab === "default" ? "digits tabular by default" : f.tab === "tnum" ? "digits tabular with tnum on" : f.tab === "none" ? "digits not tabular" : "";
+    document.getElementById("meta-" + r).textContent = `${f.lic}, ${f.src}${tab ? ", " + tab : ""}`;
+  }
+  document.getElementById("current").setAttribute("aria-pressed", showCurrent);
+  try { localStorage.setItem("brood-font-trial", JSON.stringify(state)); } catch (e) {}
+  const jobs = [];
+  for (const r in ROLES) jobs.push(ensure(ROLES[r].current, 400));   // today's cap heights, for "size by cap height"
+  for (const r in ROLES) {
+    const s = eff(r); const st = document.getElementById("st-" + r);
+    st.className = "status wait"; st.textContent = "loading";
+    jobs.push(ensure(s.font, s.weight).then(ok => {
+      st.className = "status " + (ok ? "ok" : "bad");
+      st.textContent = ok ? (showCurrent ? "current, loaded" : "loaded") : "FELL BACK";
+      st.title = ok ? "" : "The browser could not load this face and is showing a generic one instead.";
+    }));
+  }
+  await Promise.all(jobs);
+  applyAll();
+  fitStage();
+}
+
+// ───────── scaling the stage ─────────
+function fitStage() {
+  const stage = document.getElementById("stage"), mode = document.getElementById("scale").value;
+  const avail = document.getElementById("stagehost").clientWidth;
+  let s;
+  if (mode === "fit") { const raw = avail / 1200; s = raw >= 0.75 ? Math.floor(raw * 8) / 8 : raw; s = Math.min(s, 2); }
+  else s = parseFloat(mode);
+  mock.style.transform = `scale(${s})`;
+  stage.style.width = Math.min(avail, 1200 * s) + "px";
+  stage.style.height = 750 * s + "px";
+  stage.style.overflowX = 1200 * s > avail ? "auto" : "hidden";
+}
+window.addEventListener("resize", fitStage);
+
+// ───────── check every candidate ─────────
+document.getElementById("checkall").onclick = async () => {
+  const saved = JSON.parse(JSON.stringify(state)), savedCur = showCurrent; showCurrent = false;
+  const savedHelp = helpKey; helpKey = document.getElementById("checkhelp").value; build();
+  const rows = []; const stEl = document.getElementById("checkstate");
+  for (const r in ROLES) for (const r2 in ROLES) state[r2] = { font: ROLES[r2].current, weight: 400, nudge: 0 };
+  const plan = [];
+  for (const r in ROLES) for (const n of ROLES[r].list) plan.push([r, n]);
+  plan.push(["retro", "Not A Real Font 7Q"]);
+  for (const [r, n] of plan) {
+    for (const r2 in ROLES) state[r2] = { font: ROLES[r2].current, weight: 400, nudge: 0 };
+    state[r] = { font: n, weight: F[n].dw || 400, nudge: 0 };
+    stEl.textContent = `checking ${ROLES[r].name}: ${n}`;
+    const ok = await ensure(n, state[r].weight);
+    for (const r2 in ROLES) await ensure(state[r2].font, state[r2].weight);
+    const res = applyAll().filter(x => x.role === r);
+    rows.push({ r, n, ok, res });
+  }
+  Object.assign(state, saved); showCurrent = savedCur; helpKey = savedHelp; build(); await sync();
+  stEl.textContent = `checked ${rows.length} faces`;
+  document.getElementById("results").innerHTML = "<tr><th>Role</th><th>Face</th><th>Loaded</th><th>Overflow in its role, default sizes</th></tr>" +
+    rows.map(x => `<tr><td>${ROLES[x.r].name}</td><td>${x.n}</td><td class="${x.ok ? "ok" : "cut"}">${x.ok ? "yes" : "FELL BACK"}</td><td>${x.res.length ? x.res.map(o => `<span class="${o.verdict}">${o.verdict === "cut" ? "cut" : "squashed"}: ${o.n} (${o.detail})</span>`).join("<br>") : '<span class="ok">none</span>'}</td></tr>`).join("");
+  window.__results = rows;
+};
+
+// ───────── wiring ─────────
+document.querySelectorAll("[data-set]").forEach(b => b.onclick = () => {
+  const set = SETS[+b.dataset.set]; showCurrent = false;
+  for (const r in ROLES) {
+    const p = set[r] || [ROLES[r].current, 400, 0];
+    state[r] = { font: p[0], weight: p[1], nudge: p[2] || 0 };
+  }
+  sync();
+});
+document.getElementById("current").onclick = () => { showCurrent = !showCurrent; sync(); };
+document.getElementById("sizemode").onchange = e => { sizeMode = e.target.value; sync(); };
+document.getElementById("screen").onchange = e => { screenMode = e.target.value; build(); };
+const ht = document.getElementById("helptext");
+Object.keys(HELP).forEach(k => { const o = document.createElement("option"); o.value = k; o.textContent = "help: " + k; ht.appendChild(o); });
+ht.onchange = e => { helpKey = e.target.value; build(); };
+document.getElementById("helplines").onchange = e => { helpLines = parseInt(e.target.value, 10); build(); };
+document.getElementById("scale").onchange = fitStage;
+document.getElementById("showfit").onchange = e => mock.classList.toggle("show-fit", e.target.checked);
+document.getElementById("showroles").onchange = e => mock.classList.toggle("show-roles", e.target.checked);
+
+// Last choices in this browser, so a reload keeps them.
+try {
+  const kept = JSON.parse(localStorage.getItem("brood-font-trial") || "null");
+  if (kept) for (const r in ROLES) if (kept[r] && ROLES[r].list.includes(kept[r].font)) state[r] = kept[r];
+} catch (e) {}
+rolesUI();
+build();
+document.fonts.ready.then(() => sync());
+fitStage();
+</script>
+</body>
+</html>

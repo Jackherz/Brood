@@ -16,6 +16,11 @@ juce::String fmtSpeed(double s) {
 // old product name is not spelled anywhere in the source.
 const char kLegacyStateTag[] = { 0x4d, 0x4f, 0x4f, 0x44, 0 };
 juce::String pct(double x) { return juce::String(juce::roundToInt(x * 100)) + "%"; }
+// SLIP's RATE: how fast and which way the slices play, signed and with no unit ("+0.63").
+juce::String signedRate(double s) { return (s < 0 ? "-" : "+") + juce::String(std::fabs(s), 2); }
+// BALANCE in both words, LOOP first: how loud each side is (each is full in the middle).
+int balanceLoop(double v) { return juce::roundToInt(std::min(1.0, 2.0 * (1 - v)) * 100); }
+int balanceWet(double v) { return juce::roundToInt(std::min(1.0, 2.0 * v) * 100); }
 
 // Host value strings: a number and its unit, at most 8 characters, the way a controller's
 // display shows its own parameters (35%, -3.1 dB, 1708 Hz). The editor keeps the prose.
@@ -41,8 +46,8 @@ double inverseExp(double x, double a, double b) { return x <= a ? 0.0 : x >= b ?
 struct FloatDef { const char* id; const char* name; float def; };
 const FloatDef kKnobs[] = {
     {"time", "Time", 0.55f}, {"mix", "Mix", 0.5f}, {"length", "Length", 0.72f},
-    {"modWet", "Wet Mod", 0.58f}, {"clock", "Clock", 0.9f}, {"modLoop", "Loop Mod", 0.66f},
-    {"balance", "Wet/Loop", 0.5f},
+    {"modWet", "Modify / Wet", 0.58f}, {"clock", "Clock", 0.9f}, {"modLoop", "Modify / Loop", 0.66f},
+    {"balance", "Balance", 0.5f},
 };
 }  // namespace
 
@@ -89,19 +94,23 @@ BroodProcessor::BroodProcessor()
           layout.add(loopParam("loopDiv", "Loop Div", 0.f));
           layout.add(loopParam("character", "Wear", 0.5f));
           layout.add(loopParam("wearNoise", "Noise", 1.f));
-          layout.add(std::make_unique<APB>(juce::ParameterID("wearPost", 1), "Wear Post", false));
+          // Where WORN's wear sits: PRE, before the loop, so it's recorded; POST, after it, so the loop keeps a clean take.
+          layout.add(std::make_unique<APB>(juce::ParameterID("wearPost", 1), "Wear Post", false,
+              juce::AudioParameterBoolAttributes()
+                  .withStringFromValueFunction([](bool post, int) { return juce::String(post ? "Post" : "Pre"); })
+                  .withValueFromStringFunction([](const juce::String& t) { return t.trim().toLowerCase().startsWith("post"); })));
           layout.add(std::make_unique<APB>(juce::ParameterID("tapeDelay", 1), "Tape Echo", false));
           // RECORD: the loop switch records what's played after it, for FREE or a number of bars.
           layout.add(std::make_unique<APC>(juce::ParameterID("recMode", 1), "Rec Mode", juce::StringArray{"Capture", "Record"}, 0));
           layout.add(loopParam("recBars", "Rec Bars", 0.f));
-          layout.add(std::make_unique<APB>(juce::ParameterID("recAtTap", 1), "Rec At Tap", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("recAtTap", 1), "At Tap", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze", false));
           // The ramp engine: two generators, one per channel.
           // The two modulation sources: a rate, a shape and five switches each, and a
           // depth for each control it can move (0 is no route).
           for (int n = 1; n <= 2; ++n) {
               // Short enough for a controller's display: the names a host shows are these.
-              static const char* const shortTarget[brood::kModTargets] = {"Time", "Mix", "Length", "Wet Mod", "Clock", "Loop Mod", "Wet/Loop"};
+              static const char* const shortTarget[brood::kModTargets] = {"Time", "Mix", "Length", "Mod Wet", "Clock", "Mod Loop", "Balance"};
               const juce::String m = "mod" + juce::String(n), name = "M" + juce::String(n) + " ";
               layout.add(std::make_unique<APB>(juce::ParameterID(m + "On", 1), name + "On", true));
               layout.add(loopParam(m + "Rate", name + "Rate", 0.45f));
@@ -118,8 +127,8 @@ BroodProcessor::BroodProcessor()
                           .withStringFromValueFunction([](float v, int) { return signedPct(v); })
                           .withValueFromStringFunction([](const juce::String& t) { return static_cast<float>(juce::jlimit(-1.0, 1.0, leadingNumber(t) / 100.0)); })));
           }
-          layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "ENV Sync", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "ENV Soft", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "Env Sync", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "Env Soft", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet Switch", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop Switch", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("overdub", 1), "Overdub", false));
@@ -185,7 +194,7 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         if (wetMode == 0) return "smear " + pct(v);
         if (wetMode == 1) return "feedback " + pct(v);
         if (wetMode == 3) return v < 0.34 ? "long cloth " + pct(v) : "short stitches " + pct(v);
-        return "speed " + fmtSpeed(brood::slipSpeedMap(v));
+        return "rate " + signedRate(brood::slipSpeedMap(v));
     }
     if (id == "clock") {
         return "sample rate " + juce::String(brood::clockHz(v, smooth) / 1000, 1) + " kHz";
@@ -195,7 +204,8 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         if (loopMode == 1) return "tape " + fmtSpeed(brood::speedMap(v, 0.04));
         return "stretch " + fmtSpeed(brood::stretchMap(v)) + ", same pitch";
     }
-    if (id == "balance") return "wet " + pct(std::min(1.0, 2.0 * v)) + " / loop " + pct(std::min(1.0, 2.0 * (1 - v)));
+    if (id == "balance") return "loop " + juce::String(balanceLoop(v)) + " / wet " + juce::String(balanceWet(v));
+    if (id == "wearPost") return v > 0.5f ? "post loop: heard worn, recorded clean" : "pre loop: recorded worn";
     if (id == "memory") {
         if (v <= 0.001f) return "pedal " + fmtTime(brood::kLoopSamples / hz);
         return "up to " + fmtTime(brood::expMap(v, 1, 30)) + " of " + fmtTime(30.0);
@@ -262,10 +272,11 @@ juce::String BroodProcessor::hostValue(const juce::String& id, float v) const {
         if (loopMode == 0) return on("envSync") ? juce::String(brood::syncLabel(v)) : shortTime(brood::expMap(v, 0.01, 1) / c);
         return shortTime(brood::expMap(v, 0.01, 0.5) / c);
     }
-    if (id == "modWet") return wetMode == 2 ? shortSpeed(brood::slipSpeedMap(v)) : pct(v);
+    if (id == "modWet") return wetMode == 2 ? signedRate(brood::slipSpeedMap(v)) : pct(v);
     if (id == "modLoop") return loopMode == 0 ? pct(v) : loopMode == 1 ? shortSpeed(brood::speedMap(v, 0.04)) : shortSpeed(brood::stretchMap(v));
     if (id == "clock") return juce::String(brood::clockHz(v, smooth) / 1000, 1) + " kHz";
-    if (id == "mix" || id == "balance" || id == "loopEnd") return pct(v);
+    if (id == "balance") return juce::String(balanceLoop(v)) + "/" + juce::String(balanceWet(v));   // LOOP / WET, as on the panel
+    if (id == "mix" || id == "loopEnd") return pct(v);
     if (id == "memory") return v <= 0.001f ? juce::String("Pedal") : shortTime(brood::expMap(v, 1, 30));
     if (id == "start") return v <= 0.005f ? juce::String("Oldest") : v >= 0.995f ? juce::String("Newest") : pct(v);
     if (id == "tone") return v > 0.995f ? juce::String("Open") : "Cut " + pct(1 - v);
@@ -299,6 +310,12 @@ float BroodProcessor::hostValueFromText(const juce::String& id, const juce::Stri
     const auto* ck = apvts.getRawParameterValue("clock");
     const int wetMode = wm != nullptr ? juce::roundToInt(wm->load()) : 0, loopMode = lm != nullptr ? juce::roundToInt(lm->load()) : 1;
     const double c = brood::clockHz(ck != nullptr ? ck->load() : 0.9f, false) / brood::kCoreFs;
+    // BALANCE as the host shows it, LOOP / WET: whichever side is below full says where it is.
+    if (id == "balance" && t.containsChar('/')) {
+        const double loop = t.upToFirstOccurrenceOf("/", false, false).getDoubleValue();
+        const double wet = t.fromFirstOccurrenceOf("/", false, false).getDoubleValue();
+        return static_cast<float>(juce::jlimit(0.0, 1.0, wet < 100 ? wet / 200.0 : 1.0 - loop / 200.0));
+    }
     if (t.endsWith("%")) {
         if (id == "tone" || id == "fade") return static_cast<float>(juce::jlimit(0.0, 1.0, 1.0 - x / 100.0));
         if (id == "width") return static_cast<float>(juce::jlimit(0.0, 1.0, 0.5 + x / 200.0));
