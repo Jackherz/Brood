@@ -594,7 +594,7 @@ class BroodCore {
     this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
     this.wetIn = 0; this.wetOut = 0;           // core-rate gains
     this.lastWet = 0;                          // the wet side's last tick, for an overdub to layer
-    this.loopBare = 0;                         // the loop's last tick before GAIN (IN + LOOP's wet side)
+    this.loopBare = 0;                         // the loop's last tick before GAIN (IN + LOOP's ceiling)
     this.routeLoop = 0;                        // 1 in IN + LOOP, faded across a ROUTING change
     this.dubReplace = 0;                       // how much of the old layer an overdub replaces
     this.feedPow = 0; this.wetPow = 0; this.dubCeil = 1;   // IN + LOOP's ceiling on the re-recorded wet side
@@ -1408,8 +1408,8 @@ class BroodCore {
     // The loop is read before the wet side runs, so an overdub layers the wet side from the
     // tick before.
     const loopOut = this.loopTick(x, recordWet ? softClip(x + this.lastWet * (1 - this.routeLoop + wetShare) * (1 - this.routeLoop * (1 - this.dubCeil))) : x);
-    // The wet side hears the loop before GAIN, so GAIN can't push it up on every overdub pass.
-    const wetSrc = p.routing === 2 ? loopOut : p.routing === 1 ? x + this.loopBare : x;
+    // GAIN sets the loop's level for the wet side too, so turning it down quietens both.
+    const wetSrc = p.routing === 2 ? loopOut : p.routing === 1 ? x + loopOut : x;
     // The FREEZE switch is the hold gesture without the holding: it brings the wet
     // side up and freezes it, so a reverb can be left ringing on its own.
     const held = p.freeze > 0.5;
@@ -1500,8 +1500,10 @@ class BroodCore {
     this.lastWet = (wl + wr) * 0.5;
     // IN + LOOP's ceiling: the wet side may not give back more than it was fed (brood.h).
     {
+      // The loop counts at GAIN no higher than 0 dB, so a boost is heard but not re-recorded.
       const k = 1 / (0.25 * Math.max(1, this.clockRatio * this.fs));
-      this.feedPow += (wIn * wIn - this.feedPow) * k;
+      const feed = p.routing === 1 ? wIn - (loopOut - this.loopBare * Math.min(1, this.loopLevel)) * this.wetIn : wIn;
+      this.feedPow += (feed * feed - this.feedPow) * k;
       this.wetPow += (this.lastWet * this.lastWet - this.wetPow) * k;
       this.dubCeil = this.wetPow > this.feedPow && this.wetPow > 1e-12 ? Math.sqrt(this.feedPow / this.wetPow) : 1;
     }

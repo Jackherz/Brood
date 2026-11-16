@@ -352,6 +352,18 @@ int main() {
         CHECK(dly < 1.2, "IN + LOOP overdub through a delay at high FEEDBACK holds its level (x%.2f)", dly);
         CHECK(dry > 0.5 && dry < 1.05, "IN + LOOP overdub with the wet side off layers as before (x%.2f)", dry);
     }
+    {   // IN + LOOP: GAIN turns the loop down for the wet side too, so all-wet BALANCE follows it
+        auto wetLevel = [](double loopDb) {
+            brood::Core c; c.p.routing = 1; c.p.wetMode = 2; c.p.modWet = 0.9; c.p.time = 0.5;
+            c.p.mix = 1; c.p.clock = 1; c.p.balance = 1; c.p.loopDb = loopDb; c.p.loopMode = 1;
+            c.prepare(FS);
+            tap(c, 0);
+            render(c, 1.2, tone(200, 3), [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(1.1)) cc.footswitch(1, false); });
+            return rms(render(c, 3, [](double) { return 0.0; }).L, 1, 3);
+        };
+        const double db = 20 * std::log10(wetLevel(-24) / wetLevel(0));
+        CHECK(std::fabs(db + 24) < 1.5, "IN + LOOP: GAIN -24 dB brings the wet side down with the loop (%.1f dB)", db);
+    }
     {   // CLASSIC: the slow clock is noisy
         auto noise = [](bool classic, double level = 1) {
             brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic; c.p.wearNoise = level;

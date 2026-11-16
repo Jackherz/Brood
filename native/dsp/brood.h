@@ -1136,7 +1136,7 @@ private:
     bool wetOn = false, freeze = false, wetMomentary = false;
     double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
     double lastWet = 0;   // the wet side's last tick, for an overdub to layer
-    double loopBare = 0;  // the loop's last tick before GAIN, for the wet side in IN + LOOP
+    double loopBare = 0;  // the loop's last tick before GAIN, for IN + LOOP's ceiling
     double routeLoop = 0; // 1 in IN + LOOP, faded across a ROUTING change
     double dubReplace = 0;   // how much of the old layer an overdub replaces (IN + LOOP, wet on)
     double feedPow = 0, wetPow = 0, dubCeil = 1;   // IN + LOOP's ceiling on the re-recorded wet side
@@ -1836,9 +1836,8 @@ private:
         // The loop is read before the wet side runs, so an overdub layers the wet side from the
         // tick before (1/64000 s at most: inaudible).
         double loopOut = loopTick(x, recordWet ? softClip(x + lastWet * (1 - routeLoop + wetShare) * (1 - routeLoop * (1 - dubCeil))) : x);
-        // GAIN is the loop's level as you hear it: the wet side hears the loop before it, so
-        // turning it up can't push the loop up on every overdub pass.
-        const double wetSrc = p.routing == 2 ? loopOut : p.routing == 1 ? x + loopBare : x;
+        // GAIN sets the loop's level for the wet side too, so turning it down quietens both.
+        const double wetSrc = p.routing == 2 ? loopOut : p.routing == 1 ? x + loopOut : x;
         // The FREEZE switch is the hold gesture without the holding: it brings the
         // wet side up and freezes it, so a reverb can be left ringing on its own.
         const bool held = p.freezeLatch > 0.5;
@@ -1929,8 +1928,11 @@ private:
         // louder than what it was fed, so a wet mode that builds on itself (a delay near full
         // FEEDBACK) can't grow the loop pass after pass. Lossy wet modes never reach it.
         {
+            // The loop counts at GAIN no higher than 0 dB: a boost is heard on both sides, but
+            // what an overdub re-records of it stays at the loop's own level.
             const double k = 1 / (0.25 * std::max(1.0, clockRatio * fs));
-            feedPow += (wIn * wIn - feedPow) * k;
+            const double feed = p.routing == 1 ? wIn - (loopOut - loopBare * std::min(1.0, loopLevel)) * wetIn : wIn;
+            feedPow += (feed * feed - feedPow) * k;
             wetPow += (lastWet * lastWet - wetPow) * k;
             dubCeil = wetPow > feedPow && wetPow > 1e-12 ? std::sqrt(feedPow / wetPow) : 1.0;
         }
