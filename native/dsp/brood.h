@@ -1203,6 +1203,13 @@ private:
     // short crossfade from where the loop was playing to where it now begins.
     int startA = 0, startB = 0;                // whole samples: never fractional
     double startFade = 1;
+    // The fade carries the whole window, not just its start: each head has its own length
+    // (winA, winB), and the head faded from reads shiftA further on, where it was playing.
+    // A window that changes length mid-fade waits, like START, for the fade to land.
+    // carryA: how far the playhead has wrapped round winB since the fade began; head A's
+    // playhead carries on through it to its own window's end instead of following.
+    int winA = 64, winB = 64;
+    double shiftA = 0, carryA = 0;
     int startLen = -1;
     // LENGTH in TAPE sizes the window. When it moves, the playhead keeps its place as a
     // share of the window (the way the Digitakt does it), and the window's start follows
@@ -1513,32 +1520,36 @@ private:
         if (lengthSlew < 0 || lsrc != startLen) lengthSlew = e.length;
         else lengthSlew += clampd(e.length - lengthSlew, -maxL, maxL);
         const Window win = p.loopMode == 1 ? loopWindowAt(lengthSlew) : loopWindow();
-        const int W = win.W;
+        // The window the controls ask for. What plays is winB from startB, which takes this
+        // window up through a crossfade (below), so a dragged marker never jumps the loop.
+        const int tW = win.W;
         const int len = std::max(64, lsrc);
-        const double Wd = W;
+        const double tWd = tW;
         // The song lock: dip for 5 ms, move the playhead to where the song says, come back.
         if (pendingLock) {
             lockGain = std::max(0.0, lockGain - 1.0 / (0.005 * kCoreFs));
             if (lockGain <= 0) {
-                if (std::isnan(lockShift)) loopPos = songTicks(win.start, Wd);
-                else { loopPos = jsMod(loopPos + lockShift, Wd); if (loopPos < 0) loopPos += Wd; }
+                if (std::isnan(lockShift)) loopPos = songTicks(win.start, tWd);
+                else { loopPos = jsMod(loopPos + lockShift, tWd); if (loopPos < 0) loopPos += tWd; }
                 lockShift = std::numeric_limits<double>::quiet_NaN();
                 pendingLock = false;
             }
         } else if (lockGain < 1) lockGain = std::min(1.0, lockGain + 1.0 / (0.005 * kCoreFs));
         const int mode = p.loopMode;
         const double trimNow = clampd(p.loopEnd, 0.02, 1), whereNow = clampd(p.start, 0, 1);
-        // Only LENGTH moved the window: same mode, same END, same START, same take.
-        const bool lengthMoved = mode == 1 && lastMode == 1 && lsrc == startLen && trimNow == lastTrim && whereNow == lastWhere && lastW > 0 && W != lastW;
-        if (lengthMoved) loopPos = loopPos * Wd / lastW;
+        // Only LENGTH moved the window: same mode, same END, same START, same take, and what
+        // plays is what was asked for last tick (no marker fade still under way).
+        const bool lengthMoved = mode == 1 && lastMode == 1 && lsrc == startLen && trimNow == lastTrim && whereNow == lastWhere && lastW > 0 && tW != lastW
+            && startFade >= 1 && winB == lastW && startB == lastWant;
+        if (lengthMoved) loopPos = loopPos * tWd / lastW;
         // A change of loop mode keeps the playhead where it is in the take when the new
         // window holds it; otherwise it crossfades from there to the new window's start.
         const bool modeSwitched = lastMode >= 0 && mode != lastMode && lsrc == startLen && lastW > 0;
         int switchFrom = -1;
         if (modeSwitched) {
-            const double absNow = lastWant + loopPos;
+            const double absNow = startB + loopPos;
             const double inNew = absNow - win.start;
-            if (inNew >= 0 && inNew < Wd) loopPos = inNew;
+            if (inNew >= 0 && inNew < tWd) loopPos = inNew;
             else { loopPos = 0; switchFrom = static_cast<int>(std::floor(absNow)); }
         }
         const double m = e.modLoop;
@@ -1546,8 +1557,6 @@ private:
         // loop plays back slower and lower and takes div times as long to come round.
         const double ldivd = divMap(p.loopDiv);
         const double lstep = 1 / ldivd;
-        double pos = jsMod(loopPos, Wd); if (pos < 0) pos += Wd;
-        const double posAtStart = pos;
 
         // START moves the read head, and a jump in the read head is a click. So a
         // change of START is a crossfade from where the loop was playing to where it
@@ -1555,21 +1564,36 @@ private:
         // of its own either. A capture or a restore resets it — there is a gain ramp
         // around both, so landing instantly there cannot be heard.
         const int wantStart = win.start;   // ('target' is taken: the loop's gain target)
-        if (lsrc != startLen) { startLen = lsrc; startA = startB = wantStart; startFade = 1; }
+        if (lsrc != startLen) { startLen = lsrc; startA = startB = wantStart; winA = winB = tW; shiftA = 0; carryA = 0; startFade = 1; }
         if (lengthMoved && wantStart != lastWant) {
             // The window slid with LENGTH and the playhead slid with it: move both heads
             // the same way, so any fade under way carries on and none starts.
             startA += wantStart - lastWant;
             startB += wantStart - lastWant;
         }
+        if (lengthMoved) winA = winB = tW;
         if (modeSwitched) {
             if (switchFrom >= 0) { startA = switchFrom; startB = wantStart; startFade = 0; }
             else { startA = startB = wantStart; startFade = 1; }
+            winA = winB = tW; shiftA = 0; carryA = 0;
         }
-        lastW = W; lastWant = wantStart; lastMode = mode; lastTrim = trimNow; lastWhere = whereNow;
+        lastW = tW; lastWant = wantStart; lastMode = mode; lastTrim = trimNow; lastWhere = whereNow;
         if (startFade >= 1) {
-            startA = startB;                          // the last fade has landed
-            if (wantStart != startA) { startB = wantStart; startFade = 0; }
+            startA = startB; winA = winB; shiftA = 0; carryA = 0;   // the last fade has landed
+            if (wantStart != startB || tW != winB) {
+                // A new window. The playhead keeps its place in it, wrapped if the window got
+                // shorter; head A carries on where it was (shiftA on), and the slices and grains,
+                // which count from the playhead's frame, move into the new one with it.
+                const double pOld = loopPos;
+                double pNew = jsMod(pOld, tWd); if (pNew < 0) pNew += tWd;
+                shiftA = pOld - pNew;
+                if (shiftA != 0) {
+                    loopPos = pNew;
+                    sliceStart -= shiftA; softStart -= shiftA;
+                    for (auto& g : grain) g.start -= shiftA;
+                }
+                startB = wantStart; winB = tW; startFade = 0;
+            }
         } else {
             // The head we are fading *to* stays put while it fades in. Moving it
             // mid-fade is the same jump in a smaller dose, which is what a first
@@ -1578,8 +1602,19 @@ private:
             startFade = std::min(1.0, startFade + 1.0 / (kCoreFs * 0.025));
         }
         const double wB = 0.5 - 0.5 * std::cos(kPi * startFade);   // 0 → A, 1 → B
-        auto at = [&](double base, double q0) {
-            double q = jsMod(q0, Wd); if (q < 0) q += Wd;
+        // From here on the window is the one playing.
+        const int W = winB;
+        const double Wd = W;
+        double pos = jsMod(loopPos, Wd); if (pos < 0) pos += Wd;
+        const double posAtStart = pos;
+        // One head's read: the take at base + q0 wrapped into its window, faded at that window's
+        // seam (over 4 ms, or 20 ms with a raised cosine for SOFT), and by shape where shape is
+        // the smaller.
+        auto at = [&](double base, double Wh, double q0, double shape, bool soft) {
+            double q = jsMod(q0, Wh); if (q < 0) q += Wh;
+            const double Fh = std::min((soft ? 0.02 : 0.004) * kCoreFs, Wh / 4);
+            double edge = std::min({1.0, q / Fh, (Wh - q) / Fh});
+            if (soft) edge = 0.5 - 0.5 * std::cos(kPi * edge);
             const double abs = base + q;
             int i0 = static_cast<int>(std::floor(abs));
             double f = abs - i0;
@@ -1591,15 +1626,16 @@ private:
             const int im1 = i0 > 0 ? i0 - 1 : 0;
             const int i2 = std::min(i1 + 1, len - 1);
             return hermite(loopBuf[static_cast<size_t>(im1)], loopBuf[static_cast<size_t>(i0)],
-                           loopBuf[static_cast<size_t>(i1)], loopBuf[static_cast<size_t>(i2)], f);
+                           loopBuf[static_cast<size_t>(i1)], loopBuf[static_cast<size_t>(i2)], f) * std::min(shape, edge);
         };
-        auto rd = [&](double q0) {
-            if (startFade >= 1) return at(startB, q0);
-            if (startFade <= 0) return at(startA, q0);
-            return at(startA, q0) * (1 - wB) + at(startB, q0) * wB;
+        // The loop at q0, through the crossfade: head A where the loop was, head B where it is now.
+        // main: q0 is the playhead, so head A takes it on past any wrap since the fade began.
+        auto rd = [&](double q0, double shape = 1.0, bool soft = false, bool main = false) {
+            if (startFade >= 1) return at(startB, Wd, q0, shape, soft);
+            const double a = at(startA, winA, q0 + shiftA + (main ? carryA : 0.0), shape, soft);
+            if (startFade <= 0) return a;
+            return a * (1 - wB) + at(startB, Wd, q0, shape, soft) * wB;
         };
-        const double F = std::min(0.004 * kCoreFs, Wd / 4);
-        auto edgeAt = [&](double q0) { double q = jsMod(q0, Wd); if (q < 0) q += Wd; return std::min({1.0, q / F, (Wd - q) / F}); };
         double y;
         // What the playhead shows (State::head): the reads STRETCH and ENV make, where they're
         // heard; otherwise the playhead itself. Drawn only, never heard.
@@ -1626,17 +1662,17 @@ private:
                 if (g.ph >= 1) { g.ph -= 1; g.start = pos + (rand01() - 0.5) * 0.2 * G; g.dir = dir; g.off = g.ph * G; }
                 const double q = g.start + g.dir * g.off;
                 const double sw = std::sin(kPi * g.ph);
-                y += rd(q) * sw * sw * edgeAt(q);
+                y += rd(q) * sw * sw;
                 hpos[gk] = q; hlev[gk] = sw * sw; ++gk;
             }
             const double normal = clampd((m - 0.97) / 0.03, 0, 1);
-            y = y * (1 - normal) + rd(pos) * edgeAt(pos) * normal;
+            y = y * (1 - normal) + rd(pos, 1.0, false, true) * normal;
             // Full clockwise is the plain loop: the playhead again once that's the louder.
             if (normal < 0.5) { heard = true; hlev[0] *= 1 - normal; hlev[1] *= 1 - normal; }
             stretchSpeed += (stretchMap(m) - stretchSpeed) * 0.001;
             pos += stretchSpeed * lstep;
         } else if (mode == 1) {
-            y = rd(pos) * edgeAt(pos);
+            y = rd(pos, 1.0, false, true);
             tapeSpeed += (speedMap(m, 0.04) - tapeSpeed) * 0.00025;
             pos += tapeSpeed * lstep;
         } else {
@@ -1654,13 +1690,7 @@ private:
             } else if (envGate && --envHold <= 0) envGate = false;
             envMix += ((envGate ? 1.0 : 0.0) - envMix) * (soft ? 0.0008 : 0.005);
             const double softF = 0.02 * kCoreFs;
-            const double mainF = std::min(soft ? softF : 0.004 * kCoreFs, Wd / 4);
-            double mainEdge = edgeAt(pos);
-            if (soft) {
-                double q = jsMod(pos, Wd); if (q < 0) q += Wd;
-                mainEdge = 0.5 - 0.5 * std::cos(kPi * std::min({1.0, q / mainF, (Wd - q) / mainF}));
-            }
-            const double mainV = rd(pos) * mainEdge;
+            const double mainV = rd(pos, 1.0, soft, true);
             double sl = 0;
             if (envMix > 1e-4) {
                 // ENV slices to a length, so synced LENGTH is a division of the beat,
@@ -1717,13 +1747,13 @@ private:
                     // Every slice read also fades over the take's seam, where its end meets its start,
                     // as the loop itself does: a slice reading across it used to click. The lower of
                     // the two fades, so where a slice's edge falls on the seam it's one fade, not two.
-                    sl = rd(sliceStart + slicePh) * std::min(0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3})), edgeAt(sliceStart + slicePh)) * sliceIn;
+                    sl = rd(sliceStart + slicePh, 0.5 - 0.5 * std::cos(kPi * std::min({1.0, slicePh / F3, (softS - slicePh) / F3}))) * sliceIn;
                     hpos[0] = sliceStart + slicePh; hlev[0] = 1; hpos[1] = softStart + softPh;
                     hlev[1] = softOldFade > 0 ? 0.5 - 0.5 * std::cos(kPi * softOldFade) : 0;
                     if (softOldFade > 0) {
                         const double F4 = std::min(softF, softOldS / 4);
                         const double shape = 0.5 - 0.5 * std::cos(kPi * std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0));
-                        sl += rd(softStart + softPh) * std::min(shape, edgeAt(softStart + softPh)) * (0.5 - 0.5 * std::cos(kPi * softOldFade));
+                        sl += rd(softStart + softPh, shape) * (0.5 - 0.5 * std::cos(kPi * softOldFade));
                         softPh += lstep;
                         softOldFade = std::max(0.0, softOldFade - 1.0 / softF);
                     }
@@ -1731,12 +1761,12 @@ private:
                     // Synced but off the grid, a new length takes over at the slice's own end.
                     if (!grid && slicePh >= sliceS) { slicePh -= sliceS; sliceS = S; }
                     const double F2 = std::min(0.004 * kCoreFs, sliceS / 4);
-                    sl = rd(sliceStart + slicePh) * std::min(std::max(0.0, std::min({1.0, slicePh / F2, (sliceS - slicePh) / F2})), edgeAt(sliceStart + slicePh)) * sliceIn;
+                    sl = rd(sliceStart + slicePh, std::max(0.0, std::min({1.0, slicePh / F2, (sliceS - slicePh) / F2}))) * sliceIn;
                     hpos[0] = sliceStart + slicePh; hlev[0] = 1; hpos[1] = softStart + softPh; hlev[1] = std::max(0.0, softOldFade);
                     if (softOldFade > 0) {
                         const double F4 = std::min(0.004 * kCoreFs, softOldS / 4);
                         const double shape = std::clamp(std::min(softPh / F4, (softOldS - softPh) / F4), 0.0, 1.0);
-                        sl += rd(softStart + softPh) * std::min(shape, edgeAt(softStart + softPh)) * softOldFade;
+                        sl += rd(softStart + softPh, shape) * softOldFade;
                         softPh += lstep;
                         softOldFade = std::max(0.0, softOldFade - 1.0 / (0.004 * kCoreFs));
                     }
@@ -1819,6 +1849,7 @@ private:
             }
             dubLast = q; dubPrev = rec;
         } else dubLast = -1;
+        if (startFade < 1) carryA += std::floor(pos / Wd) * Wd;
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);
         heardAt(heard, hpos, hlev, Wd);
         // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.

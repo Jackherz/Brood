@@ -651,6 +651,12 @@ class BroodCore {
     // Moving START moves the read head; see loopTick for the 25 ms crossfade these
     // four carry from where the loop was playing to where it now begins.
     this.startA = 0; this.startB = 0; this.startFade = 1; this.startLen = -1;
+    // The fade carries the whole window, not just its start: each head has its own length
+    // (winA, winB), and the head faded from reads shiftA further on, where it was playing.
+    // A window that changes length mid-fade waits, like START, for the fade to land.
+    // carryA: how far the playhead has wrapped round winB since the fade began; head A's
+    // playhead carries on through it to its own window's end instead of following.
+    this.winA = 64; this.winB = 64; this.shiftA = 0; this.carryA = 0;
     // LENGTH in TAPE sizes the window. When it moves, the playhead keeps its place as a
     // share of the window (the way the Digitakt does it), and the window's start follows
     // without a crossfade, since nothing jumps. These say what the last tick played.
@@ -1099,13 +1105,15 @@ class BroodCore {
     if (this.lengthSlew < 0 || this.lsrc !== this.startLen) this.lengthSlew = this.e.length;
     else this.lengthSlew += clamp(this.e.length - this.lengthSlew, -maxL, maxL);
     const win = this.p.loopMode === 1 ? this.loopWindowAt(this.lengthSlew) : this.loopWindow();
-    const W = win.W, winStart = win.start;
+    // The window the controls ask for. What plays is winB from startB, which takes this
+    // window up through a crossfade (below), so a dragged marker never jumps the loop.
+    const tW = win.W, winStart = win.start;
     // The song lock: dip for 5 ms, move the playhead to where the song says, come back.
     if (this.pendingLock) {
       this.lockGain = Math.max(0, this.lockGain - 1 / (0.005 * CORE_FS));
       if (this.lockGain <= 0) {
-        if (Number.isNaN(this.lockShift)) this.loopPos = this.songTicks(winStart, W);
-        else { this.loopPos = (this.loopPos + this.lockShift) % W; if (this.loopPos < 0) this.loopPos += W; }
+        if (Number.isNaN(this.lockShift)) this.loopPos = this.songTicks(winStart, tW);
+        else { this.loopPos = (this.loopPos + this.lockShift) % tW; if (this.loopPos < 0) this.loopPos += tW; }
         this.lockShift = NaN;
         this.pendingLock = false;
       }
@@ -1115,46 +1123,61 @@ class BroodCore {
     const mode = this.p.loopMode;
     const m = this.e.modLoop;
     const trimNow = clamp(this.p.loopEnd, 0.02, 1), whereNow = clamp(this.p.start, 0, 1);
-    // Only LENGTH moved the window: same mode, same END, same START, same take.
-    const lengthMoved = mode === 1 && this.lastMode === 1 && this.lsrc === this.startLen && trimNow === this.lastTrim && whereNow === this.lastWhere && this.lastW > 0 && W !== this.lastW;
-    if (lengthMoved) this.loopPos = this.loopPos * W / this.lastW;
+    // Only LENGTH moved the window: same mode, same END, same START, same take, and what
+    // plays is what was asked for last tick (no marker fade still under way).
+    const lengthMoved = mode === 1 && this.lastMode === 1 && this.lsrc === this.startLen && trimNow === this.lastTrim && whereNow === this.lastWhere && this.lastW > 0 && tW !== this.lastW
+      && this.startFade >= 1 && this.winB === this.lastW && this.startB === this.lastWant;
+    if (lengthMoved) this.loopPos = this.loopPos * tW / this.lastW;
     // A change of loop mode keeps the playhead where it is in the take when the new
     // window holds it; otherwise it crossfades from there to the new window's start.
     const modeSwitched = this.lastMode >= 0 && mode !== this.lastMode && this.lsrc === this.startLen && this.lastW > 0;
     let switchFrom = -1;
     if (modeSwitched) {
-      const absNow = this.lastWant + this.loopPos;
+      const absNow = this.startB + this.loopPos;
       const inNew = absNow - winStart;
-      if (inNew >= 0 && inNew < W) this.loopPos = inNew;
+      if (inNew >= 0 && inNew < tW) this.loopPos = inNew;
       else { this.loopPos = 0; switchFrom = Math.floor(absNow); }
     }
     // LOOP CLOCK DIVISION: the loop reads at 1/div of the clock, so a divided
     // loop plays back slower and lower and takes div times as long to come round.
     const ldiv = divMap(this.p.loopDiv);
     const lstep = 1 / ldiv;
-    let pos = this.loopPos % W; if (pos < 0) pos += W;
-    const posAtStart = pos;
 
     // START moves the read head, and a jump in the read head is a click. So a
     // change of START is a crossfade from where the loop was playing to where it
     // now begins: 25 ms, weighted by a raised cosine so the fade has no corners
     // of its own either. A capture or a restore resets it — there is a gain ramp
     // around both, so landing instantly there cannot be heard.
-    if (this.lsrc !== this.startLen) { this.startLen = this.lsrc; this.startA = winStart; this.startB = winStart; this.startFade = 1; }
+    if (this.lsrc !== this.startLen) { this.startLen = this.lsrc; this.startA = winStart; this.startB = winStart; this.winA = this.winB = tW; this.shiftA = 0; this.carryA = 0; this.startFade = 1; }
     if (lengthMoved && winStart !== this.lastWant) {
       // The window slid with LENGTH and the playhead slid with it: move both heads
       // the same way, so any fade under way carries on and none starts.
       this.startA += winStart - this.lastWant;
       this.startB += winStart - this.lastWant;
     }
+    if (lengthMoved) { this.winA = this.winB = tW; }
     if (modeSwitched) {
       if (switchFrom >= 0) { this.startA = switchFrom; this.startB = winStart; this.startFade = 0; }
       else { this.startA = winStart; this.startB = winStart; this.startFade = 1; }
+      this.winA = this.winB = tW; this.shiftA = 0; this.carryA = 0;
     }
-    this.lastW = W; this.lastWant = winStart; this.lastMode = mode; this.lastTrim = trimNow; this.lastWhere = whereNow;
+    this.lastW = tW; this.lastWant = winStart; this.lastMode = mode; this.lastTrim = trimNow; this.lastWhere = whereNow;
     if (this.startFade >= 1) {
-      this.startA = this.startB;                   // the last fade has landed
-      if (winStart !== this.startA) { this.startB = winStart; this.startFade = 0; }
+      this.startA = this.startB; this.winA = this.winB; this.shiftA = 0; this.carryA = 0;   // the last fade has landed
+      if (winStart !== this.startB || tW !== this.winB) {
+        // A new window. The playhead keeps its place in it, wrapped if the window got
+        // shorter; head A carries on where it was (shiftA on), and the slices and grains,
+        // which count from the playhead's frame, move into the new one with it.
+        const pOld = this.loopPos;
+        let pNew = pOld % tW; if (pNew < 0) pNew += tW;
+        this.shiftA = pOld - pNew;
+        if (this.shiftA !== 0) {
+          this.loopPos = pNew;
+          this.slice.start -= this.shiftA; this.softStart -= this.shiftA;
+          for (const g of this.grain) g.start -= this.shiftA;
+        }
+        this.startB = winStart; this.winB = tW; this.startFade = 0;
+      }
     } else {
       // The head we are fading *to* stays put while it fades in. Moving it mid-fade
       // is the same jump in a smaller dose: a knob still being dragged simply starts
@@ -1162,8 +1185,18 @@ class BroodCore {
       this.startFade = Math.min(1, this.startFade + 1 / (CORE_FS * 0.025));
     }
     const wB = 0.5 - 0.5 * Math.cos(Math.PI * this.startFade);   // 0 -> A, 1 -> B
-    const at = (base, p) => {
-      let q = p % W; if (q < 0) q += W;
+    // From here on the window is the one playing.
+    const W = this.winB;
+    let pos = this.loopPos % W; if (pos < 0) pos += W;
+    const posAtStart = pos;
+    // One head's read: the take at base + p wrapped into its window, faded at that window's
+    // seam (over 4 ms, or 20 ms with a raised cosine for SOFT), and by shape where shape is
+    // the smaller.
+    const at = (base, Wh, p, shape, soft) => {
+      let q = p % Wh; if (q < 0) q += Wh;
+      const Fh = Math.min((soft ? 0.02 : 0.004) * fs, Wh / 4);
+      let edge = Math.min(1, q / Fh, (Wh - q) / Fh);
+      if (soft) edge = 0.5 - 0.5 * Math.cos(Math.PI * edge);
       const abs = base + q;
       let i0 = Math.floor(abs);
       let f = abs - i0;
@@ -1174,15 +1207,16 @@ class BroodCore {
       // wrapped: the take is not circular, the window is.
       const im1 = i0 > 0 ? i0 - 1 : 0;
       const i2 = Math.min(i1 + 1, len - 1);
-      return hermite(buf[im1], buf[i0], buf[i1], buf[i2], f);
+      return hermite(buf[im1], buf[i0], buf[i1], buf[i2], f) * Math.min(shape, edge);
     };
-    const rd = (p) => {
-      if (this.startFade >= 1) return at(this.startB, p);
-      if (this.startFade <= 0) return at(this.startA, p);
-      return at(this.startA, p) * (1 - wB) + at(this.startB, p) * wB;
+    // The loop at p, through the crossfade: head A where the loop was, head B where it is now.
+    // main: p is the playhead, so head A takes it on past any wrap since the fade began.
+    const rd = (p, shape = 1, soft = false, main = false) => {
+      if (this.startFade >= 1) return at(this.startB, W, p, shape, soft);
+      const a = at(this.startA, this.winA, p + this.shiftA + (main ? this.carryA : 0), shape, soft);
+      if (this.startFade <= 0) return a;
+      return a * (1 - wB) + at(this.startB, W, p, shape, soft) * wB;
     };
-    const F = Math.min(0.004 * fs, W / 4);
-    const edgeAt = (p) => { let q = p % W; if (q < 0) q += W; return Math.min(1, q / F, (W - q) / F); };
     let y;
     // What the playhead shows: the reads STRETCH and ENV make, where they're heard;
     // otherwise the playhead itself. Drawn only, never heard.
@@ -1209,19 +1243,19 @@ class BroodCore {
         if (g.ph >= 1) { g.ph -= 1; g.start = pos + (this.rand() - 0.5) * 0.2 * G; g.dir = dir; g.off = g.ph * G; }
         const p = g.start + g.dir * g.off;
         const sw = Math.sin(Math.PI * g.ph);
-        y += rd(p) * sw * sw * edgeAt(p);
+        y += rd(p) * sw * sw;
         hpos[k] = p; hlev[k] = sw * sw;
       }
       // Blend to the unprocessed loop at full clockwise, per MKII behavior.
       const normal = clamp((m - 0.97) / 0.03, 0, 1);
-      y = y * (1 - normal) + rd(pos) * edgeAt(pos) * normal;
+      y = y * (1 - normal) + rd(pos, 1, false, true) * normal;
       // Full clockwise is the plain loop: the playhead again once that's the louder.
       if (normal < 0.5) { heard = true; hlev[0] *= 1 - normal; hlev[1] *= 1 - normal; }
       this.stretchSpeed += (stretchMap(m) - this.stretchSpeed) * 0.001;
       pos += this.stretchSpeed * lstep;
     } else if (mode === 1) {
       // TAPE: LENGTH = loop length, MODIFY = speed and direction (pitch follows)
-      y = rd(pos) * edgeAt(pos);
+      y = rd(pos, 1, false, true);
       this.tapeSpeed += (speedMap(m, 0.04) - this.tapeSpeed) * 0.00025;
       pos += this.tapeSpeed * lstep;
     } else {
@@ -1244,13 +1278,7 @@ class BroodCore {
       } else if (this.envGate && --this.envHold <= 0) this.envGate = false;
       this.envMix += ((this.envGate ? 1 : 0) - this.envMix) * (soft ? 0.0008 : 0.005);
       const softF = 0.02 * fs;
-      const mainF = Math.min(soft ? softF : 0.004 * fs, W / 4);
-      let mainEdge = edgeAt(pos);
-      if (soft) {
-        let q = pos % W; if (q < 0) q += W;
-        mainEdge = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, q / mainF, (W - q) / mainF));
-      }
-      const main = rd(pos) * mainEdge;
+      const main = rd(pos, 1, soft, true);
       let sl = 0;
       if (this.envMix > 1e-4) {
         // ENV slices to a length, so synced LENGTH is a division of the beat,
@@ -1294,25 +1322,25 @@ class BroodCore {
           if (sl0.ph >= this.softS) sl0.ph -= this.softS;
           const F3 = Math.min(softF, this.softS / 4);
           // Every slice read also fades over the take's seam (see brood.h).
-          sl = rd(sl0.start + sl0.ph) * Math.min(0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3)), edgeAt(sl0.start + sl0.ph)) * this.sliceIn;
+          sl = rd(sl0.start + sl0.ph, 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, sl0.ph / F3, (this.softS - sl0.ph) / F3))) * this.sliceIn;
           hpos[0] = sl0.start + sl0.ph; hlev[0] = 1; hpos[1] = this.softStart + this.softPh;
           hlev[1] = this.softOldFade > 0 ? 0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade) : 0;
           if (this.softOldFade > 0) {
             const F4 = Math.min(softF, this.softOldS / 4);
             const shape = 0.5 - 0.5 * Math.cos(Math.PI * clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1));
-            sl += rd(this.softStart + this.softPh) * Math.min(shape, edgeAt(this.softStart + this.softPh)) * (0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade));
+            sl += rd(this.softStart + this.softPh, shape) * (0.5 - 0.5 * Math.cos(Math.PI * this.softOldFade));
             this.softPh += lstep;
             this.softOldFade = Math.max(0, this.softOldFade - 1 / softF);
           }
         } else {
           if (!grid && sl0.ph >= this.sliceS) { sl0.ph -= this.sliceS; this.sliceS = S; }
           const F2 = Math.min(0.004 * fs, this.sliceS / 4);
-          sl = rd(sl0.start + sl0.ph) * Math.min(Math.max(0, Math.min(1, sl0.ph / F2, (this.sliceS - sl0.ph) / F2)), edgeAt(sl0.start + sl0.ph)) * this.sliceIn;
+          sl = rd(sl0.start + sl0.ph, Math.max(0, Math.min(1, sl0.ph / F2, (this.sliceS - sl0.ph) / F2))) * this.sliceIn;
           hpos[0] = sl0.start + sl0.ph; hlev[0] = 1; hpos[1] = this.softStart + this.softPh; hlev[1] = Math.max(0, this.softOldFade);
           if (this.softOldFade > 0) {
             const F4 = Math.min(0.004 * CORE_FS, this.softOldS / 4);
             const shape = clamp(Math.min(this.softPh / F4, (this.softOldS - this.softPh) / F4), 0, 1);
-            sl += rd(this.softStart + this.softPh) * Math.min(shape, edgeAt(this.softStart + this.softPh)) * this.softOldFade;
+            sl += rd(this.softStart + this.softPh, shape) * this.softOldFade;
             this.softPh += lstep;
             this.softOldFade = Math.max(0, this.softOldFade - 1 / (0.004 * CORE_FS));
           }
@@ -1391,6 +1419,7 @@ class BroodCore {
       }
       this.dubLast = q; this.dubPrev = rec;
     } else this.dubLast = -1;
+    if (this.startFade < 1) this.carryA += Math.floor(pos / W) * W;
     this.loopPos = ((pos % W) + W) % W;
     this.heardAt(heard, hpos, hlev, W);
     // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
