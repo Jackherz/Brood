@@ -624,5 +624,37 @@ int main() {
         presets.apply(preset, "New");
         CHECK(std::fabs(q.apvts.getRawParameterValue("balance")->load() - 0.25f) < 1e-4f, "a preset of today keeps its WET/LOOP");
     }
+    {   // Sets and presets from before version 4: SWEEP becomes SAW, SWEEP + BOUNCE becomes TRI at
+        // half the rate, and the old shapes keep their names in the row of six
+        auto param = [](juce::ValueTree& state, const char* id, double v) {
+            for (auto child : state) if (child.hasType("PARAM") && child["id"].toString() == id) { child.setProperty("value", v, nullptr); return; }
+            juce::ValueTree c("PARAM"); c.setProperty("id", id, nullptr); c.setProperty("value", v, nullptr); state.appendChild(c, nullptr);
+        };
+        BroodProcessor src; src.setPlayConfigDetails(2, 2, rate, size); src.prepareToPlay(rate, size);
+        auto state = src.apvts.copyState();
+        state.setProperty("stateVersion", 3, nullptr);
+        param(state, "mod1Wave", 0.5); param(state, "mod1Sweep", 1);                                 // old SIN, swept
+        param(state, "mod2Wave", 0.75); param(state, "mod2Sweep", 1); param(state, "mod2Bounce", 1);   // old RND, swept and bounced
+        param(state, "mod2Rate", 0.45);
+        juce::MemoryBlock block;
+        if (auto xml = state.createXml()) juce::AudioProcessor::copyXmlToBinary(*xml, block);
+        BroodProcessor dst; dst.setPlayConfigDetails(2, 2, rate, size); dst.prepareToPlay(rate, size);
+        dst.setStateInformation(block.getData(), static_cast<int>(block.getSize()));
+        auto shape = [](BroodProcessor& p, const char* id) { return juce::String(brood::kRampWaves[brood::rampWaveIndex(p.apvts.getRawParameterValue(id)->load())]); };
+        CHECK(shape(dst, "mod1Wave") == "SAW", "an old set with SWEEP loads as SAW");
+        CHECK(shape(dst, "mod2Wave") == "TRI", "SWEEP with BOUNCE loads as TRI");
+        CHECK(std::fabs(brood::rampHertz(dst.apvts.getRawParameterValue("mod2Rate")->load()) * 2 - brood::rampHertz(0.45)) < 1e-4,
+              "at half the rate");
+        CHECK(dst.apvts.getParameter("mod1Sweep") == nullptr && dst.apvts.getParameter("mod1Bounce") == nullptr, "and SWEEP and BOUNCE are gone");
+        // A user preset from before version 4 (values 0..1): an old SIN stays SIN.
+        BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
+        BroodPresets presets(q);
+        juce::XmlElement preset("BroodPreset");
+        preset.setAttribute("version", 3);
+        auto* values = preset.createNewChildElement("PARAMS");
+        values->setAttribute("mod1Wave", 0.5); values->setAttribute("mod2Wave", 1.0);
+        presets.apply(preset, "Old");
+        CHECK(shape(q, "mod1Wave") == "SIN" && shape(q, "mod2Wave") == "SMTH", "an old preset keeps SIN and SMTH");
+    }
     return failures ? 1 : 0;
 }

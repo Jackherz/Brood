@@ -8,8 +8,8 @@ seconds 12
 0 param memory 0.3
 0 param mod1Rate 1
 0 param mod2Rate 1
-0 param mod1Wave 0.25
-0 param mod2Wave 0.75
+0 param mod1Wave 0.2
+0 param mod2Wave 0.8
 0 param mod1_clock 1
 0 param mod2_length 1
 0 param mod1_time 1

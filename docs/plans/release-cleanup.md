@@ -315,9 +315,19 @@ question 8.6 for the input source).
    its meters, SOURCE and LOAD FILE are gone (the standalone plays the demo phrase); LOOP and
    MODULATION carry colour squares instead of numbers; MODULATION shows its chips and ROUTES
    until a chip is clicked.
-4. SAW in, SWEEP and BOUNCE out, state version 4, both cores, parity, tests.
+4. SAW in, SWEEP and BOUNCE out, state version 4, both cores, parity, tests. **Done 16 November
+   (not committed):** six shapes, SWEEP and BOUNCE and CC 66/67 gone, state version 4 converts
+   sets, presets and the browser's saved state (`migrateShape` in both cores, mirrored in
+   `src/main.jsx`); ROUTES calls BALANCE by its name.
 5. Fonts, from the trial's result, Brood only: B612 Mono, Overpass, Chivo Mono, with help at
-   four lines and the wider WEAR cell (section 2).
+   four lines and the wider WEAR cell (section 2). **Done 16 November (not committed):** the kit
+   gained an opt-in `kit::faces()` (screen, name and value faces, value shrink, readout lines;
+   Silt sets nothing and looks the same) and `kit::value()`; Brood embeds the three faces,
+   fetched and checked by `scripts/fetch-fonts.sh`. The wordmark changed on the owner's call:
+   "BROOD" (no full stop) in Squarepusher's thin cut, the D's right corners cut at 45 degrees,
+   drawn from outlines in code (the font is freeware with no embedding terms, so it never
+   ships). Still open: the WEAR help needs six lines in B612 Mono and should be shortened on
+   the wording page.
 6. Browser brought to match.
 
 Each step: `ctest`, `npm test`, `make check`, parity, `make install`, and a snapshot for the

@@ -72,9 +72,9 @@ inline int divMap(double knob) {
 // What a modulation source can move, in the order of Core::effective().
 constexpr int kModTargets = 7;
 inline const char* const kModTargetIds[kModTargets] = {"time", "mix", "length", "modWet", "clock", "modLoop", "balance"};
-inline const char* const kModTargetNames[kModTargets] = {"TIME", "MIX", "LENGTH", "MODIFY / WET", "CLOCK", "MODIFY / LOOP", "WET / LOOP"};
-constexpr int kRampWaveCount = 5;
-inline const char* const kRampWaves[kRampWaveCount] = {"TRI", "SQR", "SIN", "RND", "SMTH"};
+inline const char* const kModTargetNames[kModTargets] = {"TIME", "MIX", "LENGTH", "MODIFY / WET", "CLOCK", "MODIFY / LOOP", "BALANCE"};
+constexpr int kRampWaveCount = 6;
+inline const char* const kRampWaves[kRampWaveCount] = {"TRI", "SQR", "SIN", "SAW", "RND", "SMTH"};
 // Index ↔ normalised value. The parameters are plain 0..1 floats with `count`
 // stops, and this is the only place that conversion lives: the engine, the
 // parameter readouts and the editor's stepper cells all go through it. Treating
@@ -133,6 +133,23 @@ inline int rampDivIndex(double knob) { return rampIndexOfValue(knob, kRampDivCou
 inline const char* rampDivLabel(double knob) { return kRampDivLabels[rampDivIndex(knob)]; }
 inline double rampCycleSeconds(double bpm, double knob) {
     return kRampDivBeats[rampDivIndex(knob)] * 60.0 / clampd(bpm, 20, 300);
+}
+
+// Sets saved before state version 4 had five shapes and the SWEEP and BOUNCE switches. SWEEP
+// ignored the shape and climbed, which is SAW now; with BOUNCE it went up and down, which is
+// TRI at half the rate (synced: the next longer span, as far as eight bars). BOUNCE on any
+// other shape is dropped. The shape value is a place along the row, so every saved shape
+// moves to its place in the row of six. Mirrors migrateShape in src/brood-worklet.js.
+struct ShapeMigration { double wave, rate; };
+inline ShapeMigration migrateShape(double wave, bool sweep, bool bounce, bool sync, double rate) {
+    static constexpr int oldToNew[5] = {0, 1, 2, 4, 5};   // TRI SQR SIN RND SMTH
+    int shape = oldToNew[rampIndexOfValue(wave, 5)];
+    if (sweep && bounce) {
+        shape = 0;
+        rate = sync ? rampValueOfIndex(std::max(0, rampDivIndex(rate) - 1), kRampDivCount)
+                    : std::max(0.0, clampd(rate, 0, 1) - std::log(2.0) / std::log(8 / 0.05));
+    } else if (sweep) shape = 3;
+    return {rampValueOfIndex(shape, kRampWaveCount), rate};
 }
 
 // Tape follows octave steps, reverse on the left / forward on the right.
@@ -640,7 +657,7 @@ struct Params {
     // The two modulation sources. Each can move any of the seven controls below by its
     // own depth (-1..1, 0 is no route), and runs at its own rate and shape.
     struct ModSource {
-        bool on = true, uni = false, bounce = false, sweep = false, sync = false, hold = false;
+        bool on = true, uni = false, sync = false, hold = false;
         double rate = 0.45, wave = 0;
         double depth[kModTargets] = {0, 0, 0, 0, 0, 0, 0};
     };
@@ -1102,7 +1119,7 @@ private:
     struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width, modRate[2]; };
     // What the DSP reads: the smoothed knobs plus whatever a ramp is moving.
     struct Eff { double time, mix, length, modWet, clock, modLoop, balance; };
-    struct Ramp { double ph = 0, dir = 1, prev = 0.5, next = 0.5; uint32_t rng = 0; };
+    struct Ramp { double ph = 0, prev = 0.5, next = 0.5; uint32_t rng = 0; };
     struct FsWet { bool active = false; int64_t t = 0; bool held = false; };
     struct FsLoop { bool active = false; int64_t t = 0; bool held = false; int histIdx = 0; uint32_t histCycle = 0; bool playing = false; };
     enum class RecPhase { Idle, Armed, Recording };
@@ -1206,7 +1223,7 @@ private:
 
     // Two generators, each with its own phase and its own seeded stream (never the
     // shared rng: STRETCH grains and CLASSIC hiss draw from that one).
-    Ramp ramp[2] = {{0, 1, 0.5, 0.5, 0x9e3779b9u}, {0.5, 1, 0.5, 0.5, 0x5bd1e995u}};
+    Ramp ramp[2] = {{0, 0.5, 0.5, 0x9e3779b9u}, {0.5, 0.5, 0.5, 0x5bd1e995u}};
     double rampRaw[2] = {0, 0};     // per host sample
     double rampVal[2] = {0, 0};     // smoothed to audio rate
     double modGainS[2] = {1, 1};    // ON, smoothed
@@ -1222,13 +1239,13 @@ private:
     }
 
     // Value of the chosen shape at the current phase, 0..1.
-    static double rampShape(const Ramp& g, int wave, bool sweep) {
+    static double rampShape(const Ramp& g, int wave) {
         const double ph = g.ph;
-        if (sweep) return ph;                                     // SWEEP: it only ever climbs
         if (wave == 1) return ph < 0.5 ? 1.0 : 0.0;               // square
         if (wave == 2) return 0.5 + 0.5 * std::sin(kTau * ph);
-        if (wave == 3) return g.next;                             // sample and hold
-        if (wave == 4) {                                          // smooth random
+        if (wave == 3) return ph;                                 // sawtooth: climbs, then snaps back
+        if (wave == 4) return g.next;                             // sample and hold
+        if (wave == 5) {                                          // smooth random
             const double t = ph * ph * (3 - 2 * ph);
             return g.prev + (g.next - g.prev) * t;
         }
@@ -1236,8 +1253,7 @@ private:
     }
 
     // Advance both sources. Once per host sample, not per core tick: a source is a time
-    // function, so turning CLOCK down must not slow it down. BOUNCE ping-pongs the phase
-    // instead of letting it reset. HOLD stops the phase, so the knobs stay pushed
+    // function, so turning CLOCK down must not slow it down. HOLD stops the phase, so the knobs stay pushed
     // wherever it had got to and it picks up from there. A source with no routes still
     // runs, so its chip shows what it would do.
     void rampTick() {
@@ -1248,16 +1264,10 @@ private:
             if (!m.hold) {
                 // Free-running by default; synced, one cycle is a musical span instead.
                 const double hz = m.sync ? 1.0 / rampCycleSeconds(p.bpm, s.modRate[k]) : rampHertz(s.modRate[k]);
-                g.ph += hz / fs * g.dir;
-                if (g.ph >= 1) {
-                    if (m.bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
-                    g.prev = g.next; g.next = rampRand(g);
-                } else if (g.ph <= 0) {
-                    if (m.bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
-                    g.prev = g.next; g.next = rampRand(g);
-                }
+                g.ph += hz / fs;
+                if (g.ph >= 1) { g.ph -= 1; g.prev = g.next; g.next = rampRand(g); }
             }
-            rampRaw[k] = rampShape(g, wave, m.sweep);
+            rampRaw[k] = rampShape(g, wave);
         }
     }
 

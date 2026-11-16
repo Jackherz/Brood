@@ -36,8 +36,8 @@ const memoryText = (v) => v <= 0.001 ? 'PEDAL' : `${expMap(v, 1, 30).toFixed(1)}
 const MOD_TARGETS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance'];
 const MOD_TARGET_NAMES = { time: 'TIME', mix: 'MIX', length: 'LENGTH', modWet: 'MODIFY / WET', clock: 'CLOCK', modLoop: 'MODIFY / LOOP', balance: 'WET / LOOP' };
 const MOD_COLOURS = ['#b4452a', '#2f6f8f'];
-const MOD_FLAGS = ['On', 'Uni', 'Bounce', 'Sweep', 'Sync', 'Hold'];
-const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
+const MOD_FLAGS = ['On', 'Uni', 'Sync', 'Hold'];
+const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH'];
 const rampIndex = (v, names) => Math.round(clamp(v) * (names.length - 1));
 const rampValue = (index, names) => names.length < 2 ? 0 : index / (names.length - 1);
 const rampHertz = (v) => expMap(clamp(v), 0.05, 8);
@@ -54,7 +54,7 @@ const BASE = {
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
   envSoft: 0, loopDb: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
-    [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Bounce`, 0], [`mod${n}Sweep`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
+    [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
     ...MOD_TARGETS.map((t) => [`mod${n}_${t}`, 0]),
   ])),
 };
@@ -642,7 +642,7 @@ function ModPanel({ params, onChange, help, source, setSource, state }) {
     </div>
     <div className="ramp-grid">
       <Stepper label="SHAPE" names={RAMP_WAVES} value={params[`mod${n}Wave`]} onChange={(v) => onChange(`mod${n}Wave`, v)} hint="click to step the shape"
-        help={help('MODULATION SHAPE', 'click to step the shape: triangle, square, sine, random, smooth random.')}/>
+        help={help('MODULATION SHAPE', 'click to step the shape: triangle, square, sine, sawtooth, random, smooth random.')}/>
       <label className="rate-row" {...help('MODULATION RATE', 'how slowly this source turns. with SYNC on, a musical span instead of a free speed.')}><span>{synced ? 'SPAN' : 'RATE'}</span>
         <input aria-label="Modulation rate" type="range" min="0" max="1" step="0.005" value={params[`mod${n}Rate`]} onChange={(event) => onChange(`mod${n}Rate`, Number(event.target.value))}/>
         <b>{synced ? `${rampDivLabel(params[`mod${n}Rate`])} · ${timeText(rampCycleSeconds(params.bpm, params[`mod${n}Rate`]))}` : rampHint(params[`mod${n}Rate`])}</b>
@@ -650,8 +650,6 @@ function ModPanel({ params, onChange, help, source, setSource, state }) {
     </div>
     <div className="dips ramp-dips">
       {[['Uni', 'UNI', 'the swing sits above the knob instead of either side of it.'],
-        ['Bounce', 'BOUNCE', 'the swing reflects instead of snapping back, so nothing jumps.'],
-        ['Sweep', 'SWEEP', 'the shape is ignored and the knob just climbs, again and again.'],
         ['Sync', 'SYNC', 'the rate becomes a division of the beat: eight bars down to a sixteenth.'],
         ['Hold', 'HOLD', 'this source stops where it is and its knobs stay pushed there.']].map(([f, label, hint]) => <Dip key={f} label={label} checked={params[`mod${n}${f}`]} onClick={() => onChange(`mod${n}${f}`, params[`mod${n}${f}`] ? 0 : 1)} help={help(label, hint)}/>)}
     </div>
@@ -752,22 +750,46 @@ function migrateRouting(p) {
   return out;
 }
 
+// Settings and presets from before version 4 had SWEEP and BOUNCE, and five shapes. SWEEP
+// is the SAW shape now; SWEEP with BOUNCE is TRI at half the rate; BOUNCE alone goes; every
+// shape moves to its place in a row of six. Mirrors migrateShape in src/brood-worklet.js.
+function migrateShapes(p) {
+  if (!p || typeof p !== 'object') return p;
+  const out = { ...p };
+  for (const n of [1, 2]) {
+    const m = `mod${n}`, wave = Number.isFinite(p[`${m}Wave`]) ? p[`${m}Wave`] : 0;
+    const rate = Number.isFinite(p[`${m}Rate`]) ? p[`${m}Rate`] : 0.45;
+    if (!p[`${m}Sweep`]) out[`${m}Wave`] = [0, 1, 2, 4, 5][Math.round(clamp(wave) * 4)] / 5;
+    else if (!p[`${m}Bounce`]) out[`${m}Wave`] = 3 / 5;
+    else {
+      out[`${m}Wave`] = 0;
+      out[`${m}Rate`] = p[`${m}Sync`] ? Math.max(0, rampDivIndex(rate) - 1) / (RAMP_DIV_BEATS.length - 1)
+        : clamp(rate - Math.log(2) / Math.log(8 / 0.05));
+    }
+    delete out[`${m}Sweep`];
+    delete out[`${m}Bounce`];
+  }
+  return out;
+}
+
 function App() {
   const [params, setParams] = useState(() => {
-    const now = safeRead('brood-params-v3');
+    const now = safeRead('brood-params-v4');
     if (now) return sanitize(now);
+    const v3 = safeRead('brood-params-v3');
+    if (v3) return sanitize(migrateShapes(v3));
     const v2 = safeRead('brood-params-v2');
-    return sanitize(migrateRouting(v2 ?? migrateStart(safeRead('brood-params-v1'))));
+    return sanitize(migrateShapes(migrateRouting(v2 ?? migrateStart(safeRead('brood-params-v1')))));
   });
   // User presets, named and filed. Anything saved in the old slots becomes a preset.
   const [userPatches, setUserPatches] = useState(() => {
-    const saved = safeRead('brood-user-presets-v3') ?? safeRead('brood-user-presets-v2');
-    const upgrade = (p) => (p.v >= 3 ? p.params : migrateRouting(p.v >= 2 ? p.params : migrateStart(p.params)));
-    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 3, params: sanitize(upgrade(p)) }));
+    const saved = safeRead('brood-user-presets-v4') ?? safeRead('brood-user-presets-v3') ?? safeRead('brood-user-presets-v2');
+    const upgrade = (p) => (p.v >= 4 ? p.params : migrateShapes(p.v >= 3 ? p.params : migrateRouting(p.v >= 2 ? p.params : migrateStart(p.params))));
+    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 4, params: sanitize(upgrade(p)) }));
     const slots = safeRead('brood-user-patches-v1');
     const legacy = safeRead('brood-user-patch-v1');
     const old = Array.isArray(slots) ? slots : legacy ? [legacy] : [];
-    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 3, params: sanitize(migrateRouting(migrateStart(p))) } : null)).filter(Boolean);
+    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 4, params: sanitize(migrateShapes(migrateRouting(migrateStart(p)))) } : null)).filter(Boolean);
   });
   const [favourites, setFavourites] = useState(() => { const f = safeRead('brood-favourites-v1'); return Array.isArray(f) ? f : []; });
   const [browsing, setBrowsing] = useState(null);   // the sound to go back to while the browser is open
@@ -798,7 +820,7 @@ function App() {
       if (message.type === 'fit') setParams((previous) => ({ ...previous, start: 1, loopEnd: 1, ...(message.length ? { length: 1 } : {}) }));
     }, (message) => setNotice(message));
   }
-  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v3', params); }, [params]);
+  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v4', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
   const update = React.useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
   const help = React.useCallback((label, text) => ({
@@ -834,7 +856,7 @@ function App() {
   const stepPatch = (d) => loadPatch(preset + d);
   const openBrowser = () => setBrowsing({ params, preset });
   // Every preset kept here is in today's form (v 2: START counts from the oldest audio in every mode).
-  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 3 })); setUserPatches(marked); safeWrite('brood-user-presets-v3', marked); };
+  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 4 })); setUserPatches(marked); safeWrite('brood-user-presets-v4', marked); };
   const savePatch = (category) => {
     const name = (window.prompt('A name for this sound:', currentPatch.factory ? '' : currentPatch.name) || '').trim().toUpperCase();
     if (!name) return;
@@ -1027,7 +1049,7 @@ function App() {
           <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
           <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
           <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
-          <div><dt>MODULATION <span>/ two sources</span></dt><dd>Two sources, each with its own rate and shape. Drag one onto any knob or WET / LOOP to route it, and it moves that control around where the knob sits. Drag up or down around a knob, or Alt-drag it, to set depth; a negative depth inverts it. Double-click a ring to remove that source, or press Delete on a clicked knob to remove both. <b>UNI</b> keeps the swing above the knob, <b>BOUNCE</b> reflects it so it never snaps back, <b>SWEEP</b> drops the shape and just climbs, <b>SYNC</b> makes a turn a division of the beat, and <b>HOLD</b> stops it where it is.</dd></div>
+          <div><dt>MODULATION <span>/ two sources</span></dt><dd>Two sources, each with its own rate and shape. Drag one onto any knob or WET / LOOP to route it, and it moves that control around where the knob sits. Drag up or down around a knob, or Alt-drag it, to set depth; a negative depth inverts it. Double-click a ring to remove that source, or press Delete on a clicked knob to remove both. Six shapes: triangle, square, sine, sawtooth, random and smooth random. <b>UNI</b> keeps the swing above the knob, <b>SYNC</b> makes a turn a division of the beat, and <b>HOLD</b> stops it where it is.</dd></div>
           <div><dt>SOFT <span>/ under LENGTH, in ENV</span></dt><dd>The slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. A rounder, less percussive stutter. Off is the sharp cut the pedal makes.</dd></div>
           <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
         </dl>

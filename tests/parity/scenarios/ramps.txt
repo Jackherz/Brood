@@ -1,4 +1,4 @@
-# RAMPS: both generators, every shape, sweep and bounce, polarity, and a
+# RAMPS: both generators, every shape (SAW last, then back to SMTH), polarity, and a
 # destination change while the loop is running.
 rate 48000
 seconds 16
@@ -18,22 +18,18 @@ seconds 16
 40 param mod2Rate 0.55
 80 fs loop down
 100 fs loop up
-120 param mod1Wave 0.25
-120 param mod2Wave 0.25
-160 param mod1Wave 0.5
-160 param mod2Wave 0.5
-200 param mod1Wave 0.75
-200 param mod2Wave 0.75
+120 param mod1Wave 0.2
+120 param mod2Wave 0.2
+160 param mod1Wave 0.4
+160 param mod2Wave 0.4
+200 param mod1Wave 0.8
+200 param mod2Wave 0.8
 240 param mod1Wave 1
 240 param mod2Wave 1
-280 param mod1Bounce 1
-280 param mod2Bounce 1
-320 param mod1Sweep 1
-320 param mod2Sweep 1
-340 param mod1Bounce 0
-340 param mod2Bounce 0
-380 param mod1Sweep 0
-380 param mod2Sweep 0
+280 param mod1Wave 0.6
+280 param mod2Wave 0.6
+380 param mod1Wave 1
+380 param mod2Wave 1
 400 param mod1Uni 1
 400 param mod2Uni 1
 440 param mod1_time 0
@@ -44,8 +40,8 @@ seconds 16
 520 param mod1_clock 0.5
 560 param mod1Rate 0.9
 560 param mod2Rate 0.9
-600 param mod1Wave 0.5
-600 param mod2Wave 0.5
+600 param mod1Wave 0.4
+600 param mod2Wave 0.4
 640 param mod1_clock 0
 680 param mod2_length 0
 700 param mod1Uni 0
@@ -54,7 +50,7 @@ seconds 16
 720 param mod2_modLoop 0.5
 760 param mod1Hold 1
 760 param mod2Hold 1
-820 param mod1Wave 0.5
-820 param mod2Wave 0.5
+820 param mod1Wave 0.4
+820 param mod2Wave 0.4
 880 param mod1Hold 0
 880 param mod2Hold 0

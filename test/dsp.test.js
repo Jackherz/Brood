@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS, LIVE_COL_TICKS, MAX_LOOP_SAMPLES } = require('../src/brood-worklet.js');
+const { BroodCore, migrateTapeStart, migrateShape, speedMap, slipSpeedMap, stretchMap, clockHz, syncLabel, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CORE_FS, LIVE_COL_TICKS, MAX_LOOP_SAMPLES } = require('../src/brood-worklet.js');
 
 const FS = 48000;
 const BLOCK = 128;
@@ -851,7 +851,7 @@ test('TAPE: deep, fast LENGTH modulation keeps the playhead moving through the w
   for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.5, mix: 1, balance: 0, routing: 2, modLoop: 0.66 })) core.setParam(k, v);
   render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
-  for (const [k, v] of Object.entries({ mod1On: 1, mod1Rate: 1, mod1Wave: 0.3, mod1_length: 1 })) core.setParam(k, v);   // square, 8 Hz, full depth
+  for (const [k, v] of Object.entries({ mod1On: 1, mod1Rate: 1, mod1Wave: 0.2, mod1_length: 1 })) core.setParam(k, v);   // square, 8 Hz, full depth
   let back = 0, last = -1;
   const at = {};
   for (let b = 0; b < blk(3); b++) at[b] = (c) => {
@@ -1027,7 +1027,7 @@ const wrapsIn = (seconds, speed) => {
 
 test('the modulation targets and shapes are the documented lists', () => {
   assert.deepStrictEqual(MOD_TARGETS, ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance']);
-  assert.deepStrictEqual(RAMP_WAVES, ['TRI', 'SQR', 'SIN', 'RND', 'SMTH']);
+  assert.deepStrictEqual(RAMP_WAVES, ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH']);
   RAMP_WAVES.forEach((_, i) => assert.strictEqual(rampWaveIndex(i / (RAMP_WAVES.length - 1)), i));
   assert.strictEqual(rampWaveIndex(-4), 0);
   assert.strictEqual(rampWaveIndex(4), RAMP_WAVES.length - 1);
@@ -1035,7 +1035,7 @@ test('the modulation targets and shapes are the documented lists', () => {
 
 test('one source moves several controls by its own depth, and a negative depth inverts', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ time: 0.5, mix: 0.5, length: 0.5, mod1_time: 0.4, mod1_mix: -0.4, mod1_length: 0.1, mod1Wave: 0.5 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ time: 0.5, mix: 0.5, length: 0.5, mod1_time: 0.4, mod1_mix: -0.4, mod1_length: 0.1, mod1Wave: 0.4 })) core.setParam(k, v);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   for (let b = 0; b < Math.ceil((1 * FS) / BLOCK); b++) core.process(inp, L, R);   // the knobs settle
   const t = [], m = [], l = [];
@@ -1072,8 +1072,8 @@ test('a ramp moves its control and stops where the knob says', () => {
 });
 
 test('each waveform has its own shape', () => {
-  const shapes = RAMP_WAVES.map((_, w) => rampTrace({ mod1_time: 0.5, mod1Wave: w / 4, time: 0.5 }, 6));
-  const [tri, sqr, sin, rnd, smth] = shapes;
+  const shapes = RAMP_WAVES.map((_, w) => rampTrace({ mod1_time: 0.5, mod1Wave: w / (RAMP_WAVES.length - 1), time: 0.5 }, 6));
+  const [tri, sqr, sin, saw, rnd, smth] = shapes;
   const ends = (a) => a.filter((v) => v < 0.15 || v > 0.85).length / a.length;
   const middle = (a) => a.filter((v) => Math.abs(v - 0.5) < 0.15).length / a.length;
   assert.ok(ends(sqr) > 0.9, 'square is two levels');
@@ -1087,7 +1087,7 @@ test('each waveform has its own shape', () => {
   const [rlo, rhi] = rminmax(rnd);
   assert.ok(rhi - rlo > 0.1, 'random covers a range');
   const distinct = new Set(shapes.map((a) => a.map((v) => v.toFixed(2)).join(','))).size;
-  assert.strictEqual(distinct, 5, 'all five shapes are different');
+  assert.strictEqual(distinct, 6, 'all six shapes are different');
 });
 
 test('RAMP SPEED is a rate in hertz, and the CLOCK does not change it', () => {
@@ -1122,15 +1122,27 @@ function rawTrace(patch, seconds) {
   return out;
 }
 
-test('SWEEP is a one-way climb and BOUNCE takes the snap out of it', () => {
-  const saw = rawTrace({ mod1_time: 0.5, mod1Sweep: 1, time: 0.5 }, 8);
-  const bouncy = rawTrace({ mod1_time: 0.5, mod1Sweep: 1, mod1Bounce: 1, time: 0.5 }, 8);
-  const resets = (a) => a.filter((v, i) => i > 0 && v < a[i - 1] - 0.5).length;
-  const rising = (a) => a.filter((v, i) => i > 0 && v > a[i - 1]).length / (a.length - 1);
-  assert.ok(resets(saw) >= 2, `the sweep climbs and starts again (${resets(saw)} resets)`);
-  assert.ok(rising(saw) > 0.9, `it only ever climbs (${(rising(saw) * 100).toFixed(0)}% rising steps)`);
-  assert.strictEqual(resets(bouncy), 0, 'BOUNCE removes the snap-back entirely');
-  assert.ok(rising(bouncy) > 0.3 && rising(bouncy) < 0.7, 'and turns it into a tide');
+test('SAW is a one-way climb that snaps back', () => {
+  const saw = rawTrace({ mod1_time: 0.5, mod1Wave: 3 / (RAMP_WAVES.length - 1), time: 0.5 }, 8);
+  const resets = saw.filter((v, i) => i > 0 && v < saw[i - 1] - 0.5).length;
+  const rising = saw.filter((v, i) => i > 0 && v > saw[i - 1]).length / (saw.length - 1);
+  assert.ok(resets >= 2, `the saw climbs and starts again (${resets} resets)`);
+  assert.ok(rising > 0.9, `it only ever climbs (${(rising * 100).toFixed(0)}% rising steps)`);
+});
+
+test('state version 4: SWEEP becomes SAW, SWEEP + BOUNCE becomes TRI at half the rate, old shapes keep theirs', () => {
+  ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'].forEach((name, i) => {
+    const to = migrateShape(i / 4, false, i === 1, false, 0.45);
+    assert.strictEqual(RAMP_WAVES[rampWaveIndex(to.wave)], name, `an old ${name} stays ${name}`);
+    assert.strictEqual(to.rate, 0.45);
+  });
+  assert.strictEqual(RAMP_WAVES[rampWaveIndex(migrateShape(0.5, true, false, false, 0.45).wave)], 'SAW');
+  const tide = migrateShape(0.25, true, true, false, 0.45);
+  assert.strictEqual(RAMP_WAVES[rampWaveIndex(tide.wave)], 'TRI');
+  assert.ok(Math.abs(rampHz(tide.rate) * 2 - rampHz(0.45)) < 1e-9, 'at half the rate');
+  const span = 5 / (RAMP_DIV_BEATS.length - 1);
+  const synced = migrateShape(0, true, true, true, span);
+  assert.ok(Math.abs(rampCycleSeconds(120, synced.rate) - 2 * rampCycleSeconds(120, span)) < 1e-9, 'synced: the next longer span');
 });
 
 test('POLARITY: unipolar only ever adds to the knob', () => {
@@ -1509,7 +1521,7 @@ test('GAIN sets the loop level in dB and leaves the dry side alone', () => {
 
 test('overdub leaves no seams in the take while LENGTH is modulated', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ loopMode: 1, length: 0.7, modLoop: 0.66, mod1_length: 0.4, mod1Rate: 0.55, mod1Wave: 0.5 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ loopMode: 1, length: 0.7, modLoop: 0.66, mod1_length: 0.4, mod1Rate: 0.55, mod1Wave: 0.4 })) core.setParam(k, v);
   const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
   let t = 0;
   const run = (seconds) => {
@@ -1552,7 +1564,7 @@ test('HI-Q stops the images and keeps more of the top, and off changes nothing',
 test('STRETCH does not click as MODIFY passes through the middle', () => {
   const worstCorner = (depth) => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ loopMode: 2, mix: 1, balance: 0, modLoop: 0.5, mod1_modLoop: depth, mod1Rate: 0.6, mod1Wave: 0.5, length: 0.5 })) core.setParam(k, v);
+    for (const [k, v] of Object.entries({ loopMode: 2, mix: 1, balance: 0, modLoop: 0.5, mod1_modLoop: depth, mod1Rate: 0.6, mod1Wave: 0.4, length: 0.5 })) core.setParam(k, v);
     const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
     let t = 0, worst = 0, a = 0, b = 0, seen = 0;
     const run = (seconds, level, measure) => {
@@ -1574,7 +1586,7 @@ test('STRETCH does not click as MODIFY passes through the middle', () => {
 
 test('SLIP does not click when MODIFY swings its speed', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ wetMode: 2, mix: 1, modWet: 0.5, mod1_modWet: 0.5, mod1Rate: 0.6, mod1Wave: 0.5 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ wetMode: 2, mix: 1, modWet: 0.5, mod1_modWet: 0.5, mod1Rate: 0.6, mod1Wave: 0.4 })) core.setParam(k, v);
   core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
   const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
   let t = 0, worst = 0, a = 0, b = 0, seen = 0;

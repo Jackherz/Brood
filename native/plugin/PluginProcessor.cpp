@@ -106,7 +106,7 @@ BroodProcessor::BroodProcessor()
           layout.add(std::make_unique<APB>(juce::ParameterID("recAtTap", 1), "At Tap", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("freeze", 1), "Freeze", false));
           // The ramp engine: two generators, one per channel.
-          // The two modulation sources: a rate, a shape and five switches each, and a
+          // The two modulation sources: a rate, a shape and four switches each, and a
           // depth for each control it can move (0 is no route).
           for (int n = 1; n <= 2; ++n) {
               // Short enough for a controller's display: the names a host shows are these.
@@ -116,8 +116,6 @@ BroodProcessor::BroodProcessor()
               layout.add(loopParam(m + "Rate", name + "Rate", 0.45f));
               layout.add(loopParam(m + "Wave", name + "Shape", 0.f));
               layout.add(std::make_unique<APB>(juce::ParameterID(m + "Uni", 1), name + "Uni", false));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Bounce", 1), name + "Bounce", false));
-              layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sweep", 1), name + "Sweep", false));
               layout.add(std::make_unique<APB>(juce::ParameterID(m + "Sync", 1), name + "Sync", false));
               layout.add(std::make_unique<APB>(juce::ParameterID(m + "Hold", 1), name + "Hold", false));
               for (int t = 0; t < brood::kModTargets; ++t)
@@ -419,7 +417,7 @@ void BroodProcessor::pullParams() {
         auto& m = p.mods[k];
         const auto value = [this, &n](const char* f) { return apvts.getRawParameterValue(n + f)->load(); };
         m.on = value("On") > 0.5f; m.rate = value("Rate"); m.wave = value("Wave");
-        m.uni = value("Uni") > 0.5f; m.bounce = value("Bounce") > 0.5f; m.sweep = value("Sweep") > 0.5f;
+        m.uni = value("Uni") > 0.5f;
         m.sync = value("Sync") > 0.5f; m.hold = value("Hold") > 0.5f;
         for (int t = 0; t < brood::kModTargets; ++t) m.depth[t] = apvts.getRawParameterValue(n + "_" + brood::kModTargetIds[t])->load();
     }
@@ -574,8 +572,6 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
             else if (cc == 20) { for (const char* m : {"mod1Rate", "mod2Rate"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value / 127.f); }
-            else if (cc == 66) { for (const char* m : {"mod1Bounce", "mod2Bounce"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
-            else if (cc == 67) { for (const char* m : {"mod1Sweep", "mod2Sweep"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
             else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
             else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
@@ -874,6 +870,21 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
                 [&](const char* id) { if (auto c = param(id); c.isValid()) state.removeChild(c, nullptr); },
                 true);
         }
+        // Sets from before version 4 had five shapes, SWEEP and BOUNCE.
+        if (static_cast<int>(state.getProperty("stateVersion", 1)) < 4) {
+            auto param = [&state](const char* id) {
+                for (auto child : state) if (child.hasType("PARAM") && child["id"].toString() == id) return child;
+                return juce::ValueTree();
+            };
+            migrateShapes(
+                [&](const char* id) { const auto c = param(id); return c.isValid() ? c["value"] : juce::var(); },
+                [&](const char* id, double v) {
+                    auto c = param(id);
+                    if (!c.isValid()) { c = juce::ValueTree("PARAM"); c.setProperty("id", juce::String(id), nullptr); state.appendChild(c, nullptr); }
+                    c.setProperty("value", v, nullptr);
+                },
+                [&](const char* id) { if (auto c = param(id); c.isValid()) state.removeChild(c, nullptr); });
+        }
         // The takes are ours, not parameters: keep them out of the parameter tree
         // (they were decoded above into the pending slots).
         for (auto takeTree = state.getChildWithName("TAKES"); takeTree.isValid(); takeTree = state.getChildWithName("TAKES"))
@@ -913,6 +924,24 @@ void BroodProcessor::migrateRouting(const std::function<juce::var(const char*)>&
     // A modulation of WET/LOOP pushed it the other way: turn it round too (0..1 when not raw).
     for (const char* id : {"mod1_balance", "mod2_balance"})
         if (const juce::var d = get(id); !d.isVoid()) set(id, raw ? -static_cast<double>(d) : 1.0 - static_cast<double>(d));
+}
+
+void BroodProcessor::migrateShapes(const std::function<juce::var(const char*)>& get,
+                                   const std::function<void(const char*, double)>& set,
+                                   const std::function<void(const char*)>& drop) {
+    for (const char* m : {"mod1", "mod2"}) {
+        const juce::String id(m);
+        auto num = [&](const juce::String& field, double fallback) {
+            const juce::var v = get((id + field).toRawUTF8());
+            return v.isVoid() ? fallback : static_cast<double>(v);
+        };
+        const double wave = num("Wave", 0), rate = num("Rate", 0.45);
+        const auto to = brood::migrateShape(wave, num("Sweep", 0) > 0.5, num("Bounce", 0) > 0.5, num("Sync", 0) > 0.5, rate);
+        if (to.wave != wave) set((id + "Wave").toRawUTF8(), to.wave);
+        if (to.rate != rate) set((id + "Rate").toRawUTF8(), to.rate);
+        drop((id + "Sweep").toRawUTF8());
+        drop((id + "Bounce").toRawUTF8());
+    }
 }
 
 juce::AudioProcessorEditor* BroodProcessor::createEditor() { return new BroodEditor(*this); }

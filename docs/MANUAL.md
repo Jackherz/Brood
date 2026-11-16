@@ -208,7 +208,6 @@ the effect. Changes are applied at audio-block boundaries:
 | 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
 | 20 | Rate of both modulation sources |
 | 52 | Hold both modulation sources (`0` running, `1–127` held) |
-| 66, 67 | Bounce, Sweep (`0` off, `1–127` on) |
 | 53, 54 | Wet and loop clock division |
 | 71 | WEAR: pedal (`0`) or worn (`1–127`) |
 | 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
@@ -219,8 +218,8 @@ the effect. Changes are applied at audio-block boundaries:
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware controller set up for the pedal
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
-by automating the `wetMode` parameter (value 3) instead. CC 20 is the sources' rate and
-66/67 are BOUNCE and SWEEP, on both sources. CC 73, 74 and 76 used to carry
+by automating the `wetMode` parameter (value 3) instead. CC 20 is the sources' rate, on both sources. CC 66 and 67 used to
+switch BOUNCE and SWEEP, which are gone (SWEEP is the SAW shape now), so they do nothing. CC 73, 74 and 76 used to carry
 SPREAD, DRY KILL and LATCH; those controls are gone (WIDTH does the first, MIX the
 second, the FREEZE switch the third), so the pedal's controllers for them do
 nothing now. Routes and depths have no CC: automate the `mod1_time`-style depth parameters instead. NOISE has no CC either. Loop memory and END are host-only parameters too.
@@ -406,12 +405,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   take (`tests/parity/scenarios/alias_clock.txt`).
 - **GAIN**, in the LOOP panel's heading, is the loop's own level, -24 to +12 dB: drag up or down, Shift
   for fine, double-click for 0 dB. The waveform grows and shrinks with it, and SEND sends the loop at this level.
-- **MODULATION** is two sources, each with its own rate, shape and UNI, BOUNCE, SWEEP,
-  SYNC and HOLD. Drag a source onto any knob or BALANCE to route it. Around a knob, the rings are
+- **MODULATION** is two sources, each with its own rate, shape (TRI, SQR, SIN, SAW, RND, SMTH)
+  and UNI, SYNC and HOLD. Drag a source onto any knob or BALANCE to route it. Around a knob, the rings are
   handles: drag up or down to set that source's depth (negative inverts), and
   where there's no ring yet it makes one for the selected source. Alt-drag does the same, double-click a ring to remove that source, Delete on a clicked knob removes both,
   right-click for the list,
-  and ROUTES lists them all. CC 20, 52, 66 and 67 act on both sources
+  and ROUTES lists them all. CC 20 and 52 act on both sources
   (`tests/parity/scenarios/mod_routes.txt`).
 - **ENV** slices when it hears the input: LENGTH and SENSITIVITY act on those slices, so with
   the loop playing and nothing coming in above SENSITIVITY's threshold, they have nothing to
@@ -457,11 +456,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   and a generator writes into it, added on top of where the knob sits and rebuilt
   from the knob every sample. **OFF** is the first stop and the pedal's own name
   for it, so there is no separate "still" word to mistake for a setting: an OFF
-  cell is drawn as an empty frame, a running one as a filled display. Five shapes (triangle, square, sine, random, smooth
-  random), one rate for both sides, from one cycle every twenty seconds up to
+  cell is drawn as an empty frame, a running one as a filled display. Six shapes (triangle, square, sine, sawtooth, random,
+  smooth random), one rate for both sides, from one cycle every twenty seconds up to
   eight a second. **UNI** keeps the swing above the knob instead of either side
-  of it; **BOUNCE** reflects the phase so it never snaps back; **SWEEP** drops the
-  shape and climbs, restarting from the bottom. In the editor the two destination
+  of it. SAW climbs and restarts from the bottom; it was the SWEEP switch until
+  state version 4, which also dropped BOUNCE. Sets and presets saved with SWEEP load as
+  SAW, and with SWEEP and BOUNCE as TRI at half the rate, the same curve. In the editor the two destination
   cells step from anywhere on the cell — only the painted back arrow steps back —
   and every cell offers its full list, so the readout and the hover text name
   exactly the stops that exist. The rate is the RATE slider and the three switches sit in the same panel — on the pedal these

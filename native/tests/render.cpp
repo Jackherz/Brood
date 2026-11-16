@@ -32,7 +32,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
         auto& m = p.mods[n[3] - '1'];
         const std::string f = n.substr(4);
         if (f == "On") m.on = v != 0; else if (f == "Rate") m.rate = v; else if (f == "Wave") m.wave = v;
-        else if (f == "Uni") m.uni = v != 0; else if (f == "Bounce") m.bounce = v != 0; else if (f == "Sweep") m.sweep = v != 0;
+        else if (f == "Uni") m.uni = v != 0;
         else if (f == "Sync") m.sync = v != 0; else if (f == "Hold") m.hold = v != 0;
         else for (int t = 0; t < brood::kModTargets; ++t) if (f == std::string("_") + brood::kModTargetIds[t]) m.depth[t] = v;
     }

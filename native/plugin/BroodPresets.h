@@ -80,6 +80,16 @@ public:
                 false);
             values = m;
         }
+        // Before version 4: five shapes, SWEEP and BOUNCE.
+        if (values != nullptr && xml.getIntAttribute("version", 1) < 4) {
+            if (migrated == nullptr) migrated = std::make_unique<juce::XmlElement>(*values);
+            auto* m = migrated.get();
+            BroodProcessor::migrateShapes(
+                [m](const char* id) { return m->hasAttribute(id) ? juce::var(m->getDoubleAttribute(id)) : juce::var(); },
+                [m](const char* id, double v) { m->setAttribute(id, v); },
+                [m](const char* id) { m->removeAttribute(id); });
+            values = m;
+        }
         if (values != nullptr && xml.getIntAttribute("version", 1) < 2 && values->hasAttribute("start")) {
             auto* modeP = proc.apvts.getParameter("loopMode");
             const float modeV = values->hasAttribute("loopMode") ? static_cast<float>(values->getDoubleAttribute("loopMode")) : modeP->getDefaultValue();

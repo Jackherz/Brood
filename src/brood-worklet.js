@@ -76,9 +76,22 @@ const TONE_HZ = 2600;
 // position is off; MODIFY means this channel's own MODIFY knob.
 // What a modulation source can move, in the order of Core::effective().
 const MOD_TARGETS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance'];
-const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'RND', 'SMTH'];
+const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH'];
 const rampWaveIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_WAVES.length - 1));
 const rampHz = (k) => expMap(clamp(k, 0, 1), 0.05, 8);   // one cycle every 20 s … eight a second
+// Settings saved before state version 4 had five shapes and SWEEP and BOUNCE: SWEEP becomes
+// SAW, SWEEP with BOUNCE becomes TRI at half the rate (synced: the next longer span), BOUNCE
+// alone goes, and each old shape moves to its place in the row of six. Mirrors migrateShape
+// in native/dsp/brood.h. Returns the new { wave, rate }.
+function migrateShape(wave, sweep, bounce, sync, rate) {
+  let shape = [0, 1, 2, 4, 5][Math.round(clamp(wave, 0, 1) * 4)];
+  if (sweep && bounce) {
+    shape = 0;
+    rate = sync ? Math.max(0, rampDivIndex(rate) - 1) / (RAMP_DIV_BEATS.length - 1)
+      : Math.max(0, clamp(rate, 0, 1) - Math.log(2) / Math.log(8 / 0.05));
+  } else if (sweep) shape = 3;
+  return { wave: shape / (RAMP_WAVES.length - 1), rate };
+}
 
 // Stepped, CLOCK lands on these. SMOOTH travels through the same rates, so the two agree at
 // every step and switching SMOOTH doesn't change the sound.
@@ -549,8 +562,8 @@ class BroodCore {
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
       // 0 is no route) for each control it can move.
       ...Object.fromEntries([1, 2].flatMap((n) => [
-        [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Bounce`, 0],
-        [`mod${n}Sweep`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
+        [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0],
+        [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
         ...MOD_TARGETS.map((t) => [`mod${n}_${t}`, 0]),
       ])),
       envSync: 0,
@@ -658,8 +671,8 @@ class BroodCore {
     // Two generators, each with its own phase and its own seeded stream (never the
     // shared rng: STRETCH grains and CLASSIC hiss draw from that one).
     this.ramp = [
-      { ph: 0, dir: 1, prev: 0.5, next: 0.5, rng: 0x9e3779b9 },
-      { ph: 0.5, dir: 1, prev: 0.5, next: 0.5, rng: 0x5bd1e995 },
+      { ph: 0, prev: 0.5, next: 0.5, rng: 0x9e3779b9 },
+      { ph: 0.5, prev: 0.5, next: 0.5, rng: 0x5bd1e995 },
     ];
     this.rampRaw = [0, 0];      // per core tick
     this.rampVal = [0, 0];      // smoothed to audio rate
@@ -998,13 +1011,13 @@ class BroodCore {
   }
 
   // Value of the chosen shape at the current phase, 0..1.
-  rampShape(g, wave, sweep) {
+  rampShape(g, wave) {
     const ph = g.ph;
-    if (sweep) return ph;                             // SWEEP: it only ever climbs
     if (wave === 1) return ph < 0.5 ? 1 : 0;          // square
     if (wave === 2) return 0.5 + 0.5 * Math.sin(TAU * ph);
-    if (wave === 3) return g.next;                    // sample and hold
-    if (wave === 4) {                                 // smooth random
+    if (wave === 3) return ph;                        // sawtooth: climbs, then snaps back
+    if (wave === 4) return g.next;                    // sample and hold
+    if (wave === 5) {                                 // smooth random
       const t = ph * ph * (3 - 2 * ph);
       return g.prev + (g.next - g.prev) * t;
     }
@@ -1017,20 +1030,13 @@ class BroodCore {
   rampTick() {
     for (let k = 0; k < 2; k++) {
       const n = k + 1, p = this.p, g = this.ramp[k];
-      const bounce = p[`mod${n}Bounce`];
       if (!p[`mod${n}Hold`]) {
         // Free-running by default; synced, one cycle is a musical span instead.
         const hz = p[`mod${n}Sync`] ? 1 / rampCycleSeconds(p.bpm, this.s.modRate[k]) : rampHz(this.s.modRate[k]);
-        g.ph += hz / this.fs * g.dir;
-        if (g.ph >= 1) {
-          if (bounce) { g.ph = 2 - g.ph; g.dir = -1; } else { g.ph -= 1; }
-          g.prev = g.next; g.next = this.rampRand(g);
-        } else if (g.ph <= 0) {
-          if (bounce) { g.ph = -g.ph; g.dir = 1; } else { g.ph += 1; }
-          g.prev = g.next; g.next = this.rampRand(g);
-        }
+        g.ph += hz / this.fs;
+        if (g.ph >= 1) { g.ph -= 1; g.prev = g.next; g.next = this.rampRand(g); }
       }
-      this.rampRaw[k] = this.rampShape(g, rampWaveIndex(p[`mod${n}Wave`]), p[`mod${n}Sweep`]);
+      this.rampRaw[k] = this.rampShape(g, rampWaveIndex(p[`mod${n}Wave`]));
     }
   }
 
@@ -1862,5 +1868,5 @@ function migrateTapeStart(oldStart, length, takeLength) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BroodCore, migrateTapeStart, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES, readFrac };
+  module.exports = { BroodCore, migrateTapeStart, migrateShape, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES, readFrac };
 }

@@ -488,27 +488,49 @@ int main() {
         auto middle = [](const std::vector<double>& v) {
             size_t n = 0; for (double x : v) if (std::fabs(x - 0.5) < 0.15) ++n; return double(n) / double(v.size());
         };
-        const auto sq = collect(0.25), tri = collect(0), sin = collect(0.5);
+        const auto sq = collect(0.2), tri = collect(0), sin = collect(0.4);
         CHECK(ends(sq) > 0.9, "square is two levels (%.2f)", ends(sq));
         CHECK(ends(sin) > ends(tri), "sine hangs on the ends more than the triangle");
         CHECK(middle(tri) > middle(sin), "the triangle passes through the middle more");
         CHECK(middle(sq) < 0.05, "the square skips the middle");
     }
-    {   // SWEEP climbs and restarts; BOUNCE takes the snap out
-        auto collect = [](bool bouncy) {
-            brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].sweep = true; c.p.mods[0].bounce = bouncy; c.p.mods[0].rate = 0.5;
-            c.prepare(FS);
+    {   // SAW climbs and snaps back
+        brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].wave = brood::rampValueOfIndex(3, brood::kRampWaveCount); c.p.mods[0].rate = 0.5;
+        c.prepare(FS);
+        std::vector<double> saw;
+        render(c, 8, [](double) { return 0.0; }, [&](brood::Core& cc, long) { saw.push_back(cc.rampValue(0)); });
+        size_t resets = 0, rising = 0;
+        for (size_t i = 1; i < saw.size(); ++i) { if (saw[i] < saw[i - 1] - 0.5) ++resets; if (saw[i] > saw[i - 1]) ++rising; }
+        CHECK(resets >= 2, "SAW restarts (%zu)", resets);
+        CHECK(double(rising) / double(saw.size() - 1) > 0.9, "SAW only climbs between restarts");
+    }
+    {   // State version 4: SWEEP becomes SAW, SWEEP with BOUNCE becomes TRI at half the rate,
+        // BOUNCE alone goes, and every old shape keeps its shape in the row of six
+        const double oldTri = 0, oldSqr = 0.25, oldSin = 0.5, oldRnd = 0.75, oldSmth = 1;
+        const char* names[] = {"TRI", "SQR", "SIN", "RND", "SMTH"};
+        const double olds[] = {oldTri, oldSqr, oldSin, oldRnd, oldSmth};
+        for (int i = 0; i < 5; ++i) {
+            const auto to = brood::migrateShape(olds[i], false, i == 1, false, 0.45);
+            CHECK(std::string(brood::kRampWaves[brood::rampWaveIndex(to.wave)]) == names[i] && to.rate == 0.45, "an old %s stays %s", names[i], names[i]);
+        }
+        const auto saw = brood::migrateShape(oldSin, true, false, false, 0.45);
+        CHECK(brood::rampWaveIndex(saw.wave) == 3 && saw.rate == 0.45, "SWEEP becomes SAW whatever the shape");
+        const auto tide = brood::migrateShape(oldSqr, true, true, false, 0.45);
+        CHECK(brood::rampWaveIndex(tide.wave) == 0 && std::fabs(brood::rampHertz(tide.rate) * 2 - brood::rampHertz(0.45)) < 1e-9, "SWEEP with BOUNCE becomes TRI at half the rate");
+        const auto synced = brood::migrateShape(oldTri, true, true, true, brood::rampValueOfIndex(5, brood::kRampDivCount));
+        CHECK(std::fabs(brood::rampCycleSeconds(120, synced.rate) - 2 * brood::rampCycleSeconds(120, brood::rampValueOfIndex(5, brood::kRampDivCount))) < 1e-9,
+              "synced, it becomes the next longer span");
+        // The same curve: SWEEP + BOUNCE went 0 -> 1 -> 0 at the old rate, TRI at half the rate does too.
+        auto curve = [](double wave, double rate) {
+            brood::Core c; c.p.mods[0].wave = wave; c.p.mods[0].rate = rate; c.prepare(FS);
             std::vector<double> v;
-            render(c, 8, [](double) { return 0.0; }, [&](brood::Core& cc, long) { v.push_back(cc.rampValue(0)); });
+            render(c, 4, [](double) { return 0.0; }, [&](brood::Core& cc, long) { v.push_back(cc.rampValue(0)); });
             return v;
         };
-        auto resets = [](const std::vector<double>& v) { size_t n = 0; for (size_t i = 1; i < v.size(); ++i) if (v[i] < v[i - 1] - 0.5) ++n; return n; };
-        auto rising = [](const std::vector<double>& v) { size_t n = 0; for (size_t i = 1; i < v.size(); ++i) if (v[i] > v[i - 1]) ++n; return double(n) / double(v.size() - 1); };
-        const auto saw = collect(false), bouncy = collect(true);
-        CHECK(resets(saw) >= 2, "the sweep restarts (%zu)", resets(saw));
-        CHECK(rising(saw) > 0.9, "the sweep only climbs (%.2f)", rising(saw));
-        CHECK(resets(bouncy) == 0, "BOUNCE removes the snap-back (%zu)", resets(bouncy));
-        CHECK(rising(bouncy) > 0.3 && rising(bouncy) < 0.7, "and turns it into a tide (%.2f)", rising(bouncy));
+        const auto tri = curve(tide.wave, tide.rate);
+        double peak = 0, lo = 1;
+        for (double x : tri) { peak = std::max(peak, x); lo = std::min(lo, x); }
+        CHECK(peak > 0.95 && lo < 0.05, "the converted TRI still spans the whole swing");
     }
     {   // HOLD: the generator stops where it is, then carries on from the same place
         brood::Core c; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].rate = 0.5; c.prepare(FS);
@@ -835,7 +857,7 @@ int main() {
             CHECK(brood::rampIndexOfValue(9.0, count) == count - 1, "count %d: above 1 clamps to the last stop", count);
         }
         CHECK(brood::rampValueOfIndex(6, 1) == 0.0, "a single-entry list has one value");
-        CHECK(brood::rampIndexOfValue(brood::rampValueOfIndex(4, brood::kRampWaveCount), brood::kRampWaveCount) == 4, "all five shapes are reachable");
+        CHECK(brood::rampIndexOfValue(brood::rampValueOfIndex(5, brood::kRampWaveCount), brood::kRampWaveCount) == 5, "all six shapes are reachable");
     }
     // SMOOTH runs through the same rates as the steps, so switching it doesn't move the clock.
     {
@@ -869,7 +891,7 @@ int main() {
         c.prepare(FS);
         render(c, 4, [](double t) { return 0.4 * std::sin(2 * brood::kPi * 220 * t); });
         tap(c, 1);
-        c.p.mods[0].on = true; c.p.mods[0].rate = 1; c.p.mods[0].wave = 0.3; c.p.mods[0].depth[2] = 1;   // square, 8 Hz, full depth
+        c.p.mods[0].on = true; c.p.mods[0].rate = 1; c.p.mods[0].wave = 0.2; c.p.mods[0].depth[2] = 1;   // square, 8 Hz, full depth
         double maxStep = 0, last = -1; int back = 0; float prev = 0;
         render(c, 3, [](double) { return 0.0; }, [&](brood::Core& cc, long b) {
             const auto st = cc.state();
@@ -1346,11 +1368,11 @@ int main() {
         // target, loop mode, wet mode, shape, and the most it may reach (it used to reach...)
         struct Case { int target, loop, wet, shape; double most; const char* name; };
         const Case cases[] = {
-            {4, 1, 0, 3, 0.05, "CLOCK, REVERB/TAPE, random (was 0.31)"},
+            {4, 1, 0, 4, 0.05, "CLOCK, REVERB/TAPE, random (was 0.31)"},
             {4, 1, -1, 1, 0.01, "CLOCK, wet off, square (was 0.22)"},
             {2, 2, -1, 1, 0.002, "LENGTH in STRETCH, square (was 0.25)"},
             {2, 2, -1, 2, 0.002, "LENGTH in STRETCH, sine (was 0.14)"},
-            {2, 0, -1, 3, 0.002, "LENGTH in ENV, random (was 0.0099)"},
+            {2, 0, -1, 4, 0.002, "LENGTH in ENV, random (was 0.0099)"},
             {0, 1, 0, 1, 0.002, "TIME in REVERB, square (was 0.0097)"},
         };
         for (const auto& k : cases) {

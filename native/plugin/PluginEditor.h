@@ -244,8 +244,8 @@ private:
         std::unique_ptr<Stepper> wave;
         juce::Slider rate;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rateAtt;
-        std::array<std::unique_ptr<juce::ToggleButton>, 5> switches;   // UNI, BOUNCE, SWEEP, SYNC, HOLD
-        std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 5> switchAtts;
+        std::array<std::unique_ptr<juce::ToggleButton>, 3> switches;   // UNI, SYNC, HOLD
+        std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 3> switchAtts;
     };
     std::array<SourceControls, 2> sources;
     std::unique_ptr<ModChip> chips[2];
@@ -313,7 +313,7 @@ private:
     juce::String hoverLabel, hoverText;
     void rebuildHoverHelp();
     // The four numbered panels of the side column, in design coordinates.
-    juce::Rectangle<int> characterDesign, rampArea, rampRateDesign, rampSwitchDesign[5], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
+    juce::Rectangle<int> characterDesign, rampArea, rampRateDesign, rampSwitchDesign[3], presetBarDesign, benchSourceDesign, routesDesign, chipDesign[2];
     juce::Rectangle<int> rampWaveDesign;
     // The panel is drawn at a fixed design size and scaled to the window, so the
     // pixel-art proportions survive any window the host gives us.

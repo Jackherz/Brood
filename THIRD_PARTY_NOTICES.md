@@ -18,6 +18,16 @@ SDK and other third-party components; its licence file lists them. See also
 The plug-ins' VT323 and Glyph Grotesque (Terminal Grotesque by Raphael Bastide,
 renamed) are also under that licence; their texts are in `kit/fonts/`.
 
+Brood's panel faces, B612 Mono (The B612 Project Authors), Overpass Medium (The Overpass
+Project Authors) and Chivo Mono (The Chivo Project Authors), are embedded in the plug-in under
+the SIL Open Font License 1.1. Their licence texts are in `assets/fonts/`; like the browser's
+fonts below, they are fetched and checked by `scripts/fetch-fonts.sh`, never committed.
+
+Brood's wordmark is drawn from the letters of Squarepusher (thin cut), a freeware font by
+Derik Revenge of Flak Networks, after fluid's Euphoric, with its D redrawn. Only the outlines
+of "BROOD" are in the plug-in, not the font. Credit as the font asks: Derik Revenge and
+Flak Networks, and fluid, creator of Euphoric.
+
 The browser version's bundled VT323 (Peter Hull), Press Start 2P (CodeMan38), and Space Mono
 (Colophon Foundry) fonts are licensed under the SIL Open Font License 1.1.
 Their licence texts are in `assets/fonts/`. The font binaries themselves are not

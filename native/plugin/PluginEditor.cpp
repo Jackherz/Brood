@@ -1,4 +1,7 @@
 #include "PluginEditor.h"
+#if BROOD_PANEL_FONTS
+#include "BroodFonts.h"
+#endif
 
 namespace {
 // Brood's stock: warm paper and a lot of ink, with one ochre that only ever means "this is on".
@@ -16,10 +19,59 @@ const kit::Stock& stock() {
 }
 const juce::Colour kInk = stock().ink, kPaper = stock().panel, kMuted = stock().soft, kLine = stock().rule, kPanel = stock().head;
 
-juce::Font font(float size) { return kit::label(size); }                  // figures and readouts: the monospace
+// The wordmark: "BROOD" in Squarepusher (thin cut, freeware by Derik Revenge of Flak
+// Networks, after fluid's Euphoric; see THIRD_PARTY_NOTICES.md), its letters' outlines in font
+// units (y up, capitals 360 tall, 3816 wide) with the D redrawn: its right corners cut at 45
+// degrees so it reads as a D. Only the outlines ship, never the font file.
+namespace wordmarkOutline {
+struct Pt { short x, y; };
+constexpr Pt c0[] = {{0, 360}, {648, 360}, {648, 0}, {144, 0}, {144, 72}, {576, 72}, {576, 144}, {144, 144}, {144, 216}, {576, 216}, {576, 288}, {72, 288}, {72, 0}, {0, 0}};
+constexpr Pt c1[] = {{792, 360}, {1440, 360}, {1440, 144}, {1008, 144}, {1008, 72}, {1440, 72}, {1440, 0}, {936, 0}, {936, 216}, {1368, 216}, {1368, 288}, {864, 288}, {864, 0}, {792, 0}};
+constexpr Pt c2[] = {{1584, 360}, {2232, 360}, {2232, 0}, {1584, 0}};
+constexpr Pt c3[] = {{2160, 72}, {2160, 288}, {1656, 288}, {1656, 72}};
+constexpr Pt c4[] = {{2376, 360}, {3024, 360}, {3024, 0}, {2376, 0}};
+constexpr Pt c5[] = {{2952, 72}, {2952, 288}, {2448, 288}, {2448, 72}};
+constexpr Pt c6[] = {{3168, 360}, {3672, 360}, {3816, 216}, {3816, 144}, {3672, 0}, {3168, 0}, {3168, 216}, {3240, 216}, {3240, 72}, {3642, 72}, {3744, 174}, {3744, 186}, {3642, 288}, {3168, 288}};
+constexpr std::pair<const Pt*, int> contours[] = {{c0, static_cast<int>(std::size(c0))}, {c1, static_cast<int>(std::size(c1))}, {c2, static_cast<int>(std::size(c2))}, {c3, static_cast<int>(std::size(c3))}, {c4, static_cast<int>(std::size(c4))}, {c5, static_cast<int>(std::size(c5))}, {c6, static_cast<int>(std::size(c6))}};
+constexpr float height = 360.f;   // capitals; 3816 wide
+}
+
+// The wordmark's outline, scaled so its capitals stand `capHeight` tall, top left at 0, 0.
+juce::Path wordmarkPath(float capHeight) {
+    juce::Path p;
+    p.setUsingNonZeroWinding(false);
+    const float k = capHeight / wordmarkOutline::height;
+    for (const auto& [pts, n] : wordmarkOutline::contours) {
+        p.startNewSubPath(pts[0].x * k, (wordmarkOutline::height - pts[0].y) * k);
+        for (int i = 1; i < n; ++i) p.lineTo(pts[i].x * k, (wordmarkOutline::height - pts[i].y) * k);
+        p.closeSubPath();
+    }
+    return p;
+}
+
+// Brood's own faces for the kit, from the font trial (docs/plans/font-trial): B612 Mono on the
+// screen and the take strip, Overpass Medium for names, Chivo Mono two sizes down for figures
+// on the paper, and four lines of help, since B612 Mono is wider than VT323. Built without the
+// fonts (scripts/fetch-fonts.sh), the kit's faces stay.
+void installFaces() {
+#if BROOD_PANEL_FONTS
+    static const bool once = [] {
+        auto& f = kit::faces();
+        f.screen = juce::Typeface::createSystemTypefaceFor(BroodFonts::B612MonoRegular_ttf, static_cast<size_t>(BroodFonts::B612MonoRegular_ttfSize));
+        f.name = juce::Typeface::createSystemTypefaceFor(BroodFonts::OverpassMedium_ttf, static_cast<size_t>(BroodFonts::OverpassMedium_ttfSize));
+        f.value = juce::Typeface::createSystemTypefaceFor(BroodFonts::ChivoMonoRegular_ttf, static_cast<size_t>(BroodFonts::ChivoMonoRegular_ttfSize));
+        f.valueShrink = 2.0f;
+        f.readoutLines = 4;
+        return true;
+    }();
+    juce::ignoreUnused(once);
+#endif
+}
+
+juce::Font font(float size) { return kit::value(size); }                  // figures on the paper
 juce::Font nameFont(float size) { return kit::nameFont(true, size); }        // names and labels: the sans face
 void plate(juce::Graphics& g, juce::Rectangle<float> r, juce::Colour colour, float corner = 4.f) { g.setColour(colour); g.fillRoundedRectangle(r, corner); }
-juce::Font capFont() { return font(14); }
+juce::Font capFont() { return kit::label(14); }   // the take strip: the screen face
 juce::Font labelFont() { return nameFont(16); }
 juce::Font textFont() { return font(18); }
 constexpr int kSp1 = 4, kSp2 = 8;
@@ -656,7 +708,7 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
         if (loudest < 0.001f) {
             // Silence: the words where the waveform would be, as before.
             g.setColour(dimmed); g.fillRect(b.getX() + 12.f, mid + 14.f, b.getWidth() - 24.f, 1.f);
-            g.setColour(k.onSunk); g.setFont(font(18));
+            g.setColour(k.onSunk); g.setFont(kit::label(18));
             const juce::String idle = record ? "PRESS LOOP TO RECORD_" : "LISTENING. PRESS LOOP TO KEEP THE LAST MOMENT_";
             const juce::String text = armed ? "WAITING FOR THE BAR LINE_"
                                     : led == 2 ? (record && bars != "FREE" ? "RECORDING " + bars + "_" : juce::String("RECORDING_")) : idle;
@@ -748,7 +800,8 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
 
 // ───────── editor ─────────
 BroodEditor::BroodEditor(BroodProcessor& p)
-    : AudioProcessorEditor(p), proc(p), look(stock(), p), presets(p), presetBar(presets), presetBrowser(presets, stock()),
+    : AudioProcessorEditor((installFaces(), p)), proc(p),   // the faces first: members set fonts as they're built
+      look(stock(), p), presets(p), presetBar(presets), presetBrowser(presets, stock()),
       benchStrip(stock(), "BROOD", "", "BROOD"), loopView(p) {
     setLookAndFeel(&look);
     const std::pair<const char*, const char*> defs[] = {
@@ -930,7 +983,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         chips[k] = std::make_unique<ModChip>(*this, k);
         addAndMakeVisible(*chips[k]);
         auto& c = sources[static_cast<size_t>(k)];
-        c.wave = std::make_unique<Stepper>(*proc.apvts.getParameter(m + "Wave"), "SHAPE", juce::StringArray{"TRI", "SQR", "SIN", "RND", "SMTH"},
+        c.wave = std::make_unique<Stepper>(*proc.apvts.getParameter(m + "Wave"), "SHAPE", juce::StringArray{"TRI", "SQR", "SIN", "SAW", "RND", "SMTH"},
             [this, who, m] { if (isVisible()) showReadout(who + " SHAPE", proc.apvts.getParameter(m + "Wave")->getCurrentValueAsText().toLowerCase()); });
         addChildComponent(*c.wave);
         c.rate.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -940,7 +993,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         c.rate.onValueChange = [this, m] { touch(m + "Rate"); };
         addChildComponent(c.rate);
         c.rateAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, m + "Rate", c.rate);
-        const std::pair<const char*, const char*> defs[] = {{"Uni", "UNI"}, {"Bounce", "BOUNCE"}, {"Sweep", "SWEEP"}, {"Sync", "SYNC"}, {"Hold", "HOLD"}};
+        const std::pair<const char*, const char*> defs[] = {{"Uni", "UNI"}, {"Sync", "SYNC"}, {"Hold", "HOLD"}};
         for (size_t i = 0; i < c.switches.size(); ++i) {
             const juce::String lab = defs[i].second;
             auto button = std::make_unique<juce::ToggleButton>(lab);
@@ -1358,7 +1411,7 @@ void BroodEditor::resized() {
     place(*fsLoop, fsLoopDesign);
     place(overdub, overdubDesign);
     // Between them, what's true of both sides: how worn the one clock is.
-    characterDesign = juce::Rectangle<int>(130, 24).withCentre({cx[1], 234});
+    characterDesign = juce::Rectangle<int>(138, 24).withCentre({cx[1], 234});   // 8 wider for PEDAL in Chivo Mono
     place(*character, characterDesign);
     wearPostDesign = juce::Rectangle<int>(160, 20).withCentre({cx[1], characterDesign.getCentreY() + 24});
     place(*wearPost, wearPostDesign);
@@ -1451,11 +1504,10 @@ void BroodEditor::resized() {
     rampRateDesign = rampRow;                    // "RATE" and its figure are painted at the ends
     ramp.removeFromTop(18);
     rampRow = ramp.removeFromTop(26);
-    // Five cells, sized to their words: BOUNCE needs more room than UNI.
-    const int swWeights[] = {50, 72, 66, 54, 55};
+    // Three even cells: UNI, SYNC, HOLD.
     const int swTotal = rampRow.getWidth();
-    for (size_t i = 0; i < 5; ++i)
-        rampSwitchDesign[i] = i + 1 == 5 ? rampRow : rampRow.removeFromLeft(swTotal * swWeights[i] / 297);
+    for (size_t i = 0; i < 3; ++i)
+        rampSwitchDesign[i] = i + 1 == 3 ? rampRow : rampRow.removeFromLeft((swTotal - 2 * kSp2) / 3 + kSp2).withTrimmedRight(kSp2);
     for (auto& c : sources) {
         place(*c.wave, rampWaveDesign);
         place(c.rate, rampRateDesign.withTrimmedLeft(36).withTrimmedRight(40).reduced(0, 3));
@@ -1508,17 +1560,15 @@ void BroodEditor::rebuildHoverHelp() {
     add(chipDesign[0], "MOD 1", "click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.");
     add(chipDesign[1], "MOD 2", "click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.");
     add(routesDesign, "ROUTES", "every route in one list, with its depth.");
-    if (modOpen) add(rampWaveDesign, "SHAPE", "click to step the shape: triangle, square, sine, random, smooth random.");
+    if (modOpen) add(rampWaveDesign, "SHAPE", "click to step the shape: triangle, square, sine, sawtooth, random, smooth random.");
     if (modOpen) add(rampRateDesign, "RATE", "how slowly this source turns. with SYNC on it becomes a span of the beat.");
     static const char* rampSwitchText[] = {
         "the swing sits above the knob instead of either side of it.",
-        "the swing reflects instead of snapping back, so nothing jumps.",
-        "the shape is ignored and the knob just climbs, again and again.",
         "the rate becomes a division of the beat: eight bars down to a sixteenth.",
         "this source stops where it is and its knobs stay pushed there. CC 52 holds both.",
     };
-    static const char* rampSwitchNames[] = {"UNI", "BOUNCE", "SWEEP", "SYNC", "HOLD"};
-    if (modOpen) for (int i = 0; i < 5; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
+    static const char* rampSwitchNames[] = {"UNI", "SYNC", "HOLD"};
+    if (modOpen) for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
     add(memoryDesign.expanded(0, 2), "MEMORY", "in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal's own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.");
     add(gainDesign, "GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
@@ -1597,13 +1647,14 @@ void BroodEditor::drawMasthead(juce::Graphics& g) const {
     g.setColour(kInk);
     g.fillRect(area.getX(), area.getBottom() - 2, area.getWidth(), 2);
     auto row = area.withTrimmedBottom(10);
-    const auto wordFont = kit::wordmark(48.0f);
-    g.setFont(wordFont);
-    const int wordWidth = kit::textWidth(wordFont, "BROOD.") + 4;
-    g.drawText("BROOD.", row.removeFromLeft(wordWidth), juce::Justification::centredLeft);
-    row.removeFromLeft(14);
+    constexpr float cap = 28.f;
+    auto word = wordmarkPath(cap);
+    const auto wordBox = row.removeFromLeft(static_cast<int>(std::ceil(word.getBounds().getWidth())) + 4);
+    word.applyTransform(juce::AffineTransform::translation(static_cast<float>(wordBox.getX()), wordBox.toFloat().getCentreY() - cap / 2));
+    g.fillPath(word);
+    row.removeFromLeft(18);
     g.setColour(kMuted);
-    g.setFont(kit::label(17.0f));
+    g.setFont(nameFont(17.0f));
     auto lines = row.withSizeKeepingCentre(row.getWidth(), 34);
     g.drawText("GLYPH AUDIO", lines.removeFromTop(17), juce::Justification::centredLeft);
     g.drawText("MICRO-LOOPER + SPACE", lines, juce::Justification::centredLeft);
@@ -1675,7 +1726,7 @@ void BroodEditor::paint(juce::Graphics& g) {
     if (modOpen) g.drawText(spanMode ? "SPAN" : "RATE", rampRateDesign.getX(), rampRateDesign.getY(), 34, rampRateDesign.getHeight(), juce::Justification::centredLeft);
     // Short figures for the narrow column; the full wording lives in the readout
     // and in the host's parameter display.
-    g.setColour(kMuted); g.setFont(labelFont());
+    g.setColour(kMuted); g.setFont(font(14));   // MEMORY's and the RATE's figures are values
     auto figure = [&](const char* id, const juce::Rectangle<int>& r, bool percent) {
         const auto* v = proc.apvts.getRawParameterValue(id);
         if (v == nullptr) return;
@@ -1722,7 +1773,7 @@ void BroodEditor::paint(juce::Graphics& g) {
         g.setColour(kInk); g.setFont(labelFont());
         const int nameW = kit::textWidth(g.getCurrentFont(), hoodNames[i]) + 2;
         g.drawText(hoodNames[i], cellRect.withWidth(nameW), juce::Justification::centredLeft);
-        g.setColour(kMuted);
+        g.setColour(kMuted); g.setFont(font(14));   // the figure: a value, as everywhere on the paper
         g.drawFittedText(hoodText[i], cellRect.withLeft(cellRect.getX() + nameW + kSp2), juce::Justification::centredRight, 1, 0.8f);
     }
 
