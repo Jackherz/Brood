@@ -23,7 +23,7 @@ info() { printf '        %s\n' "$1"; }
 
 printf '\n== Required files ==\n'
 for f in README.md Makefile LICENSE .gitignore \
-         scripts/build-plugin.sh scripts/diagnose-plugin.sh scripts/fetch-fonts.sh \
+         scripts/build-plugin.sh scripts/diagnose-plugin.sh scripts/fetch-fonts.sh scripts/fetch-demos.sh \
          .vscode/tasks.json native/CMakeLists.txt native/plugin/CMakeLists.txt \
          src/main.jsx src/brood-worklet.js native/dsp/brood.h; do
   if [ -e "$f" ]; then ok "$f"; else bad "missing $f"; fi
@@ -53,7 +53,7 @@ if grep -q '^assets/fonts/\*\.ttf$' .gitignore; then
 else
   bad ".gitignore does not exclude assets/fonts/*.ttf"
 fi
-if git ls-files --error-unmatch assets/fonts/VT323-Regular.ttf >/dev/null 2>&1; then
+if git ls-files 'assets/fonts/*.ttf' | grep -q .; then
   bad "a .ttf is tracked — patches will break again"
 else
   ok "no .ttf is tracked"

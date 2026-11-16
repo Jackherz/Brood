@@ -19,18 +19,18 @@ The plug-ins' VT323 and Glyph Grotesque (Terminal Grotesque by Raphael Bastide,
 renamed) are also under that licence; their texts are in `kit/fonts/`.
 
 Brood's panel faces, B612 Mono (The B612 Project Authors), Overpass Medium (The Overpass
-Project Authors) and Chivo Mono (The Chivo Project Authors), are embedded in the plug-in under
-the SIL Open Font License 1.1. Their licence texts are in `assets/fonts/`; like the browser's
-fonts below, they are fetched and checked by `scripts/fetch-fonts.sh`, never committed.
+Project Authors) and Chivo Mono (The Chivo Project Authors), are embedded in the plug-in and
+bundled with the browser version under the SIL Open Font License 1.1. Their licence texts are
+in `assets/fonts/`. The font binaries themselves are not committed: `scripts/fetch-fonts.sh`
+downloads them at build time and verifies each against a pinned SHA-256, which also keeps this
+repository free of binary files.
 
 Brood's wordmark is drawn from the letters of Squarepusher (thin cut), a freeware font by
 Derik Revenge of Flak Networks, after fluid's Euphoric, with its D redrawn. Only the outlines
-of "BROOD" are in the plug-in, not the font. Credit as the font asks: Derik Revenge and
+of "BROOD" are in the plug-in and the browser version, not the font. Credit as the font asks: Derik Revenge and
 Flak Networks, and fluid, creator of Euphoric.
 
-The browser version's bundled VT323 (Peter Hull), Press Start 2P (CodeMan38), and Space Mono
-(Colophon Foundry) fonts are licensed under the SIL Open Font License 1.1.
-Their licence texts are in `assets/fonts/`. The font binaries themselves are not
-committed: `scripts/fetch-fonts.sh` downloads them from
-https://github.com/google/fonts at build time and verifies each against a pinned
-SHA-256, which also keeps this repository free of binary files.
+The demo loops the browser version and the standalone app play (`assets/demos/`) are recordings
+by Jack Herz. They are not part of the source, are not committed, and are not covered by the
+GPL: `scripts/fetch-demos.sh` fetches them at build time and checks each against a pinned
+SHA-256.

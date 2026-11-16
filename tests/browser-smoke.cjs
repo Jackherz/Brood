@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 // Optional end-to-end smoke test. Start Vite first and set CHROMIUM_PATH.
+// Any Chromium browser will do, Brave included:
+//   CHROMIUM_PATH="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" npm run test:browser
 const { chromium } = require('playwright-core');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -59,78 +61,103 @@ let browser;
  assert(stereo.wet.wetSeen && stereo.wet.left > 0.01 && stereo.wet.right < 1e-7, JSON.stringify(stereo));
  assert(Math.abs(stereo.wet.left - stereo.bypass.left) > 0.02, 'wet processing changed audio: ' + JSON.stringify(stereo));
  console.log('offline AudioWorklet stereo', stereo);
+ const lcd = () => page.locator('.lcd').textContent();
+ // The screen shows help while the mouse rests on a control, so move it off the panel first.
+ const readout = async (pattern) => { await page.mouse.move(2, 2); await page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.lcd').textContent), pattern.source) };
+ // A first visit opens the tour: each step leaves its own controls in reach and veils the rest.
+ const veiled = (name) => page.getByRole('slider',{name,exact:true}).evaluate((e) => !!e.closest('[inert]'));
+ const tourTitle = () => page.locator('.tourbar h2').textContent();
+ assert.equal(await tourTitle(), 'START WITH SOUND');
+ assert.equal(await veiled('TIME'), true);
+ await page.getByRole('button',{name:'NEXT',exact:true}).click();
+ assert.equal(await tourTitle(), 'SHAPE THE LOOP');
+ assert.equal(await veiled('LENGTH'), false);
+ assert.equal(await veiled('TIME'), true);
+ await page.getByRole('button',{name:'Step 5: add some space'}).click();
+ assert.equal(await veiled('TIME'), false);
+ assert.equal(await veiled('LENGTH'), true);
+ await page.getByRole('button',{name:/^All of Brood/}).click();
+ assert.equal(await page.locator('.stage [inert]').count(), 0);
+ await page.getByRole('button',{name:'END TOUR',exact:true}).click();
+ await page.reload();
+ assert.equal(await page.locator('.tourbar').count(), 0);
+ console.log('tour steps, veil, jump and end passed');
  await page.getByRole('button',{name:'START AUDIO'}).click();
- await page.getByRole('button',{name:'PAUSE AUDIO'}).waitFor();
- const wet = page.getByRole('button',{name:/Wet channel: tap/});
- const loop = page.getByRole('button',{name:/Micro-looper: tap/});
+ await page.getByRole('button',{name:'STOP AUDIO'}).waitFor();
+ const wet = page.getByRole('button',{name:/^WET: tap or hold/});
+ const loop = page.getByRole('button',{name:/^LOOP: tap or hold/});
  await wet.click(); await page.waitForFunction(()=>document.querySelector('.footswitch').getAttribute('aria-pressed')==='true');
+ // Held, the wet side freezes, and its light blinks.
  await wet.hover(); await page.mouse.down(); await page.waitForTimeout(700);
- await page.waitForFunction(()=>document.querySelector('.footswitch .foot-state').textContent==='FROZEN');
- await page.mouse.up(); await page.waitForFunction(()=>document.querySelector('.footswitch .foot-state').textContent==='ON');
- await loop.click(); await page.waitForFunction(()=>document.querySelectorAll('.footswitch')[1].getAttribute('aria-pressed')==='true');
+ await page.waitForFunction(()=>new Promise((resolve)=>{ const seen=new Set(); const t=setInterval(()=>{ seen.add(document.querySelector('.footswitch').getAttribute('aria-pressed')); if(seen.size===2){clearInterval(t);resolve(true);} },20); setTimeout(()=>{clearInterval(t);resolve(false);},800); }));
+ await page.mouse.up();
+ await page.waitForTimeout(1500);   // a little history for LOOP to catch
+ await loop.click(); await readout(/PLAYING/);
  await loop.hover(); await page.mouse.down(); await page.waitForTimeout(700);
- await page.waitForFunction(()=>document.querySelectorAll('.footswitch .foot-state')[1].textContent==='OVERDUB');
- await page.mouse.up(); await page.waitForFunction(()=>document.querySelectorAll('.footswitch .foot-state')[1].textContent==='PLAYING');
+ await readout(/OVERDUBBING/);
+ await page.mouse.up(); await readout(/PLAYING/);
  console.log('wet freeze and loop overdub gestures passed');
  await page.locator('input[type=file]').setInputFiles(stereoPath);
- await page.getByText('File loaded and looping.').waitFor();
- assert(await page.getByText('brood-stereo-fixture.wav').isVisible());
- await page.getByRole('button',{name:'LIVE IN'}).click();
- await page.getByText('Your microphone or audio interface. Use headphones.').waitFor();
- await page.waitForFunction(()=>parseFloat(document.querySelector('.meter i').style.width)>1, null, {timeout:10000});
- const meter = await page.locator('.meter i').first().evaluate(el=>parseFloat(el.style.width));
- assert(meter > 1, 'fake microphone has nonzero input meter: '+meter);
- await page.getByRole('button',{name:'DEMO', exact:true}).click();
- await page.getByRole('button',{name:'PAUSE AUDIO'}).click();
+ await readout(/LOADED, AND LOOPING INTO BROOD/);
+ assert(await page.getByText('BROOD-STEREO-FIXTURE.WAV', { exact: true }).isVisible());
+ await page.getByRole('radio',{name:'MIC',exact:true}).click();
+ await readout(/THE MICROPHONE/);
+ await page.getByRole('radio',{name:'DEMO',exact:true}).click();
+ await page.getByRole('button',{name:'STOP AUDIO'}).click();
  await page.getByRole('button',{name:'START AUDIO'}).click();
- await page.getByRole('button',{name:'PAUSE AUDIO'}).waitFor();
- await page.waitForFunction(()=>document.querySelectorAll('.footswitch')[1].getAttribute('aria-pressed')==='true');
- console.log('file, fake mic, pause/resume passed (meter '+meter+'%)');
+ await page.getByRole('button',{name:'STOP AUDIO'}).waitFor();
+ console.log('file, fake mic, stop and start passed');
  await page.getByRole('button',{name:/Browse presets/}).click();
  await page.getByRole('button',{name:'GLASS ECHO',exact:true}).click();
  await page.getByRole('button',{name:'KEEP',exact:true}).click();
  assert.equal(await page.getByRole('radio',{name:'DELAY',exact:true}).getAttribute('aria-checked'), 'true');
  const time = page.getByRole('slider',{name:'TIME',exact:true});
  await time.focus(); const before=+await time.getAttribute('aria-valuenow'); await page.keyboard.press('ArrowUp');
- assert.equal(+await time.getAttribute('aria-valuenow'), before+1);
- const box = await time.boundingBox(); await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2,box.y+box.height/2-25);await page.mouse.up();
- assert(+await time.getAttribute('aria-valuenow')>before+1);
+ assert.equal(+await time.getAttribute('aria-valuenow'), before+5);
+ const box = await time.boundingBox(); await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2,box.y+box.height/2-25,{steps:3});await page.mouse.up();
+ assert(+await time.getAttribute('aria-valuenow')>before+5);
  const saved=await time.getAttribute('aria-valuenow');
  page.once('dialog', d => d.accept('my sound'));
- await page.getByRole('button',{name:'[ SAVE ]'}).click();
- await page.getByText('Saved my sound on this device.').waitFor();
- // The waveform's END marker: press near the right edge of a playing loop and drag
- // it in, and END stops being the whole take.
- const waveBox = await page.locator('.loop-wave canvas').boundingBox();
- await page.waitForFunction(()=>document.querySelector('.loop-wave').classList.contains('live'));
+ await page.getByRole('button',{name:'SAVE',exact:true}).click();
+ await readout(/SAVED MY SOUND ON THIS DEVICE/);
+ // The take's END marker: press near the right edge of a playing loop and drag it in, and END
+ // stops being the whole take; a double-click opens it again.
+ await loop.click(); await loop.click();
+ await page.waitForFunction(()=>/^The take\. START/.test(document.querySelector('.take').getAttribute('aria-label')));
+ const waveBox = await page.locator('.take canvas').boundingBox();
  await page.mouse.move(waveBox.x+waveBox.width-3, waveBox.y+waveBox.height/2); await page.mouse.down();
  await page.mouse.move(waveBox.x+waveBox.width*0.6, waveBox.y+waveBox.height/2, {steps:5}); await page.mouse.up();
- await page.waitForFunction(()=>/END PLAYS TO/.test(document.querySelector('.loop-wave').getAttribute('aria-label')));
- await page.locator('.loop-wave canvas').dblclick();
- await page.waitForFunction(()=>/END TO THE END/.test(document.querySelector('.loop-wave').getAttribute('aria-label')));
- console.log('waveform END marker drag and reset passed');
- // Modulation: drag source 1 onto TIME, and a route and a ring appear.
- const chip = await page.getByRole('button',{name:'Modulation source 1'}).boundingBox();
+ await page.waitForFunction(()=>/END plays to/.test(document.querySelector('.take').getAttribute('aria-label')));
+ await page.locator('.take canvas').dblclick();
+ await page.waitForFunction(()=>/END to the end/.test(document.querySelector('.take').getAttribute('aria-label')));
+ console.log('take END marker drag and reset passed');
+ // Modulation: drag MOD 1 onto TIME, and a ring and a route appear.
+ const chip = await page.getByRole('button',{name:/^MOD 1,/}).boundingBox();
  const timeBox = await time.boundingBox();
- await page.mouse.move(chip.x+30,chip.y+8); await page.mouse.down();
+ await page.mouse.move(chip.x+chip.width/2,chip.y+chip.height*0.7); await page.mouse.down();
  await page.mouse.move(timeBox.x+timeBox.width/2,timeBox.y+timeBox.height/2,{steps:6}); await page.mouse.up();
- assert(await page.getByRole('slider',{name:'Source 1 depth on TIME'}).isVisible());
- assert.equal(await time.locator('path').count(),1);
- await page.getByRole('button',{name:'Remove source 1 from TIME'}).click();
+ assert.equal(await time.locator('path[stroke="#b4452a"]').count(),1);
+ await page.getByRole('button',{name:'ROUTES',exact:true}).click();
+ assert(await page.getByRole('slider',{name:'MOD 1 depth on TIME'}).isVisible());
+ await page.getByRole('button',{name:'Remove MOD 1 from TIME'}).click();
+ await page.getByRole('button',{name:'CLOSE',exact:true}).click();
  console.log('modulation route by drag passed');
  await page.reload();
  assert.equal(await time.getAttribute('aria-valuenow'),saved);
  await page.getByRole('button',{name:/Browse presets/}).click();
- assert(await page.getByRole('button',{name:'MY SOUND',exact:true}).isVisible());
+ assert(await page.getByRole('button',{name:/^(> )?MY SOUND$/}).isVisible());
  await page.getByRole('button',{name:'CANCEL',exact:true}).click();
  console.log('presets, save/reload, keyboard and drag passed');
+ // A phone gets the phone layout: one column's knobs at a time, and never a sideways scroll.
  await page.setViewportSize({width:390,height:844});
- await page.getByRole('button',{name:/HOW TO PLAY/}).click();
- assert(await page.getByRole('region',{name:'Field guide'}).isVisible());
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),390);
- await page.setViewportSize({width:320,height:844});
+ await page.getByRole('slider',{name:'TIME',exact:true}).waitFor({timeout:5000});
+ await page.getByRole('radio',{name:'MICRO-LOOPER',exact:true}).click();
+ await page.getByRole('slider',{name:'LENGTH',exact:true}).waitFor({timeout:5000});
+ assert.equal(await page.getByRole('slider',{name:'TIME',exact:true}).count(), 0);
+ await page.setViewportSize({width:320,height:640});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),320);
  if (process.env.BROOD_TEST_SCREENSHOT) await page.screenshot({path:process.env.BROOD_TEST_SCREENSHOT, fullPage:true});
  assert.deepEqual(errors, []);
- console.log('mobile guide and overflow passed; no browser errors');
+ console.log('phone layout and no browser errors passed');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => { if (browser) await browser.close(); fs.rmSync(temp, { recursive:true, force:true }); });

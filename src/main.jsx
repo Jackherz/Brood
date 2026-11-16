@@ -1,13 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AudioEngine } from './audio-engine';
+import { AudioEngine, DEMOS } from './audio-engine';
 import './style.css';
 
 const clamp = (v, min = 0, max = 1) => Math.min(max, Math.max(min, v));
-const clockSteps = [2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
-const clockKhz = (v, smooth) => smooth ? 2 * Math.pow(32, v) : clockSteps[Math.round(v * 10)];
 const expMap = (t, a, b) => a * Math.pow(b / a, t);
-const percent = (v) => `${Math.round(v * 100)}%`;
+
+// The pedal's clock, mirrored from native/dsp/brood.h: stepped, CLOCK lands on these; SMOOTH
+// travels through the same rates, so the two agree at every step.
+const CLOCK_STEPS = [2000, 3000, 4000, 6000, 8000, 12000, 16000, 24000, 32000, 48000, 64000];
+function clockHz(knob, smooth) {
+  knob = clamp(knob);
+  if (!smooth) return CLOCK_STEPS[Math.floor(knob * 10 + 0.5)];
+  const below = Math.min(9, Math.floor(knob * 10));
+  return expMap(knob * 10 - below, CLOCK_STEPS[below], CLOCK_STEPS[below + 1]);
+}
+const CORE_FS = 64000, LOOP_SAMPLES = 64000, DELAY_MAX_SEC = 2.1, WEAVE_BUF_SEC = 3;
 
 // Tempo-sync divisions. Duplicated from src/brood-worklet.js because an
 // AudioWorklet script cannot import an ES module; test/dsp.test.js asserts the
@@ -21,30 +29,41 @@ const syncIndex = (knob) => Math.round(clamp(knob) * (SYNC_DIVISIONS.length - 1)
 const syncLabel = (knob) => SYNC_DIVISIONS[syncIndex(knob)].label;
 // How long the division is, before a block clamps it to its own limit.
 const syncSecondsRaw = (bpm, knob) => SYNC_DIVISIONS[syncIndex(knob)].beats * 60 / clamp(bpm, 20, 300);
-const syncSeconds = (bpm, knob) => clamp(syncSecondsRaw(bpm, knob), 0.01, 2.1 * 0.95);
+const syncSeconds = (bpm, knob) => clamp(syncSecondsRaw(bpm, knob), 0.01, DELAY_MAX_SEC * 0.95);
 // Modulation sync: one cycle is a musical span rather than a free rate.
 const RAMP_DIV_LABELS = ['8 BARS', '4 BARS', '2 BARS', '1 BAR', '1/2', '1/4', '1/8', '1/16'];
 const RAMP_DIV_BEATS = [32, 16, 8, 4, 2, 1, 0.5, 0.25];
 const rampDivIndex = (knob) => Math.round(clamp(knob) * (RAMP_DIV_BEATS.length - 1));
 const rampDivLabel = (knob) => RAMP_DIV_LABELS[rampDivIndex(knob)];
 const rampCycleSeconds = (bpm, knob) => RAMP_DIV_BEATS[rampDivIndex(knob)] * 60 / clamp(bpm, 20, 300);
-const timeText = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
-// The loop trim, mirroring the worklet: a memory ceiling of one second at the
-// far left (the pedal's own buffer) up to half a minute at the right.
-const memoryText = (v) => v <= 0.001 ? 'PEDAL' : `${expMap(v, 1, 30).toFixed(1)}s`;
-// The modulation sources, mirrored from src/brood-worklet.js.
+// The modulation sources, mirrored from src/brood-worklet.js and native/dsp/brood.h.
 const MOD_TARGETS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance'];
-const MOD_TARGET_NAMES = { time: 'TIME', mix: 'MIX', length: 'LENGTH', modWet: 'MODIFY / WET', clock: 'CLOCK', modLoop: 'MODIFY / LOOP', balance: 'WET / LOOP' };
+const MOD_TARGET_NAMES = { time: 'TIME', mix: 'MIX', length: 'LENGTH', modWet: 'MODIFY / WET', clock: 'CLOCK', modLoop: 'MODIFY / LOOP', balance: 'BALANCE' };
 const MOD_COLOURS = ['#b4452a', '#2f6f8f'];
 const MOD_FLAGS = ['On', 'Uni', 'Sync', 'Hold'];
 const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH'];
-const rampIndex = (v, names) => Math.round(clamp(v) * (names.length - 1));
-const rampValue = (index, names) => names.length < 2 ? 0 : index / (names.length - 1);
+const rampIndex = (v, count) => Math.round(clamp(v) * (count - 1));
+const rampValue = (index, count) => count < 2 ? 0 : index / (count - 1);
 const rampHertz = (v) => expMap(clamp(v), 0.05, 8);
-const rampHint = (v) => `${(1 / rampHertz(v)).toFixed(1)}s A TURN`;
 // Hidden options mirror src/brood-worklet.js: the sides can run on divided clocks.
 const DIV_STEPS = [1, 2, 4];
 const divIndex = (v) => Math.round(clamp(v, 0, 1) * (DIV_STEPS.length - 1));
+// Speeds, mirrored from native/dsp/brood.h, for the readouts.
+const speedMap = (m) => (m < 0.5 ? -1 : 1) * Math.pow(2, Math.round(-1 + 3 * Math.min(1, Math.abs(m - 0.5) * 2)));
+const slipSpeedMap = (m) => (m < 0.5 ? -1 : 1) * Math.pow(2, Math.round((-1 + 2 * Math.min(1, Math.abs(m - 0.5) * 2)) * 12) / 12);
+function stretchMap(m) {
+  const d = m - 0.5;
+  if (Math.abs(d) < 0.03) return 0;
+  return Math.sign(d) * Math.pow(2, -3 + 3 * (Math.abs(d) - 0.03) / 0.47);
+}
+
+// The plug-in's words for values (BroodProcessor::describe), in the same form.
+const fmtTime = (s) => s < 1 ? `${Math.round(s * 1000)} ms` : `${s.toFixed(2)} s`;
+const fmtSpeed = (s) => Math.abs(s) < 1e-9 ? 'frozen' : `${s < 0 ? 'reverse ' : ''}${Math.abs(s).toFixed(2)}x`;
+const pct = (x) => `${Math.round(x * 100)}%`;
+const signedRate = (s) => `${s < 0 ? '-' : '+'}${Math.abs(s).toFixed(2)}`;
+const balanceLoop = (v) => Math.round(Math.min(1, 2 * (1 - v)) * 100);
+const balanceWet = (v) => Math.round(Math.min(1, 2 * v) * 100);
 
 const BASE = {
   time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
@@ -68,40 +87,37 @@ const PRESETS = [
 const PRESET_CATEGORIES = ['SPACES', 'ECHOES', 'LOOPS', 'USER'];
 const KNOB_DEFAULTS = { time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66 };
 const WET = ['REVERB', 'DELAY', 'SLIP', 'WEAVE'];
-const LOOP = ['ENV', 'TAPE', 'STRETCH'];
-const ROUTE = ['IN', 'BOTH', 'LOOP'];
-// Whispered hints, not labels. Each says roughly which way to turn without
-// giving away the mechanism, so there is still something to discover — and the
-// exact value appears in the readout beside the knob.
-const WHISPERS = {
-  time: [
-    'how long the room keeps breathing',
-    'how far back the echo remembers',
-    'how wide a slice of time is borrowed',
-    'how far back the threads reach',
-  ],
-  modWet: [
-    'how much the surface smears',
-    'how much the echo wants to stay',
-    'which way, and how fast, time slides',
-    'long cloth, or short clipped stitches',
-  ],
-  length: [
-    'how much of the moment gets caught',
-    'the size of the window that repeats',
-    'how wide each grain is stretched',
-  ],
-  modLoop: [
-    'how softly it must speak to be caught',
-    'which way the tape runs, and how fast',
-    'how far the grains drift from now',
-  ],
-};
-const SHARED_WHISPER = {
-  mix: 'how much of what you hear is not here',
-  clock: 'the heartbeat everything obeys',
-  routing: 'what the wet side hears, and what the loop keeps',
-};
+// RECORD's bar counts. 0 is FREE: it records until the next tap. Here there is no host
+// transport, so a bar count starts at the tap, timed from the TEMPO field.
+const REC_BARS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
+
+// One whispered sentence per knob per mode, from the plug-in (kWhisper in
+// native/plugin/PluginEditor.cpp), in the knobs' order: TIME, MIX, LENGTH, MODIFY (wet),
+// CLOCK, MODIFY (loop).
+const KNOB_IDS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop'];
+const KNOB_MODE = [0, 2, 1, 0, 2, 1];   // 0 = wet modes, 1 = loop modes, 2 = shared
+const WHISPER = [
+  ['how long the room keeps breathing', 'how far back the echo remembers',
+    'how wide a slice of time is borrowed', 'how far back the threads reach'],
+  ['your dry sound against the room and the loop. left is dry alone, right is Brood alone, the middle is both in full',
+    'your dry sound against the echoes and the loop. left is dry alone, right is Brood alone, the middle is both in full',
+    'your dry sound against the slipped slices and the loop. left is dry alone, right is Brood alone, the middle is both in full',
+    'your dry sound against the threads and the loop. left is dry alone, right is Brood alone, the middle is both in full'],
+  ['how much of the moment gets caught', 'the size of the window that repeats',
+    'how wide each grain is stretched', 'how much of the moment gets caught'],
+  ['how much the surface smears', 'how much the echo wants to stay',
+    'which way, and how fast, time slides', 'long cloth, or short clipped stitches'],
+  ['the heartbeat everything obeys', 'the heartbeat everything obeys',
+    'the heartbeat everything obeys', 'the heartbeat everything obeys'],
+  ['how softly it must speak to be caught', 'which way the tape runs, and how fast',
+    'how far the grains drift from now', 'how softly it must speak to be caught'],
+];
+// A knob says what it does in this mode: MODIFY alone tells you nothing.
+function knobName(i, p) {
+  if (KNOB_IDS[i] === 'modWet') return ['SMEAR', 'FEEDBACK', 'RATE', 'STITCH'][p.wetMode];
+  if (KNOB_IDS[i] === 'modLoop') return ['SENSITIVITY', 'SPEED', 'STRETCH'][p.loopMode];
+  return ['TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'MODIFY'][i];
+}
 
 function safeRead(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch (_) { return null; }
@@ -126,602 +142,70 @@ function sanitize(input) {
   }
   return out;
 }
-function describe(id, p) {
-  const v = p[id];
-  const rate = clockKhz(p.clock, p.smooth);
-  const ratio = rate / 64;
-  if (id === 'clock') return `${rate.toFixed(rate < 10 && p.smooth ? 1 : 0)} kHz`;
+// The readout's words for a value, as the plug-in says them (BroodProcessor::describe).
+function describe(id, p, value) {
+  const v = value ?? p[id];
+  const hz = clockHz(p.clock, p.smooth), c = hz / CORE_FS;
   if (id === 'time') {
     // WET DIV runs the wet side slower, so every time on it is that many times longer.
-    const div = DIV_STEPS[divIndex(p.wetDiv)], times = div > 1 ? ` ×${div}` : '';
-    if (p.sync && p.wetMode === 1) return `${syncLabel(v)}${times} · ${timeText(Math.min(syncSeconds(p.bpm, v) * div, 2.1 * 0.95 / ratio))}`;
-    if (p.wetMode === 3) return p.sync ? `${syncLabel(v)}${times} BACK · ${timeText(Math.min(syncSecondsRaw(p.bpm, v) * div, 3 * 0.85))}` : `${timeText(Math.min(2.8, (0.2 + v * 2.6) * div))} BACK`;
-    if (p.wetMode === 0) return v > 0.985 ? 'INFINITE' : timeText(expMap(v, 0.4, 25) * div / ratio);
-    if (p.wetMode === 1) return timeText(Math.min(expMap(v, 0.02, 2) * div, 2.1 * 0.95) / ratio);
-    return timeText(expMap(v, 0.05, 1.5) * div / ratio);
+    const div = DIV_STEPS[divIndex(p.wetDiv)], times = div > 1 ? ` x${div}` : '';
+    const delayMost = DELAY_MAX_SEC * 0.95;   // the delay line's length
+    if (p.wetMode === 0) return v > 0.985 ? 'decay infinite' : `decay ${fmtTime(expMap(v, 0.4, 25) * div / c)}`;
+    if (p.wetMode === 1) {
+      if (p.sync) return `${syncLabel(v)}${times} · ${fmtTime(Math.min(syncSeconds(p.bpm, v) * div, delayMost * CORE_FS / hz))}`;
+      return `delay ${fmtTime(Math.min(expMap(v, 0.02, 2) * div, delayMost) / c)}`;
+    }
+    if (p.wetMode === 3) {
+      if (p.sync) return `${syncLabel(v)}${times} back · ${fmtTime(Math.min(syncSecondsRaw(p.bpm, v) * div, WEAVE_BUF_SEC * 0.85))}`;
+      return `memory ${fmtTime(Math.min(2.8, (0.2 + v * 2.6) * div))}`;
+    }
+    return `refresh ${fmtTime(expMap(v, 0.05, 1.5) * div / c)}`;
   }
-  if (id === 'length' && p.loopMode === 1) return timeText((64 / rate) * expMap(v, 0.02, 1));
-  if (id === 'length' && p.loopMode === 0 && p.envSync) return `${syncLabel(v)} SLICE · ${timeText(syncSecondsRaw(p.bpm, v))}`;
-  if (id === 'length') return timeText(expMap(v, 0.01, p.loopMode === 0 ? 1 : 0.5) / ratio);
-  if (id === 'modWet' && p.wetMode === 3) return v < 0.34 ? 'LONG CLOTH' : v < 0.7 ? 'MIXED' : 'STITCHES';
-  if (id === 'modWet' && p.wetMode === 2) {
-    const magnitude = Math.pow(2, Math.round((-1 + 2 * Math.abs(v - 0.5) * 2) * 12) / 12);
-    return `${v < 0.5 ? 'REV' : 'FWD'} ${magnitude.toFixed(2)}×`;
+  if (id === 'mix') return `dry ${pct(v > 0.995 ? 0 : Math.min(1, 2 * (1 - v)))} / fx ${pct(Math.min(1, 2 * v))}`;
+  if (id === 'length') {
+    const full = LOOP_SAMPLES / hz;
+    if (p.loopMode === 1) return `loop ${fmtTime(full * expMap(v, 0.02, 1))} of ${fmtTime(full)}`;
+    // ENV slices to a length, so a synced LENGTH is a division of the beat.
+    if (p.loopMode === 0 && p.envSync) return `${syncLabel(v)} slice · ${fmtTime(syncSecondsRaw(p.bpm, v))}`;
+    return `slice ${fmtTime((p.loopMode === 0 ? expMap(v, 0.01, 1) : expMap(v, 0.01, 0.5)) / c)}`;
   }
-  if (id === 'modLoop' && p.loopMode === 1) {
-    const magnitude = Math.pow(2, Math.round(-1 + 3 * Math.abs(v - 0.5) * 2));
-    return `${v < 0.5 ? 'REV' : 'FWD'} ${magnitude}×`;
+  if (id === 'modWet') {
+    if (p.wetMode === 0) return `smear ${pct(v)}`;
+    if (p.wetMode === 1) return `feedback ${pct(v)}`;
+    if (p.wetMode === 3) return v < 0.34 ? `long cloth ${pct(v)}` : `short stitches ${pct(v)}`;
+    return `rate ${signedRate(slipSpeedMap(v))}`;
   }
-  if (id === 'modLoop' && p.loopMode === 2 && Math.abs(v - 0.5) < 0.03) return 'FROZEN';
-  if (id === 'memory') return v <= 0.001 ? `PEDAL · ${timeText(64 / rate)}` : `UP TO ${timeText(expMap(v, 1, 30))}`;
-  if (id === 'loopEnd') return v >= 0.999 ? 'TO THE END' : `PLAYS TO ${percent(v)}`;
+  if (id === 'clock') return `sample rate ${(clockHz(v, p.smooth) / 1000).toFixed(1)} kHz`;
+  if (id === 'modLoop') {
+    if (p.loopMode === 0) return `sensitivity ${pct(v)}`;
+    if (p.loopMode === 1) return `tape ${fmtSpeed(speedMap(v))}`;
+    return `stretch ${fmtSpeed(stretchMap(v))}, same pitch`;
+  }
+  if (id === 'balance') return `loop ${balanceLoop(v)} / wet ${balanceWet(v)}`;
+  if (id === 'wearPost') return v ? 'post loop: heard worn, recorded clean' : 'pre loop: recorded worn';
+  if (id === 'memory') return v <= 0.001 ? `pedal ${fmtTime(LOOP_SAMPLES / hz)}` : `up to ${fmtTime(expMap(v, 1, 30))} of ${fmtTime(30)}`;
+  if (id === 'loopEnd') return v >= 0.999 ? 'to the end' : `plays to ${pct(v)}`;
   // One meaning in every mode: 0 is the oldest audio, 1 the newest.
-  if (id === 'start') {
-    if (v <= 0.005) return 'THE OLDEST';
-    if (v >= 0.995) return 'THE NEWEST';
-    return `${percent(v)} IN`;
+  if (id === 'start') return v <= 0.005 ? 'the oldest' : v >= 0.995 ? 'the newest' : `${pct(v)} in`;
+  if (id === 'freeze') return v ? 'held, ringing' : 'moving';
+  if (id === 'tone') return v > 0.995 ? 'open' : `hi-cut ${pct(1 - v)}`;
+  if (id === 'recBars') return v === 0 ? 'free' : `${v} ${v === 1 ? 'bar' : 'bars'}`;
+  if (id === 'wearNoise') return v <= 0.005 ? 'worn hiss off' : `worn hiss ${pct(v)}`;
+  if (id === 'fade') return v <= 0.001 ? 'pedal decay' : `overdub keeps ${pct(1 - v)}`;
+  // WIDTH is where the removed SPREAD lives now: hard left is mono.
+  if (id === 'width') return v <= 0.005 ? 'mono' : v < 0.49 ? `narrow ${pct(v * 2)}` : v > 0.51 ? `wide ${pct((v - 0.5) * 2)}` : 'as built';
+  if (/^mod[12]/.test(id)) {
+    const field = id.slice(4), owner = id.slice(0, 4);
+    if (field === 'Wave') return RAMP_WAVES[rampIndex(v, RAMP_WAVES.length)].toLowerCase();
+    if (field === 'Rate') return p[`${owner}Sync`] ? `${rampDivLabel(v)} · ${fmtTime(rampCycleSeconds(p.bpm, v))} a turn` : `${fmtTime(1 / rampHertz(v))} a turn`;
+    if (field === 'Sync') return v ? 'follows the tempo' : 'free rate';
+    if (field === 'Hold') return v ? 'held where it is' : 'running';
+    if (field.startsWith('_')) return `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
   }
-  if (id === 'tone') return v > 0.995 ? 'OPEN' : `HI-CUT ${percent(1 - v)}`;
-  if (id === 'fade') return v <= 0.001 ? 'PEDAL DECAY' : `KEEPS ${percent(1 - v)}`;   // per overdub pass
-  // WIDTH took SPREAD's job: all the way left is mono, the middle is the image as
-  // built, and only past the middle do the sides open.
-  if (id === 'width') return v <= 0.005 ? 'MONO' : v < 0.49 ? `NARROW ${percent(v * 2)}` : v > 0.51 ? `WIDE ${percent((v - 0.5) * 2)}` : 'AS BUILT';
-  if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1× CLOCK' : `${d}× SLOWER`; }
-  if (id === 'envSync') return v ? 'TEMPO' : 'FREE';
-  if (id === 'freeze') return v ? 'HELD, RINGING' : 'MOVING';
-  return percent(v);
-}
-
-function Spark({ size = 18, className = '' }) {
-  return <svg className={className} width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden="true"><path d="M7 0h2v4h2v2h2v1h3v2h-3v1h-2v2H9v4H7v-4H5v-2H3V9H0V7h3V6h2V4h2z" fill="currentColor" /></svg>;
-}
-function Heart({ size = 18, className = '' }) {
-  return <svg className={className} width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden="true"><path d="M2 2h4v1h1v1h2V3h1V2h4v1h1v6h-1v2h-2v2h-2v2H6v-2H4v-2H2V9H1V3h1z" fill="currentColor" /></svg>;
-}
-function Eyes({ className = '' }) {
-  return <svg className={className} width="37" height="25" viewBox="0 0 37 25" shapeRendering="crispEdges" aria-hidden="true"><path d="M5 1h8v2h3v4h2V6h2V3h3V1h8v2h3v4h2v10h-2v4h-3v2h-8v-2h-3v-4h-2v1h-2v3h-3v2H5v-2H2v-4H0V7h2V3h3z" fill="white" stroke="currentColor" strokeWidth="2"/><path d="M9 8h4v8H9zm15 0h4v8h-4z" fill="currentColor"/><path d="M10 8h2v3h-2zm15 0h2v3h-2z" fill="white"/></svg>;
-}
-function Orbit({ className = '' }) {
-  return <svg className={className} width="98" height="60" viewBox="0 0 98 60" aria-hidden="true"><g fill="none" stroke="currentColor" strokeWidth="1.6"><ellipse cx="49" cy="30" rx="23" ry="23"/><ellipse cx="49" cy="30" rx="45" ry="11" transform="rotate(-14 49 30)"/><path d="M26 30h46M49 7c-8 6-11 14-11 23s3 17 11 23M49 7c8 6 11 14 11 23s-3 17-11 23"/></g><path fill="currentColor" d="M77 4h2v4h3v2h-3v4h-2v-4h-3V8h3z"/></svg>;
-}
-function TinyArrow({ direction = 'right' }) {
-  return <span aria-hidden="true" className="tiny-arrow">{direction === 'left' ? '◀' : '▶'}</span>;
-}
-
-// `toggle` is the one switch that belongs to a knob rather than to the panel: the
-// tempo switch for a block that can follow the beat. It sits straight under its
-// knob and is rendered only when the mode in question actually uses it, so it
-// never appears as a dead control.
-function Knob({ id, title, sub, value, params, onChange, onTouch, dark = false, toggle, modSource = 0 }) {
-  const element = useRef(null);
-  const drag = useRef(null);
-  const valueRef = useRef(value);
-  valueRef.current = value;
-  const changeRef = useRef(onChange);
-  changeRef.current = onChange;
-  useEffect(() => {
-    const el = element.current;
-    const wheel = (event) => {
-      event.preventDefault();
-      changeRef.current(id, clamp(valueRef.current - event.deltaY * (event.shiftKey ? 0.0002 : 0.001)));
-      onTouch(id);
-    };
-    el.addEventListener('wheel', wheel, { passive: false });
-    return () => el.removeEventListener('wheel', wheel);
-  }, [id, onTouch]);
-  const [hoverRing, setHoverRing] = useState(-1);
-  const ringAt = (event) => {
-    const box = element.current.getBoundingClientRect();
-    const d = Math.hypot(event.clientX - (box.left + box.width / 2), event.clientY - (box.top + box.height / 2)) * 120 / box.width;
-    if (d < 43 || d > 63) return -1;
-    const on = [0, 1].map((k) => Math.abs(params[`mod${k + 1}_${id}`] || 0) >= 0.005);
-    if (on[0] && on[1]) return d >= 57 ? 1 : 0;
-    return on[0] && modSource !== 1 ? 0 : on[1] && modSource !== 0 ? 1 : modSource;
-  };
-  const down = (event) => {
-    if (event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    // The rings are handles, as in the plug-in: a press around the knob drags that
-    // source's depth, and where there's no ring yet it makes one for the selected source.
-    const ring = ringAt(event);
-    const depthKey = `mod${(ring >= 0 ? ring : modSource) + 1}_${id}`;
-    drag.current = ring >= 0 || event.altKey ? { y: event.clientY, x: event.clientX, depthKey, value: params[depthKey] } : { y: event.clientY, x: event.clientX, value };
-    onTouch(id);
-    event.currentTarget.focus();
-  };
-  const move = (event) => {
-    if (!drag.current) { const r = ringAt(event); if (r !== hoverRing) setHoverRing(r); return; }
-    if (drag.current.depthKey) { onChange(drag.current.depthKey, clamp(drag.current.value + (drag.current.y - event.clientY) / 150, -1, 1)); return; }
-    const delta = (drag.current.y - event.clientY) + (event.clientX - drag.current.x) * 0.25;
-    onChange(id, clamp(drag.current.value + delta / (event.shiftKey ? 700 : 180)));
-  };
-  const key = (event) => {
-    let v = value;
-    const step = event.shiftKey ? 0.05 : 0.01;
-    if (event.key === 'ArrowUp' || event.key === 'ArrowRight') v += step;
-    else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') v -= step;
-    else if (event.key === 'Home') v = 0;
-    else if (event.key === 'End') v = 1;
-    else if (event.key === 'Delete' || event.key === 'Backspace') {
-      // All of this knob's modulation goes.
-      event.preventDefault();
-      onChange(`mod1_${id}`, 0); onChange(`mod2_${id}`, 0);
-      return;
-    }
-    else return;
-    event.preventDefault();
-    event.stopPropagation();
-    onTouch(id);
-    onChange(id, clamp(v));
-  };
-  // Five marks instead of a ring of twenty-one: the scale still reads at a
-  // glance, and the knob stays the loudest thing in the cell.
-  const ticks = Array.from({ length: 5 }, (_, i) => {
-    const a = (-135 + 270 * i / 4) * Math.PI / 180;
-    return <line key={i} x1={60 + Math.sin(a) * 50} y1={60 - Math.cos(a) * 50}
-      x2={60 + Math.sin(a) * 55} y2={60 - Math.cos(a) * 55} stroke="currentColor" strokeWidth={1.4} />;
-  });
-  return <div className="knob-block">
-    <div className="knob-heading"><span>{title}</span><span className="knob-index">{id === 'time' ? '01' : id === 'mix' ? '02' : id === 'length' ? '03' : id === 'modWet' ? '04' : id === 'clock' ? '05' : '06'}</span></div>
-    <div ref={element} data-mod-target={id} style={hoverRing >= 0 ? { cursor: 'ns-resize' } : undefined} onPointerLeave={() => setHoverRing(-1)} className={`knob ${dark ? 'knob-dark' : ''}`} role="slider" tabIndex="0"
-      aria-label={`${title}${id === 'modWet' ? ' wet' : id === 'modLoop' ? ' loop' : ''}`}
-      aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value * 100)} aria-valuetext={describe(id, params)}
-      onPointerDown={down} onPointerMove={move} onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
-      onKeyDown={key} onFocus={() => onTouch(id)} onDoubleClick={(event) => {
-        // On a ring: that source comes off this knob, as a double-click resets anything else.
-        const ring = ringAt(event);
-        if (ring >= 0 && Math.abs(params[`mod${ring + 1}_${id}`] || 0) >= 0.005) onChange(`mod${ring + 1}_${id}`, 0);
-        else onChange(id, KNOB_DEFAULTS[id]);
-      }}>
-      <svg viewBox="0 0 120 120" aria-hidden="true">
-        <g className="knob-ticks">{ticks}</g>
-        {hoverRing >= 0 && Math.abs(params[`mod${hoverRing + 1}_${id}`] || 0) < 0.005 && <circle cx="60" cy="60" r={55 + hoverRing * 3.5} fill="none" stroke={MOD_COLOURS[hoverRing]} strokeOpacity=".45"/>}
-        {[0, 1].map((k) => {
-          // Each source's swing, as a ring in its colour.
-          const d = params[`mod${k + 1}_${id}`] || 0;
-          if (Math.abs(d) < 0.005) return null;
-          const uni = params[`mod${k + 1}Uni`];
-          const lo = clamp(uni ? Math.min(value, value + d) : value - Math.abs(d)), hi = clamp(uni ? Math.max(value, value + d) : value + Math.abs(d));
-          const r = 55 + k * 3.5;
-          const at = (v) => { const a = (-135 + 270 * v) * Math.PI / 180; return `${(60 + Math.sin(a) * r).toFixed(2)} ${(60 - Math.cos(a) * r).toFixed(2)}`; };
-          return <path key={k} d={`M ${at(lo)} A ${r} ${r} 0 ${(hi - lo) * 270 > 180 ? 1 : 0} 1 ${at(hi)}`} fill="none" stroke={MOD_COLOURS[k]} strokeWidth="2.6"/>;
-        })}
-        {/* A flat disc with a thin pointer: no ring, just the five marks around
-            it, one line standing up from the middle, and a hard offset shadow so
-            it still belongs to this panel. */}
-        <circle className="knob-shadow" cx="62.6" cy="63" r="41" />
-        <circle className="knob-face" cx="60" cy="60" r="41" />
-        <g transform={`rotate(${-135 + value * 270} 60 60)`}><rect className="knob-pointer" x="58.6" y="26" width="2.8" height="34" /></g>
-      </svg>
-    </div>
-    {/* The slot is always there, so a knob with a switch and its neighbour
-        without one keep their whispers on the same line. */}
-    <div className="knob-sync-slot">
-      {(toggle || []).map((t) => <button key={t.id} type="button" className={`knob-sync ${params[t.id] ? 'on' : ''}`} role="switch"
-        aria-checked={!!params[t.id]} aria-label={t.name}
-        onClick={() => onChange(t.id, params[t.id] ? 0 : 1)}>{t.label}</button>)}
-    </div>
-    <p className="knob-whisper">{sub}</p>
-    <div className="knob-caption"><b>{describe(id, params)}</b></div>
-  </div>;
-}
-
-function ModeSelector({ label, options, value, onChange, help, hint, disabled = false }) {
-  return <div className={`mode-selector ${disabled ? 'stood-aside' : ''}`} {...(help ? help(label, hint) : {})}>
-    <div className="micro-label"><span>{label}</span><span className="micro-dots">•••</span></div>
-    <div className="mode-buttons" role="radiogroup" aria-label={label}>
-      {options.map((option, i) => <button key={option} type="button" role="radio" aria-checked={value === i} disabled={disabled} className={value === i ? 'selected' : ''} onClick={() => onChange(i)}>{option}</button>)}
-    </div>
-  </div>;
-}
-
-function Footswitch({ kind, active, state, running, onGesture }) {
-  const pressed = useRef(false);
-  const [down, setDown] = useState(false);
-  const release = () => {
-    if (!pressed.current) return;
-    pressed.current = false; setDown(false); onGesture(kind, 'up');
-  };
-  const press = () => {
-    if (pressed.current) return;
-    if (!running) { onGesture(kind, 'down'); return; }
-    pressed.current = true; setDown(true); onGesture(kind, 'down');
-  };
-  useEffect(() => {
-    const onBlur = () => release();
-    window.addEventListener('blur', onBlur);
-    return () => { window.removeEventListener('blur', onBlur); if (pressed.current) onGesture(kind, 'up'); };
-  }, [kind, onGesture]);
-  return <button type="button" className={`footswitch ${down ? 'pressed' : ''} ${active ? 'active' : ''}`} aria-label={`${kind === 'wet' ? 'Wet channel' : 'Micro-looper'}: tap to toggle, hold for ${kind === 'wet' ? 'freeze' : 'overdub'}`} aria-pressed={active}
-    onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); press(); }} onPointerUp={release} onPointerCancel={release}
-    onKeyDown={(event) => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); press(); } }}
-    onKeyUp={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); release(); } }}>
-    <div className="foot-top"><span className="led"/><strong>{kind === 'wet' ? 'WET CHANNEL' : 'MICRO-LOOPER'}</strong><span className="foot-state">{state}</span></div>
-    <div className="foot-bottom"><span>TAP {kind === 'wet' ? 'ON / OFF' : 'TO CATCH'}</span><span>HOLD {kind === 'wet' ? 'FREEZE' : 'OVERDUB'}</span></div>
-  </button>;
-}
-
-function Scope({ engineRef, running }) {
-  const canvas = useRef(null);
-  useEffect(() => {
-    let frame;
-    const g = canvas.current.getContext('2d');
-    const w = canvas.current.width, h = canvas.current.height;
-    let data = null;
-    const draw = () => {
-      g.clearRect(0, 0, w, h);
-      g.fillStyle = '#f9f8f2'; g.fillRect(0, 0, w, h);
-      g.strokeStyle = '#d9d8d1'; g.lineWidth = 1;
-      for (let x = 0; x <= w; x += 24) { g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, h); g.stroke(); }
-      for (let y = 0; y <= h; y += 20) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(w, y + 0.5); g.stroke(); }
-      const analyser = engineRef.current?.analyser;
-      if (running && analyser) {
-        if (!data || data.length !== analyser.fftSize) data = new Float32Array(analyser.fftSize);
-        analyser.getFloatTimeDomainData(data);
-        g.strokeStyle = '#171714'; g.lineWidth = 2;
-        g.beginPath();
-        for (let i = 0; i < data.length; i += 2) {
-          const x = i / (data.length - 1) * w;
-          const y = h / 2 - clamp(data[i], -1, 1) * (h * 0.42);
-          if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
-        }
-        g.stroke();
-      } else {
-        g.setLineDash([3, 4]); g.strokeStyle = '#787872'; g.beginPath(); g.moveTo(0, h / 2 + .5); g.lineTo(w, h / 2 + .5); g.stroke(); g.setLineDash([]);
-      }
-      frame = requestAnimationFrame(draw);
-    };
-    draw();
-    return () => cancelAnimationFrame(frame);
-  }, [engineRef, running]);
-  return <div className="scope-screen">
-    <div className="scope-label"><span>IN / OUT</span><span>{running ? '● SIGNAL' : '○ STANDBY'}</span></div>
-    <canvas ref={canvas} width="360" height="112" aria-label={running ? 'Live output waveform' : 'Audio monitor in standby'} />
-    {!running && <span className="scope-idle">WAITING FOR SOUND<span className="cursor">_</span></span>}
-    <div className="scope-bottom"><span>OSCILLOSCOPE 01</span><span>✳</span></div>
-  </div>;
-}
-
-// The take, with START and END as markers you drag. Pressing anywhere picks up the
-// nearer marker; START hangs a tab from the top and END stands one on the bottom,
-// so the pair stays readable when they nearly meet. Double-click opens the whole take.
-const WAVE_W = 620, WAVE_H = 84;
-function loopMarkers(state) {
-  if (!state?.lsrc) return null;
-  const s = clamp(state.winStart, 0, state.lsrc);
-  return { s, e: clamp(s + state.winLen, s, state.lsrc), len: state.lsrc };
-}
-function nearestMarker(m, at) {
-  // Equal distance (a window squeezed to a sliver): right of the pair is END's
-  // side, left is START's, so both stay reachable.
-  const toStart = Math.abs(at - m.s), toEnd = Math.abs(at - m.e);
-  if (Math.abs(toStart - toEnd) < m.len / WAVE_W / 2) return at > m.e ? 1 : 0;
-  return toStart < toEnd ? 0 : 1;
-}
-
-function LoopWave({ wave, state, params, onChange, onTouch, help }) {
-  const canvas = useRef(null);
-  const drag = useRef(null);
-  const [hot, setHot] = useState(-1);
-  const stateRef = useRef(state); stateRef.current = state;
-  const paramsRef = useRef(params); paramsRef.current = params;
-  useEffect(() => {
-    const c = canvas.current, g = c.getContext('2d'), w = c.width, h = c.height;
-    g.clearRect(0, 0, w, h);
-    g.fillStyle = '#f8f7f0'; g.fillRect(0, 0, w, h);
-    g.strokeStyle = '#d5d4cc'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(0, h / 2 + .5); g.lineTo(w, h / 2 + .5); g.stroke();
-    const m = loopMarkers(state);
-    if (wave?.peaks && m) {
-      const peaks = wave.peaks;
-      const start = m.s / m.len, end = m.e / m.len;
-      const levelGain = Math.pow(10, params.loopDb / 20);   // what you see is the level you hear
-      // Trimmed-away audio stays visible but recedes.
-      g.fillStyle = '#e6e5dd';
-      g.fillRect(0, 0, start * w, h);
-      g.fillRect(end * w, 0, w - end * w, h);
-      for (let i = 0; i < peaks.length; i++) {
-        const x = Math.floor(i / peaks.length * w), amplitude = Math.max(1, Math.min(1, peaks[i] * 2 * levelGain) * (h / 2 - 14));
-        const inside = i / peaks.length >= start && i / peaks.length < end;
-        g.fillStyle = inside ? '#151512' : '#b3b3ab';
-        g.fillRect(x, Math.floor(h / 2 - amplitude), 2, Math.max(2, Math.floor(amplitude * 2)));
-      }
-      // The play head: where the loop is heard from. TAPE has one, the playhead; STRETCH shows
-      // both grains and ENV the slice (and the last one fading), each as dark as it's loud.
-      const heads = state.head || [state.pos, 0], levels = state.headLevel || [1, 0];
-      g.fillStyle = '#77776f';
-      for (let k = 0; k < 2; k++) {
-        const level = clamp(levels[k]);
-        if (level < 0.02) continue;
-        g.globalAlpha = level;
-        g.fillRect(Math.round(clamp((state.winStart + heads[k]) / m.len) * w), 12, 1, h - 24);
-      }
-      g.globalAlpha = 1;
-      // The markers: a full-height line, and a labelled tab the hand can find.
-      const marker = (x, top, label, lit) => {
-        const px = Math.round(clamp(x, 0, 1) * w);
-        g.fillStyle = '#151512';
-        g.fillRect(Math.min(w - 2, Math.max(0, px - 1)), 0, 2, h);
-        g.font = '11px Terminal, monospace';
-        const tw = Math.ceil(g.measureText(label).width) + 8;
-        const tx = top ? Math.min(px, w - tw) : Math.max(0, px - tw);
-        const ty = top ? 0 : h - 13;
-        g.fillStyle = lit ? '#151512' : '#f8f7f0';
-        g.fillRect(tx, ty, tw, 13);
-        g.strokeStyle = '#151512'; g.strokeRect(tx + .5, ty + .5, tw - 1, 12);
-        g.fillStyle = lit ? '#f8f7f0' : '#151512';
-        g.textBaseline = 'middle';
-        g.fillText(label, tx + 4, ty + 7);
-      };
-      marker(start, true, 'START', hot === 0);
-      marker(end, false, 'END', hot === 1);
-    } else {
-      g.fillStyle = '#9a9a92';
-      for (let x = 6; x < w; x += 12) g.fillRect(x, h / 2, 2, 2);
-    }
-  }, [wave, state, hot, params.loopDb]);
-
-  const sampleAt = (event) => {
-    const r = canvas.current.getBoundingClientRect();
-    return clamp((event.clientX - r.left) / Math.max(1, r.width)) * Math.max(64, stateRef.current.lsrc);
-  };
-  // The inverse of loopWindow() in the worklet: a marker position in samples of the
-  // take becomes START and END. ENV and STRETCH measure both against the whole take;
-  // TAPE measures END against LENGTH's span and START backwards from the tail.
-  const moveMarker = (at) => {
-    const st = stateRef.current, m = loopMarkers(st);
-    if (!m || !drag.current) return;
-    const len = Math.max(64, st.lsrc), span = Math.max(64, st.winSpan || len);
-    const tape = paramsRef.current.loopMode === 1;
-    const minW = Math.max(64, 0.02 * span);          // END never closes the window
-    if (drag.current.which === 1) {
-      onChange('loopEnd', clamp(clamp(at - m.s, minW, span) / span));
-      onTouch('loopEnd');
-      return;
-    }
-    const anchor = drag.current.anchorEnd;           // START moves under a fixed end
-    // START may not pass END, may not open the window wider than the span, and in
-    // TAPE cannot leave the room LENGTH allows.
-    const lo = Math.max(0, anchor - span);
-    let xs = clamp(at, lo, Math.max(lo, anchor - minW));
-    if (tape) xs = Math.min(xs, Math.max(0, len - span));
-    // START counts from the oldest audio in every mode; a window against the end of the
-    // take is START 1, so it keeps following the newest audio.
-    const tail = tape ? xs >= len - span - 0.5 : anchor >= len - 0.5;
-    onChange('start', tail ? 1 : clamp(xs / Math.max(1, len - 64)));
-    onChange('loopEnd', clamp((anchor - xs) / span, 0.02, 1));
-    onTouch('start');
-  };
-  const down = (event) => {
-    const m = loopMarkers(stateRef.current);
-    if (event.button !== 0 || !m) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const at = sampleAt(event);
-    drag.current = { which: nearestMarker(m, at), anchorEnd: m.e };
-    setHot(drag.current.which);
-    moveMarker(at);
-  };
-  const move = (event) => {
-    if (drag.current) { moveMarker(sampleAt(event)); return; }
-    const m = loopMarkers(stateRef.current);
-    const h = m ? nearestMarker(m, sampleAt(event)) : -1;
-    if (h !== hot) setHot(h);
-  };
-  const up = () => { drag.current = null; };
-  const reset = () => { onChange('start', BASE.start); onChange('loopEnd', BASE.loopEnd); onTouch('loopEnd'); };
-  // From the keyboard: the arrows move END, with shift they move START; either way
-  // right is towards the present.
-  const key = (event) => {
-    const d = event.key === 'ArrowRight' ? 0.01 : event.key === 'ArrowLeft' ? -0.01 : 0;
-    if (!d) { if (event.key === 'Home') { event.preventDefault(); reset(); } return; }
-    event.preventDefault();
-    const p = paramsRef.current;
-    if (event.shiftKey) { onChange('start', clamp(p.start + d)); onTouch('start'); }
-    else { onChange('loopEnd', clamp(p.loopEnd + d, 0.02, 1)); onTouch('loopEnd'); }
-  };
-  const has = !!(wave && state?.lsrc);
-  return <div className={`loop-wave ${has ? 'live' : ''}`} tabIndex={has ? 0 : -1} role="group"
-    aria-label={has ? `Captured loop. START ${describe('start', params)}, END ${describe('loopEnd', params)}. Arrow keys move END, shift and arrow keys move START.` : 'No loop captured yet'}
-    onKeyDown={key} {...help('START / END', 'drag the markers, or press anywhere and the nearer one jumps to you. moving START keeps the end where it is. double-click to hear the whole take again.')}>
-    <canvas ref={canvas} width={WAVE_W} height={WAVE_H} className={hot >= 0 && has ? 'grab' : ''}
-      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
-      onPointerLeave={() => { if (!drag.current) setHot(-1); }} onDoubleClick={reset}/>
-    {!wave && <span>YOUR LITTLE MOMENTS LIVE HERE_</span>}
-  </div>;
-}
-
-// RECORD's bar counts. 0 is FREE: it records until the next tap. Here there is no host
-// transport, so a bar count starts at the tap, timed from the TEMPO field.
-const REC_BARS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
-
-function TrimStrip({ params, onChange, help }) {
-  const hint = 'in CAPTURE, how much of the recent past a tap keeps. RECORD ignores it: the bars or your second tap decide, up to 32 s';
-  const record = params.recMode === 1;   // MEMORY is CAPTURE's
-  return <div className="trim-strip" role="group" aria-label="Loop trim">
-    <label className={`trim-control ${record ? 'trim-off' : ''}`} {...help('MEMORY', hint)}>
-      <span>MEMORY</span>
-      <input type="range" min="0" max="1" step="0.005" value={params.memory} disabled={record} aria-label={`MEMORY: ${hint}`} onChange={(event) => onChange('memory', Number(event.target.value))}/>
-      <b>{memoryText(params.memory)}</b>
-    </label>
-    <label className="trim-control trim-gain" {...help('LOOP GAIN', 'the loop\u2019s own level.')}>
-      <span>GAIN</span>
-      <input type="range" min="-24" max="12" step="0.5" value={params.loopDb} aria-label="Loop gain in dB" onDoubleClick={() => onChange('loopDb', 0)} onChange={(event) => onChange('loopDb', Number(event.target.value))}/>
-      <b>{params.loopDb > 0 ? '+' : ''}{params.loopDb.toFixed(1)} DB</b>
-    </label>
-    <label className="trim-control" {...help('LOOP SWITCH', 'capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.')}>
-      <span>LOOP</span>
-      <select aria-label="Loop switch" value={params.recMode} onChange={(event) => onChange('recMode', Number(event.target.value))}>
-        <option value={0}>CAPTURE</option>
-        <option value={1}>RECORD</option>
-      </select>
-    </label>
-    {params.recMode === 1 && <label className="trim-control" {...help('BARS', 'free records until the next tap. a number records that many bars at the TEMPO, then plays. longer than MEMORY allows, MEMORY wins.')}>
-      <span>BARS</span>
-      <select aria-label="Bars to record" value={params.recBars} onChange={(event) => onChange('recBars', Number(event.target.value))}>
-        {REC_BARS.map((n) => <option key={n} value={n}>{n === 0 ? 'FREE' : n}</option>)}
-      </select>
-    </label>}
-    <div className="trim-readout"><span>START</span><b>{describe('start', params)}</b></div>
-    <div className="trim-readout"><span>END</span><b>{describe('loopEnd', params)}</b></div>
-    <span className="trim-hint">DRAG THE MARKERS · DOUBLE-CLICK FOR ALL</span>
-  </div>;
-}
-
-// The options the pedal hides behind both footswitches. They used to live on a
-// separate page of the browser version; they sit on the panel now, so nothing
-// has to be opened to be reached.
-function HoodPanel({ params, onChange, help }) {
-  const rows = [
-    ['tone', 'TONE', 'a hi-cut on the wet side. right is open; left is soft and far away.'],
-    ['fade', 'FADE', 'how much of the old take survives an overdub: hold the LOOP footswitch while a loop plays to record on top of it. left keeps the pedal\u2019s slow erosion; right lets the new layer win.'],
-    ['width', 'WIDTH', 'how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.'],
-    ['wetDiv', 'WET DIV', 'the wet side runs on a divided clock, so the room and the echo stretch out.'],
-    ['loopDiv', 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.'],
-  ];
-  return <div className="hood-panel">
-    <div className="side-rule hood-heading"><span>UNDER THE HOOD</span><span>THE OPTIONS UNDER THE OPTIONS</span></div>
-    {rows.map(([id, label, hint]) => (
-      <label key={id} className="level-row hood-row" {...help(label, hint)}>
-        <span>{label}</span>
-        <input type="range" min="0" max="1" step="0.005" value={params[id]} aria-label={`${label}: ${hint}`} onChange={(event) => onChange(id, Number(event.target.value))}/>
-        <b>{describe(id, params)}</b>
-      </label>
-    ))}
-    {/* The hold gesture without the holding: the wet side comes up frozen. */}
-    <div className="hood-freeze">
-      <Dip label="FREEZE" checked={params.freeze} onClick={() => onChange('freeze', params.freeze ? 0 : 1)}
-        help={help('FREEZE', 'the hold gesture without the holding: the wet side comes up frozen and rings on its own.')}/>
-      <div className="hood-freeze-copy"><b>{describe('freeze', params)}</b>a hold you no longer have to hold.</div>
-    </div>
-  </div>;
-}
-
-// A short list as a cell: the arrows step either way and clicking anywhere else steps
-// forward, so pressing it is the obvious thing to do with it.
-function Stepper({ label, names, value, onChange, hint, help }) {
-  const index = rampIndex(value, names);
-  const step = (d) => onChange(rampValue((index + d + names.length) % names.length, names));
-  return <div className="stepper" role="group" aria-label={`${label}: ${names[index]}. ${hint}`} title={`${label}: ${names[index]}. Click to step`} onClick={() => step(1)} {...(help || {})}>
-    <button type="button" aria-label={`previous ${label}`} onClick={(event) => { event.stopPropagation(); step(-1); }}>◀</button>
-    <span className="stepper-cap">{label}</span>
-    <b aria-live="polite">{names[index]}</b>
-    <button type="button" aria-label={`next ${label}`} onClick={(event) => { event.stopPropagation(); step(1); }}>▶</button>
-  </div>;
-}
-
-// The modulation panel: two sources you drag onto what they should move, the selected
-// one's shape, rate and switches, and every route in a list.
-function ModPanel({ params, onChange, help, source, setSource, state }) {
-  const [dragging, setDragging] = useState(-1);
-  const n = source + 1;
-  const synced = !!params[`mod${n}Sync`];
-  // A row stays once it's there, even at 0%, so a depth can pass through zero: only its
-  // × takes it away.
-  const shownRoutes = useRef(new Set());
-  [0, 1].forEach((k) => MOD_TARGETS.forEach((t) => { if (Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005) shownRoutes.current.add(`${k}${t}`); }));
-  const routes = [0, 1].flatMap((k) => MOD_TARGETS.filter((t) => shownRoutes.current.has(`${k}${t}`)).map((t) => ({ k, t })));
-  const drop = (k, event) => {
-    setDragging(-1);
-    const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-mod-target]');
-    if (!hit) return;
-    const key = `mod${k + 1}_${hit.dataset.modTarget}`;
-    if (Math.abs(params[key]) < 0.005) onChange(key, 0.5);
-    setSource(k);
-  };
-  return <div className="ramp-panel">
-    <div className="side-rule ramp-heading"><span>MODULATION</span><span>DRAG A SOURCE ONTO A KNOB</span></div>
-    <div className="mod-chips">
-      {[0, 1].map((k) => <div key={k} className={`mod-chip ${source === k ? 'selected' : ''} ${dragging === k ? 'dragging' : ''}`} role="button" tabIndex="0" aria-label={`Modulation source ${k + 1}`}
-        onClick={() => setSource(k)} onPointerDown={(event) => { if (event.button === 0 && !event.target.closest('button')) { event.currentTarget.setPointerCapture(event.pointerId); setDragging(k); } }}
-        onPointerUp={(event) => { if (dragging === k) drop(k, event); }} {...help(`MOD ${k + 1}`, 'click to show its controls. drag it onto any knob or WET / LOOP to route it. alt-drag a knob to set the selected source\u2019s depth.')}>
-        <span className="mod-num" style={{ background: MOD_COLOURS[k] }}>{k + 1}</span>
-        <span className="mod-count">{MOD_TARGETS.filter((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005).length} ROUTES</span>
-        <button type="button" className={`mod-on ${params[`mod${k + 1}On`] ? 'on' : ''}`} role="switch" aria-checked={!!params[`mod${k + 1}On`]} aria-label={`Source ${k + 1} on`} onClick={(event) => { event.stopPropagation(); onChange(`mod${k + 1}On`, params[`mod${k + 1}On`] ? 0 : 1); }}/>
-        <i className="mod-meter"><i style={{ width: `${(state?.mods?.[k] ?? 0) * 100}%`, background: MOD_COLOURS[k] }}/></i>
-      </div>)}
-    </div>
-    <div className="ramp-grid">
-      <Stepper label="SHAPE" names={RAMP_WAVES} value={params[`mod${n}Wave`]} onChange={(v) => onChange(`mod${n}Wave`, v)} hint="click to step the shape"
-        help={help('MODULATION SHAPE', 'click to step the shape: triangle, square, sine, sawtooth, random, smooth random.')}/>
-      <label className="rate-row" {...help('MODULATION RATE', 'how slowly this source turns. with SYNC on, a musical span instead of a free speed.')}><span>{synced ? 'SPAN' : 'RATE'}</span>
-        <input aria-label="Modulation rate" type="range" min="0" max="1" step="0.005" value={params[`mod${n}Rate`]} onChange={(event) => onChange(`mod${n}Rate`, Number(event.target.value))}/>
-        <b>{synced ? `${rampDivLabel(params[`mod${n}Rate`])} · ${timeText(rampCycleSeconds(params.bpm, params[`mod${n}Rate`]))}` : rampHint(params[`mod${n}Rate`])}</b>
-      </label>
-    </div>
-    <div className="dips ramp-dips">
-      {[['Uni', 'UNI', 'the swing sits above the knob instead of either side of it.'],
-        ['Sync', 'SYNC', 'the rate becomes a division of the beat: eight bars down to a sixteenth.'],
-        ['Hold', 'HOLD', 'this source stops where it is and its knobs stay pushed there.']].map(([f, label, hint]) => <Dip key={f} label={label} checked={params[`mod${n}${f}`]} onClick={() => onChange(`mod${n}${f}`, params[`mod${n}${f}`] ? 0 : 1)} help={help(label, hint)}/>)}
-    </div>
-    {routes.length > 0 && <ul className="mod-routes" aria-label="Modulation routes">
-      {routes.map(({ k, t }) => <li key={`${k}${t}`}>
-        <span className="mod-num" style={{ background: MOD_COLOURS[k] }}>{k + 1}</span>
-        <span>{MOD_TARGET_NAMES[t]}</span>
-        <input type="range" aria-label={`Source ${k + 1} depth on ${MOD_TARGET_NAMES[t]}`} min="-1" max="1" step="0.01" value={params[`mod${k + 1}_${t}`]} onChange={(event) => onChange(`mod${k + 1}_${t}`, Number(event.target.value))}/>
-        <b>{Math.round(params[`mod${k + 1}_${t}`] * 100)}%</b>
-        <button type="button" aria-label={`Remove source ${k + 1} from ${MOD_TARGET_NAMES[t]}`} onClick={() => { shownRoutes.current.delete(`${k}${t}`); onChange(`mod${k + 1}_${t}`, 0); }}>×</button>
-      </li>)}
-    </ul>}
-  </div>;
-}
-
-// The browser the plug-ins share: search, categories, stars. Clicking a preset plays
-// it; KEEP keeps it, CANCEL puts back the sound there was.
-function PresetBrowser({ patches, current, favourites, onChoose, onStar, onKeep, onCancel, onSave, onDelete }) {
-  const [view, setView] = useState('ALL');
-  const [search, setSearch] = useState('');
-  const query = search.trim().toUpperCase();
-  const shown = patches.filter((patch) => (view === 'ALL' || (view === 'FAV' ? favourites.includes(patch.name) : patch.category === view))
-    && (!query || patch.name.toUpperCase().includes(query) || patch.category.includes(query)));
-  return <div className="preset-browser" role="dialog" aria-label="Presets" onKeyDown={(event) => {
-    if (event.key === 'Escape') onCancel();
-    if (event.key === 'Enter' && event.target.tagName !== 'BUTTON') onKeep();
-  }}>
-    <div className="preset-head"><span>{shown.length} {shown.length === 1 ? 'SOUND' : 'SOUNDS'}</span><span>CLICK TO HEAR / ENTER KEEPS / ESC GOES BACK</span></div>
-    <div className="preset-top">
-      <input autoFocus aria-label="Search presets" placeholder="SEARCH" value={search} onChange={(event) => setSearch(event.target.value)}/>
-      <div className="preset-views" role="group" aria-label="Preset category">
-        {['ALL', 'FAV', ...PRESET_CATEGORIES].map((name) => <button key={name} type="button" aria-pressed={view === name} className={view === name ? 'selected' : ''} onClick={() => setView(name)}>{name}</button>)}
-      </div>
-    </div>
-    <ul className="preset-list">
-      {shown.map((patch) => <li key={patch.name} className={patch.name === current ? 'current' : ''}>
-        <button type="button" className="preset-star" aria-pressed={favourites.includes(patch.name)} aria-label={`Favourite ${patch.name}`} onClick={() => onStar(patch.name)}>{favourites.includes(patch.name) ? '★' : '☆'}</button>
-        <button type="button" className="preset-name" onClick={() => onChoose(patch)}>{patch.name}</button>
-        <span>{patch.category}</span><span>{patch.factory ? 'FACTORY' : 'USER'}</span>
-        {!patch.factory && <button type="button" className="preset-remove" aria-label={`Delete ${patch.name}`} onClick={() => onDelete(patch.name)}>×</button>}
-      </li>)}
-    </ul>
-    <div className="preset-foot">
-      <button type="button" onClick={() => onSave(PRESET_CATEGORIES.includes(view) ? view : 'USER')}>SAVE AS...</button>
-      <span/>
-      <button type="button" onClick={onCancel}>CANCEL</button>
-      <button type="button" className="keep" onClick={onKeep}>KEEP</button>
-    </div>
-  </div>;
-}
-
-// OVERDUB (latching, only over a playing loop), CLEAR and UNDO, under the LOOP switch.
-function TakeKeys({ state, running, engine, help }) {
-  const can = running && !!state;
-  const latched = !!state?.dubLatched;
-  const canDub = can && (state.canOverdub || latched);
-  const canClear = can && (state.lsrc > 0 || state.loop === 'rec' || state.recArmed);
-  const canUndo = can && state.undoKind > 0 && state.loop !== 'rec' && !state.recArmed;
-  return <div className="take-keys">
-    <button type="button" className={`take-key ${latched ? 'on' : ''}`} aria-pressed={latched} disabled={!canDub} onClick={() => engine?.overdub(!latched)}
-      {...help('OVERDUB', 'latches: layers into the playing loop until you switch it off. needs a loop playing.')}>OVERDUB</button>
-    <button type="button" className="take-key" disabled={!canClear} onClick={() => engine?.clearLoop()}
-      {...help('CLEAR', 'empties the take. undo brings it back.')}>CLEAR</button>
-    <button type="button" className="take-key" disabled={!canUndo} onClick={() => engine?.undoLoop()}
-      {...help('UNDO', 'one step back: a clear, a new take, or the last overdub layer. press again to redo.')}>{state?.undoRedo ? 'REDO' : 'UNDO'}</button>
-  </div>;
-}
-
-function Dip({ label, checked, onClick, help }) {
-  return <button type="button" className="dip" role="switch" aria-checked={!!checked} aria-label={label} onClick={onClick} {...(help || {})}>
-    <span className={`dip-track ${checked ? 'on' : ''}`}><span /></span><span>{label}</span>
-  </button>;
+  if (id === 'loopDb') return `${Math.round(v * 2) > 0 ? '+' : ''}${(Math.round(v * 2) / 2).toFixed(1)} dB`;
+  if (id === 'envSync') return v ? 'slice follows the tempo' : 'free slice';
+  if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1x clock' : `${d}x slower`; }
+  return v.toFixed(3);
 }
 
 // Settings and presets saved before START meant the same in every mode stored TAPE's START
@@ -772,6 +256,1000 @@ function migrateShapes(p) {
   return out;
 }
 
+// The window the waveform's markers ask for, as the parameters that give it: a copy of
+// loopTrim() in native/plugin/LoopTrim.h. START counts from the oldest audio in every mode;
+// a window against the end of the take is START 1, so it keeps following the newest audio.
+// TAPE's window sits inside LENGTH's span, so there LENGTH gives way, only as far as needed.
+function loopTrim(tape, takeLength, lengthKnob, wantedStart, wantedWidth) {
+  const len = Math.max(64, takeLength);
+  const shortest = Math.max(64, 0.02 * len);
+  const width = clamp(wantedWidth, shortest, len);
+  const first = clamp(wantedStart, 0, len - width);
+  const out = { start: 0, end: 1, length: lengthKnob, firstSample: Math.round(first), width: Math.round(width) };
+  const startFor = (span) => {
+    if (first >= len - span - 0.5) return 1;
+    return len > 64 ? clamp(first / (len - 64)) : 0;
+  };
+  if (!tape) { out.end = width / len; out.start = startFor(width); return out; }
+  const wanted = Math.round(len * Math.min(1, 0.02 + 0.98 * clamp(lengthKnob)));
+  const span = clamp(wanted, width, Math.max(width, len - first));
+  if (span !== wanted) out.length = clamp((span / len - 0.02) / 0.98);
+  out.start = startFor(span);
+  out.end = clamp(width / span, 0.02, 1);
+  return out;
+}
+
+// ───────── the design canvas ─────────
+// Everything is drawn on the plug-in's design canvas, 1200 x 820, at the plug-in's own
+// coordinates (BroodEditor::resized), and the whole canvas is scaled to the window, so
+// nothing reflows. The Bench's row holds the source picker here.
+const W = 1200, H = 820;
+const INK = '#181815', PAPER = '#f6f3ea', MUTED = '#5f5f57', RULE = '#bdb9ab', LIT = '#c98f2e', MOSS = '#5d7046';
+const DIMMED = '#6b6963';   // the take strip's dimmed audio: ink a third of the way to paper
+const TICK = '#a09d96';     // its second ticks: ink most of the way to paper
+// Font sizes: the plug-in's sizes are JUCE heights, so CSS size = height / hem. Names are drawn
+// at 0.72 of the number in the code, values 2 under it.
+const nf = (n) => ({ fontSize: `${(n * 0.72 / 1.266).toFixed(3)}px` });   // Overpass Medium
+const vf = (n) => ({ fontSize: `${((n - 2) / 1.19).toFixed(3)}px` });      // Chivo Mono
+const sf = (n) => ({ fontSize: `${(n / 1.215).toFixed(3)}px` });           // B612 Mono
+const at = ([x, y, w, h]) => ({ left: x, top: y, width: w, height: h });
+const centred = (w, h, cx, cy) => [Math.round(cx - w / 2), Math.round(cy - h / 2), w, h];
+const inside = ([x, y, w, h], px, py) => px >= x && px < x + w && py >= y && py < y + h;
+// (Nothing, for a control a phone's tab leaves off the page.)
+const grow = (r, dx, dy = dx) => (r ? [r[0] - dx, r[1] - dy, r[2] + 2 * dx, r[3] + 2 * dy] : undefined);
+
+// The LOOP and MODULATION sections' insides, from their area, as resized() works them out.
+function loopRects(a) {
+  const [x, y, w] = a;
+  const slider = [x + 86, y + 36, w - 24 - 74 - 44, 21];
+  return {
+    memory: slider, balance: [slider[0] + 32, y + 61, slider[2] - 32, 21],
+    memoryLabel: [x + 12, y + 36, 70, 21], balanceLabel: [x + 12, y + 61, 70, 21],
+    memoryFigure: [x + w - 52, y + 36, 40, 21], wetEnd: [x + w - 52, y + 61, 40, 21],
+    recMode: [x + 12, y + 86, 120, 21], recBars: [x + 138, y + 86, 104, 21],
+  };
+}
+function modRects(a) {
+  const [x, y, w] = a;
+  const inner = w - 20, rest = inner - 66, chipW = Math.floor((rest - 6) / 2);
+  const half = Math.floor((inner - 8) / 2), cell = Math.floor((inner - 16) / 3) + 8;
+  return {
+    chip0: [x + 10, y + 33, chipW, 120], chip1: [x + 16 + chipW, y + 33, rest - chipW - 6, 120], routes: [x + 10 + inner - 60, y + 33, 60, 120],
+    rampWave: [x + 10, y + 171, half, 28], rampRate: [x + 18 + half, y + 171, inner - half - 8, 28],
+    rampSwitch: [[x + 10, y + 217, cell - 8, 26], [x + 10 + cell, y + 217, cell - 8, 26], [x + 10 + 2 * cell, y + 217, inner - 2 * cell, 26]],
+  };
+}
+
+// The desktop: the plug-in's own rectangles (BroodEditor::resized), design units 1200 x 820.
+const CX = [162, 438, 714];
+const R = {
+  mast: [24, 24, 1152, 72], presetBar: [776, 30, 400, 36], pedal: [24, 108, 828, 548],
+  loopView: [38, 116, 800, 100], gain: [708, 116, 130, 16], undo: [650, 116, 52, 15], clear: [590, 116, 56, 15],
+  fsWet: centred(248, 46, CX[0], 245), fsLoop: [590, 222, 176, 46], overdub: [768, 222, 70, 43],
+  character: centred(138, 24, CX[1], 234), wearPost: centred(160, 20, CX[1], 258),
+  wetMode: [CX[0] - 124, 292, 248, 28], routing: [CX[1] - 124, 292, 248, 28], loopMode: [CX[2] - 124, 292, 248, 28],
+  freeze: [38, 632, 54, 19], trails: [96, 632, 54, 19], smooth: centred(66, 19, CX[1], 642),
+  wetDiv: [156, 629, 130, 25], loopDiv: [590, 629, 130, 25],
+  tapeDelay: centred(54, 19, CX[0] + 29, 472), envSync: centred(54, 19, CX[2] - 29, 472), envSoft: centred(54, 19, CX[2] + 29, 472),
+  lcd: [864, 108, 312, 112], loopArea: [864, 230, 312, 113], rampArea: [864, 353, 312, 303],
+  hood: [24, 668, 1152, 67],
+};
+R.knob = KNOB_IDS.map((_, i) => [CX[i % 3] - 52, i < 3 ? 342 : 510, 104, 104]);
+Object.assign(R, loopRects(R.loopArea), modRects(R.rampArea));
+// The source picker, in the Bench's place under the bottom strip.
+const SRC = {
+  caption: [38, 748, 80, 50], picker: [118, 759, 156, 28], demo: [280, 759, 246, 28], load: [532, 759, 90, 28], status: [628, 759, 64, 28],
+  tour: [698, 759, 64, 28], plugin: [768, 759, 120, 28], tempoLabel: [888, 759, 56, 28], tempo: [944, 759, 104, 28], start: [1060, 759, 116, 28],
+};
+const DESK = {
+  ...R, W, H, phone: false, src: SRC, overlay: R.pedal, knobValueW: 236,
+  presetPrev: [776, 30, 32, 36], presetName: [808, 30, 270, 36], presetNext: [1078, 30, 32, 36], save: [1118, 30, 58, 36],
+  // LEVEL, TONE, FADE, WIDTH, NOISE: five even cells across the bottom strip.
+  hoodCell: [0, 1, 2, 3, 4].map((i) => [38 + i * 229, 676, 205, 52]),
+};
+function deskLayout(p) {
+  return { ...DESK, wetSync: centred(54, 19, CX[0] - (p.wetMode === 1 ? 29 : 0), 472) };
+}
+
+// A phone: the same parts, stacked on a canvas 390 wide, one column's knobs at a time.
+const PW = 390, PH = 1636;
+const PHONE = {
+  W: PW, H: PH, phone: true, knobValueW: 176,
+  presetBar: [12, 58, 366, 36], presetPrev: [12, 58, 32, 36], presetName: [48, 58, 214, 36], presetNext: [266, 58, 32, 36], save: [306, 58, 72, 36],
+  lcd: [12, 112, 366, 112], loopView: [12, 234, 366, 100], gain: [248, 234, 130, 16], undo: [190, 234, 52, 15], clear: [130, 234, 56, 15],
+  fsWet: [12, 344, 150, 52], fsLoop: [166, 344, 150, 52], overdub: [320, 344, 58, 49],
+  tabs: [12, 406, 366, 36], tabSheet: [12, 450, 366, 306], overlay: [12, 112, 366, 644],
+  loopArea: [12, 768, 366, 113], rampArea: [12, 891, 366, 260], hood: [12, 1161, 366, 236],
+  hoodCell: [0, 1, 2, 3, 4].map((i) => [24, 1169 + i * 44, 342, 44]),
+  src: {
+    caption: [24, 1407, 120, 22], picker: [12, 1433, 366, 32], demo: [12, 1471, 366, 32], load: [12, 1511, 120, 32], status: [140, 1511, 238, 32],
+    tempoLabel: [24, 1551, 50, 32], tempo: [74, 1551, 106, 32], start: [190, 1551, 188, 32], tour: [12, 1591, 120, 32], plugin: [140, 1591, 238, 32],
+  },
+};
+Object.assign(PHONE, loopRects(PHONE.loopArea), modRects(PHONE.rampArea));
+function phoneLayout(p, tab) {
+  const L = { ...PHONE, knob: [] };
+  // The tab's two knobs side by side, big enough for a thumb.
+  L.knob[tab] = [38, 524, 132, 132];
+  L.knob[tab + 3] = [220, 524, 132, 132];
+  L[['wetMode', 'routing', 'loopMode'][tab]] = [24, 462, 342, 34];
+  // Its switches in a row, then its stepper.
+  const plates = tab === 0 ? ['freeze', ...(p.wetMode !== 2 ? ['trails'] : []), ...(p.wetMode === 1 || p.wetMode === 3 ? ['wetSync'] : []), ...(p.wetMode === 1 ? ['tapeDelay'] : [])]
+    : tab === 1 ? ['smooth'] : p.loopMode === 0 ? ['envSync', 'envSoft'] : [];
+  plates.forEach((key, i) => { L[key] = [24 + i * 86, 690, 78, 26]; });
+  if (tab === 0) L.wetDiv = [24, 722, 176, 30];
+  if (tab === 1) { L.character = [24, 722, 176, 30]; L.wearPost = [206, 726, 160, 24]; }
+  if (tab === 2) L.loopDiv = [24, 722, 176, 30];
+  return L;
+}
+
+// Everything worth explaining, in the plug-in's words and order (rebuildHoverHelp): the first
+// rectangle under the mouse wins. Source picker entries are the browser's own.
+function helpTable(p, modOpen, L) {
+  const out = [];
+  const add = (r, label, text) => { if (r) out.push({ r, label, text }); };
+  const wm = p.wetMode, lm = p.loopMode, worn = !!p.classic, record = p.recMode === 1;
+  add(L.character, 'WEAR', 'one line from clean to worn. clean: fuller top, far fewer artifacts, the wet side a little later. worn: the MK I in the room, a noisy clock, a restless loop and a longer reverb.');
+  if (wm !== 2) add(L.trails, 'TRAILS', 'the tails keep falling after you switch the wet side off.');
+  add(L.smooth, 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.');
+  add(L.freeze, 'FREEZE', 'the hold gesture without the holding: the wet side comes up frozen and rings on its own.');
+  if (worn) add(L.wearPost, 'PRE / POST LOOP', "where the wear sits. pre: before the loop, so the loop records it worn. post: after the loop, so it's heard worn and the loop keeps a clean take; turning WEAR back gives it back clean.");
+  if (wm === 1) add(grow(L.tapeDelay, 4), 'TAPE', 'a tape echo: turning TIME glides the head, so the echoes bend in pitch, with a little wow and flutter and saturation. off, TIME crossfades and the pitch stays put.');
+  if (wm === 1 || wm === 3) add(grow(L.wetSync, 4), 'SYNC', 'TIME becomes a division of the beat: in DELAY the echo lands on the grid, in WEAVE so does how far back the threads reach.');
+  if (lm === 0) {
+    add(grow(L.envSync, 4), 'SYNC', 'the envelope slices by a division of the beat instead of a free length, so the loop stutters in time.');
+    add(grow(L.envSoft, 4), 'SOFT', 'the slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. a rounder, less percussive stutter.');
+  }
+  add(L.chip0, 'MOD 1', 'click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.');
+  add(L.chip1, 'MOD 2', 'click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.');
+  add(L.routes, 'ROUTES', 'every route in one list, with its depth.');
+  if (modOpen) {
+    add(L.rampWave, 'SHAPE', 'click to step the shape: triangle, square, sine, sawtooth, random, smooth random.');
+    add(L.rampRate, 'RATE', 'how slowly this source turns. with SYNC on it becomes a span of the beat.');
+    add(L.rampSwitch[0], 'UNI', 'the swing sits above the knob instead of either side of it.');
+    add(L.rampSwitch[1], 'SYNC', 'the rate becomes a division of the beat: eight bars down to a sixteenth.');
+    add(L.rampSwitch[2], 'HOLD', 'this source stops where it is and its knobs stay pushed there. CC 52 holds both.');
+  }
+  add(grow(L.memory, 0, 2), 'MEMORY', 'in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal\'s own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.');
+  add(L.gain, 'GAIN', 'the loop\'s own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.');
+  // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
+  add(L.clear, 'CLEAR', 'empties the take. undo brings it back.');
+  add(L.undo, 'UNDO', 'one step back: a clear, a new take, or the last overdub layer. press again to redo.');
+  add(L.loopView, 'THE WINDOW', 'drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.');
+  add(L.recMode, 'CAPTURE / RECORD', 'capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.');
+  if (record) add(L.recBars, 'BARS', 'free records until the next tap. a number records that many bars, then plays.');
+  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'the loop against the wet side. left: the loop alone. right: the wet side alone. in the middle, both in full. drop a source here: its bar is the swing, the small tab is where it is now.');
+  // The plug-in's LEVEL drives into old tape past the middle; this one only sets the level
+  // (IN THE PLUG-IN says so).
+  add(L.hoodCell[0], 'LEVEL', 'how loud the input reaches Brood. the middle is as it comes in.');
+  add(L.wetMode, 'WET MODE', 'four ways of treating time: reverb, delay, slip, weave.');
+  add(L.routing, 'ROUTING', 'in: the wet side hears the input, and the loop keeps it. in + loop: it hears the input and the loop, and the loop keeps it. loop: it hears only the loop, and the loop keeps only the input.');
+  add(L.loopMode, 'LOOP MODE', 'three ways of holding a moment: envelope, tape, stretch.');
+  add(L.fsWet, 'WET', 'tap for the wet side, hold to freeze it where it stands. key A.');
+  add(L.fsLoop, 'LOOP', 'tap to catch the recent past, tap again to stop, hold to overdub. key L.');
+  add(L.overdub, 'OVERDUB', 'latches: layers into the playing loop until you switch it off. needs a loop playing.');
+  add(L.presetBar, 'PATCH', 'click the name to search, star and audition sounds. the arrows step through them. SAVE keeps what you hear.');
+  [['TONE', 'a hi-cut on the wet side. right is open, left is soft and far away.'],
+    ['FADE', 'how much of the old take an overdub erases. left keeps the pedal\'s slow erosion, right replaces it.'],
+    ['WIDTH', 'how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.'],
+    ['NOISE', 'how much of the worn clock\'s hiss is let through. only heard with WEAR on WORN; left is silent.']]
+    .forEach(([label, text], i) => add(L.hoodCell[i + 1], label, text));
+  add(L.wetDiv, 'WET DIV', 'the wet side runs on a divided clock, so the room and the echo stretch out.');
+  add(L.loopDiv, 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.');
+  // The source picker exists only in the browser.
+  add(L.src.picker, 'SOURCE', 'what Brood hears: a demo loop, an audio file of your own, or the microphone. use headphones with the microphone.');
+  add(L.src.demo, 'DEMO', 'seven loops to play Brood with when nothing is plugged in. click to step to the next; each one sets TEMPO to its own.');
+  add(L.src.load, 'LOAD FILE', 'choose an audio file from this computer. it loops into Brood; nothing is uploaded.');
+  add(L.src.tempo, 'TEMPO', 'the beat SYNC and RECORD\'s bars count in. a host sets it in the plug-in; here you do.');
+  add(L.src.tour, 'TOUR', 'a few steps through brood, one part of the panel at a time. the sound and every setting carry on as they are.');
+  add(L.src.plugin, 'IN THE PLUG-IN', 'what the plug-in does that this page does not.');
+  add(L.src.start, 'AUDIO', 'starts and stops the sound in this page. nothing plays until you press it.');
+  // The knobs say what they do in the current mode. Last, so a switch beside a knob explains itself first.
+  KNOB_IDS.forEach((_, i) => add(L.knob?.[i], knobName(i, p), `${WHISPER[i][KNOB_MODE[i] === 0 ? wm : KNOB_MODE[i] === 1 ? lm : 0]}.`));
+  return out;
+}
+// ───────── the wordmark ─────────
+// "BROOD" in the thin cut of Squarepusher with its D redrawn, as an outline (never the font
+// file): wordmarkOutline in native/plugin/PluginEditor.cpp, font units, y up, 360 tall.
+const WORDMARK = [
+  [[0, 360], [648, 360], [648, 0], [144, 0], [144, 72], [576, 72], [576, 144], [144, 144], [144, 216], [576, 216], [576, 288], [72, 288], [72, 0], [0, 0]],
+  [[792, 360], [1440, 360], [1440, 144], [1008, 144], [1008, 72], [1440, 72], [1440, 0], [936, 0], [936, 216], [1368, 216], [1368, 288], [864, 288], [864, 0], [792, 0]],
+  [[1584, 360], [2232, 360], [2232, 0], [1584, 0]],
+  [[2160, 72], [2160, 288], [1656, 288], [1656, 72]],
+  [[2376, 360], [3024, 360], [3024, 0], [2376, 0]],
+  [[2952, 72], [2952, 288], [2448, 288], [2448, 72]],
+  [[3168, 360], [3672, 360], [3816, 216], [3816, 144], [3672, 0], [3168, 0], [3168, 216], [3240, 216], [3240, 72], [3642, 72], [3744, 174], [3744, 186], [3642, 288], [3168, 288]],
+];
+const WORDMARK_PATH = WORDMARK.map((c) => `M${c.map(([x, y]) => `${x} ${360 - y}`).join('L')}Z`).join('');
+function Wordmark({ r }) {
+  return <svg className="abs" style={at(r)} viewBox="0 0 3816 360" role="img" aria-label="Brood"><path d={WORDMARK_PATH} fill={INK} fillRule="evenodd"/></svg>;
+}
+
+// ───────── small parts ─────────
+// A line of text in a rectangle, as JUCE's drawText draws it: one line, vertically centred.
+// With `fit`, text too wide for its box is squeezed sideways, as drawFittedText does, down to
+// 0.7 of its width (JUCE's default), then cut.
+function Txt({ r, align = 'left', cls = 'nm', size, color, children, style, fit }) {
+  const el = useRef(null);
+  const text = React.Children.toArray(children).join('');
+  useLayoutEffect(() => {
+    if (!fit) return;
+    const node = el.current.firstChild;
+    node.style.transform = '';
+    const k = Math.max(0.7, Math.min(1, el.current.clientWidth / Math.max(1, node.scrollWidth)));
+    if (k < 1) node.style.transform = `scaleX(${k.toFixed(3)})`;
+  }, [fit, text, r[2], size?.fontSize]);
+  return <div ref={el} className={`abs txt ${cls} ${align}`} style={{ ...at(r), lineHeight: `${r[3]}px`, color, ...size, ...style }}>
+    {fit ? <span className="fit" style={{ transformOrigin: align === 'center' ? '50% 50%' : align === 'right' ? '100% 50%' : '0 50%' }}>{children}</span> : children}
+  </div>;
+}
+
+// A pointer drag on a design-sized element, in design units.
+function designPoint(element, event, width) {
+  const box = element.getBoundingClientRect();
+  const k = width / Math.max(1, box.width);
+  return { x: (event.clientX - box.left) * k, y: (event.clientY - box.top) * k, k };
+}
+
+// A horizontal slider: a rounded track that fills to the value, and a round thumb (the kit's
+// frameless drawLinearSlider). JUCE keeps the thumb inside, a thumb's radius from each end.
+function Slider({ r, value, onChange, onReset, onTouch, label, valueText, disabled = false, children, targetId }) {
+  const el = useRef(null);
+  const inset = Math.min(12, r[3] / 2);
+  const span = r[2] - 2 * inset;
+  const posAt = (event) => clamp((designPoint(el.current, event, r[2]).x - inset) / span);
+  const down = (event) => {
+    if (event.button !== 0 || disabled) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.dataset.dragging = '1';
+    onTouch?.();
+    onChange(posAt(event));
+  };
+  const move = (event) => { if (event.currentTarget.dataset.dragging) onChange(posAt(event)); };
+  const up = (event) => { delete event.currentTarget.dataset.dragging; };
+  const key = (event) => {
+    const step = event.shiftKey ? 0.01 : 0.05;
+    let v = value;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowUp') v += step;
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') v -= step;
+    else if (event.key === 'Home') v = 0;
+    else if (event.key === 'End') v = 1;
+    else return;
+    event.preventDefault();
+    onTouch?.();
+    onChange(clamp(v));
+  };
+  const x = inset + span * clamp(value);
+  return <div ref={el} className={`abs slider ${disabled ? 'off' : ''}`} style={at(r)} role="slider" tabIndex={disabled ? -1 : 0}
+    aria-label={label} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value * 100)} aria-valuetext={valueText} aria-disabled={disabled}
+    data-mod-target={targetId} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={key}
+    onDoubleClick={() => { if (onReset && !disabled) { onTouch?.(); onReset(); } }}>
+    <svg width={r[2]} height={r[3]} aria-hidden="true">
+      <rect x={inset} y={r[3] / 2 - 2.5} width={span} height="3" rx="1.5" fill={INK} fillOpacity=".16"/>
+      <rect className="fill" x={inset} y={r[3] / 2 - 2.5} width={Math.max(0, x - inset)} height="3" rx="1.5" fill={INK}/>
+      {children?.({ inset, span, cy: r[3] / 2 })}
+      <circle cx={x} cy={r[3] / 2} r="6.5" fill={INK} fillOpacity=".45"/>
+      <circle cx={x} cy={r[3] / 2 - 1} r="6.5" fill={INK}/>
+    </svg>
+  </div>;
+}
+
+// One plate across the column, the chosen cell a solid block (ThreeWay).
+function ThreeWay({ r, labels, index, onChange, label }) {
+  const n = labels.length;
+  return <div className="abs threeway" style={at(r)} role="radiogroup" aria-label={label}>
+    {labels.map((name, i) => {
+      const x0 = Math.floor((r[2] - 2) * i / n), x1 = Math.floor((r[2] - 2) * (i + 1) / n);
+      return <button key={name} type="button" role="radio" aria-checked={i === index} className={i === index ? 'on' : ''}
+        style={{ left: x0, width: x1 - x0, height: r[3] - 2, ...nf(16) }} onClick={() => onChange(i)}><span>{name.toUpperCase()}</span></button>;
+    })}
+  </div>;
+}
+
+// A short list as a cell: anywhere on it steps forward; only the back arrow steps back.
+function Stepper({ r, caption, names, index, onStep, capWidth = 44, label }) {
+  const body = [2, 2, r[2] - 6, r[3] - 6];
+  const arrow = clamp(Math.floor(Math.max(1, r[2] - 6) / 6), 12, 20);
+  const innerW = body[2] - 4 - 2 * arrow - 3;
+  const capW = Math.min(Math.floor(innerW / 2), capWidth);
+  const tri = (right) => <svg className="abs arrow" style={{ left: right ? body[0] + body[2] - 2 - arrow : body[0] + 2, top: 0, width: arrow, height: r[3] }} aria-hidden="true">
+    <path d={right ? `M${arrow / 2 - 2} ${r[3] / 2 - 4.5}L${arrow / 2 + 2} ${r[3] / 2 - 1}L${arrow / 2 - 2} ${r[3] / 2 + 2.5}Z` : `M${arrow / 2 + 2} ${r[3] / 2 - 4.5}L${arrow / 2 - 2} ${r[3] / 2 - 1}L${arrow / 2 + 2} ${r[3] / 2 + 2.5}Z`}/>
+  </svg>;
+  const capX = body[0] + 2 + arrow + 3;
+  return <div className="abs stepper" style={at(r)} role="button" tabIndex="0" aria-label={`${label || caption}: ${names[index]}. Click to step`}
+    onPointerDown={(event) => { if (event.button === 0) onStep(designPoint(event.currentTarget, event, r[2]).x < arrow + 2 ? -1 : 1); }}
+    onKeyDown={(event) => {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') { event.preventDefault(); onStep(-1); }
+      else if (event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === ' ' || event.key === 'Enter') { event.preventDefault(); onStep(1); }
+    }}>
+    <div className="abs plate" style={at(body)}/>
+    {tri(false)}{tri(true)}
+    {caption && <Txt fit r={[capX, 0, capW, r[3]]} size={nf(16)} color={MUTED}>{caption}</Txt>}
+    <Txt fit r={[capX + capW + 2, 0, innerW - capW - 2, r[3]]} align="center" cls="vl" size={vf(18)} color={INK}>{names[index]}</Txt>
+  </div>;
+}
+
+// A small plate that belongs to the control above it, lit while it's on.
+function Plate({ r, text, on, onClick, label, disabled = false }) {
+  return <button type="button" className={`abs plate-switch ${on ? 'on' : ''}`} style={{ ...at(r), ...nf(15) }} role="switch" aria-checked={!!on}
+    aria-label={label || text} disabled={disabled} onClick={onClick}>{text}</button>;
+}
+
+// A key: a plate, faint at rest, stronger under the mouse (the kit's frameless TextButton).
+function Key({ r, children, onClick, label, disabled = false, pressed }) {
+  return <button type="button" className="abs key" style={at(r)} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>
+    <span className="nm" style={nf(clamp(r[3] * 0.62, 13, 18))}>{children}</span>
+  </button>;
+}
+const ArrowGlyph = ({ dir }) => <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path d={dir < 0 ? 'M-3.5 0L3 -5L3 5Z' : 'M3.5 0L-3 -5L-3 5Z'} fill={INK}/></svg>;
+
+// A side section: the sheet, a small square of its colour, its name, a dotted leader and a figure.
+function Section({ r, mark, name, tail }) {
+  return <div className="abs sheet" style={at(r)}>
+    <div className="section-head">
+      <i style={{ background: mark }}/>
+      <span className="nm" style={nf(16)}>{name}</span>
+      <b/>
+      {tail && <span className="vl" style={{ ...vf(16), color: MUTED }}>{tail}</span>}
+    </div>
+  </div>;
+}
+
+// The menus the plug-in opens on a right-click.
+function Menu({ menu, close }) {
+  useEffect(() => {
+    if (!menu) return undefined;
+    const away = (event) => { if (!event.target.closest('.menu')) close(); };
+    const esc = (event) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('pointerdown', away, true); window.addEventListener('keydown', esc);
+    return () => { window.removeEventListener('pointerdown', away, true); window.removeEventListener('keydown', esc); };
+  }, [menu, close]);
+  if (!menu) return null;
+  return <div className="abs menu" role="menu" style={{ left: Math.max(4, Math.min(menu.x, menu.w - 230)), top: Math.max(4, Math.min(menu.y, menu.h - 34 * menu.items.length - 40)) }}>
+    {menu.title && <div className="menu-title nm" style={nf(16)}>{menu.title}</div>}
+    {menu.items.map((item) => <button key={item.label} type="button" role="menuitem" disabled={item.disabled} className="nm" style={nf(18)}
+      onClick={() => { close(); item.act?.(); }}>{item.label}</button>)}
+  </div>;
+}
+
+// ───────── a knob ─────────
+// A flat disc with a short pointer, inside an arc that fills to the value (the kit's frameless
+// drawRotarySlider), with each modulation source's swing as a ring in its colour.
+function Knob({ i, r, valueW = 236, params, effective, onChange, onTouch, modSource, selectSource, showReadout, openMenu, active, onActive }) {
+  const id = KNOB_IDS[i], value = params[id], size = r[2];
+  const el = useRef(null);
+  const drag = useRef(null);
+  const [hoverRing, setHoverRing] = useState(-1);
+  const depth = (k) => params[`mod${k + 1}_${id}`] || 0;
+  const routed = (k) => Math.abs(depth(k)) >= 0.005;
+  const valueRef = useRef(value); valueRef.current = value;
+  useEffect(() => {
+    const node = el.current;
+    const wheel = (event) => {
+      event.preventDefault();
+      onTouch(id);
+      onChange(id, clamp(valueRef.current - event.deltaY * (event.shiftKey ? 0.0002 : 0.001)));
+    };
+    node.addEventListener('wheel', wheel, { passive: false });
+    return () => node.removeEventListener('wheel', wheel);
+  }, [id, onChange, onTouch]);
+  // The rings are handles (sourceAtRing): a press around the knob drags that source's depth,
+  // and where there's no ring yet it makes one for the selected source.
+  const ringAt = (event) => {
+    const { x, y } = designPoint(el.current, event, 104);
+    const d = Math.hypot(x - 52, y - 52);
+    if (d < 38 || d > 55) return -1;
+    if (routed(0) && routed(1)) return d >= 48.5 ? 1 : 0;
+    if (routed(0) !== routed(1) && modSource !== (routed(0) ? 0 : 1)) return modSource;
+    return routed(0) ? 0 : routed(1) ? 1 : modSource;
+  };
+  const showDepth = (k, d) => showReadout(`MOD ${k + 1} > ${MOD_TARGET_NAMES[id]}`, `${Math.round(d * 100) > 0 ? '+' : ''}${Math.round(d * 100)}%`);
+  const down = (event) => {
+    if (event.button === 2) { event.preventDefault(); return; }
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.focus();
+    const ring = ringAt(event);
+    if (ring >= 0 || event.altKey) {
+      const k = ring >= 0 ? ring : modSource;
+      drag.current = { y: event.clientY, k, start: depth(k), scale: designPoint(el.current, event, 104).k };
+      selectSource(k);
+      showDepth(k, depth(k));
+      return;
+    }
+    drag.current = { y: event.clientY, x: event.clientX, start: value, scale: designPoint(el.current, event, 104).k };
+    onActive?.(i);
+    onTouch(id);
+  };
+  const move = (event) => {
+    const d = drag.current;
+    if (!d) { const ring = ringAt(event); if (ring !== hoverRing) setHoverRing(ring); return; }
+    if (d.k !== undefined) {
+      const next = clamp(d.start - (event.clientY - d.y) * d.scale / (event.shiftKey ? 600 : 150), -1, 1);
+      onChange(`mod${d.k + 1}_${id}`, next);
+      showDepth(d.k, next);
+      return;
+    }
+    // Up and right both turn it up; the full travel is 220 design pixels.
+    const moved = ((d.y - event.clientY) + (event.clientX - d.x)) * d.scale;
+    onChange(id, clamp(d.start + moved / (event.shiftKey ? 880 : 220)));
+  };
+  const up = () => { drag.current = null; onActive?.(-1); };
+  const key = (event) => {
+    let v = value;
+    const step = event.shiftKey ? 0.01 : 0.05;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowRight') v += step;
+    else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') v -= step;
+    else if (event.key === 'Home') v = 0;
+    else if (event.key === 'End') v = 1;
+    else if (event.key === 'Delete' || event.key === 'Backspace') {
+      // All of this knob's modulation goes.
+      event.preventDefault();
+      onChange(`mod1_${id}`, 0); onChange(`mod2_${id}`, 0);
+      return;
+    }
+    else return;
+    event.preventDefault();
+    onTouch(id);
+    onChange(id, clamp(v));
+  };
+  const routeMenu = (event) => {
+    event.preventDefault();
+    const items = [0, 1].filter(routed).map((k) => ({ label: `Remove MOD ${k + 1} (${Math.round(depth(k) * 100)}%)`, act: () => onChange(`mod${k + 1}_${id}`, 0) }));
+    openMenu(event, MOD_TARGET_NAMES[id], items.length ? items : [{ label: 'No routes. Drag a source onto this control.', disabled: true }]);
+  };
+  // Geometry in the knob's 104 box: the disc is 74 across, the arc 8 outside it.
+  const c = 52, rd = 37, track = rd + 8, outer = 48;
+  const a0 = -135, span = 270;
+  const point = (rad, v) => { const a = (a0 + span * v) * Math.PI / 180; return [c + Math.sin(a) * rad, c - Math.cos(a) * rad]; };
+  const arc = (rad, from, to) => {
+    const [x0, y0] = point(rad, from), [x1, y1] = point(rad, to);
+    return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${rad} ${rad} 0 ${(to - from) * span > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+  };
+  const dark = id === 'clock';
+  const any = routed(0) || routed(1);
+  const [ex, ey] = point(outer - 7, clamp(effective));
+  const name = knobName(i, params);
+  const valueText = active ?? describe(id, params).toUpperCase();
+  return <>
+    <Txt r={[r[0] + size / 2 - 80, r[1] - 20, 160, 20]} align="center" size={nf(20)} color={INK}>{name}</Txt>
+    <div ref={el} className={`abs knob ${dark ? 'dark' : ''}`} style={{ ...at(r), cursor: hoverRing >= 0 ? 'ns-resize' : undefined }} data-mod-target={id}
+      role="slider" tabIndex="0" aria-label={`${name}${id === 'modWet' ? ' (wet)' : id === 'modLoop' ? ' (loop)' : ''}`}
+      aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value * 100)} aria-valuetext={describe(id, params)}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={() => setHoverRing(-1)}
+      onKeyDown={key} onFocus={() => onTouch(id)} onContextMenu={routeMenu}
+      onDoubleClick={(event) => {
+        // On a ring: that source comes off this knob, as a double-click resets anything else.
+        const ring = ringAt(event);
+        if (ring >= 0 && routed(ring)) { onChange(`mod${ring + 1}_${id}`, 0); setHoverRing(-1); showReadout(`MOD ${ring + 1}`, `${MOD_TARGET_NAMES[id].toLowerCase()} removed`); }
+        else { onTouch(id); onChange(id, KNOB_DEFAULTS[id]); }
+      }}>
+      <svg width={size} height={size} viewBox="0 0 104 104" aria-hidden="true">
+        <path d={arc(track, 0, 1)} fill="none" stroke={INK} strokeOpacity=".16" strokeWidth="2.6" strokeLinecap="round"/>
+        {value > 0.001 && <path className="fill" d={arc(track, 0, clamp(value))} fill="none" stroke={INK} strokeWidth="2.6" strokeLinecap="round"/>}
+        {[0, 1].map((k) => {
+          if (!routed(k)) return null;
+          const d = depth(k), uni = params[`mod${k + 1}Uni`];
+          const lo = clamp(uni ? Math.min(value, value + d) : value - Math.abs(d)), hi = clamp(uni ? Math.max(value, value + d) : value + Math.abs(d));
+          if (hi - lo < 0.001) return null;
+          return <path key={k} d={arc(outer - 1.5 + 4 * k, lo, hi)} fill="none" stroke={MOD_COLOURS[k]} strokeWidth="2.5"/>;
+        })}
+        {hoverRing >= 0 && !routed(hoverRing) && <circle cx={c} cy={c} r={outer - 1.5 + 4 * hoverRing} fill="none" stroke={MOD_COLOURS[hoverRing]} strokeOpacity=".45"/>}
+        <circle cx={c} cy={c + 2} r={rd} fill={INK} fillOpacity=".45"/>
+        <circle cx={c} cy={c} r={rd} fill={dark ? '#191916' : '#e8e5db'}/>
+        <rect x="-1.5" y={-rd * 0.86} width="3" height={rd * 0.5} rx="1.5" fill={dark ? '#ede9e0' : INK} transform={`translate(${c} ${c}) rotate(${a0 + span * value})`}/>
+        {any && <circle cx={ex} cy={ey} r="2.5" fill={INK}/>}
+      </svg>
+    </div>
+    <Txt fit r={[r[0] + size / 2 - valueW / 2, r[1] + size - 2, valueW, 18]} align="center" cls="vl" size={vf(active ? 18 : 16)} color={active ? INK : MUTED}>{valueText}</Txt>
+  </>;
+}
+
+// ───────── a footswitch ─────────
+// A big plate that darkens while it's held, with a light that's solid while this side is on.
+function Footswitch({ r, name, keyName, lit, onGesture, which }) {
+  const pressed = useRef(false);
+  const [down, setDown] = useState(false);
+  const release = () => { if (!pressed.current) return; pressed.current = false; setDown(false); onGesture(which, 'up'); };
+  const press = () => { if (pressed.current) return; pressed.current = true; setDown(true); onGesture(which, 'down'); };
+  useEffect(() => {
+    const blur = () => release();
+    window.addEventListener('blur', blur);
+    return () => window.removeEventListener('blur', blur);
+  });
+  const w = r[2] - 3, h = r[3] - 3;
+  const middle = w - 24 - 16 - 10 - 62 - 36;
+  return <button type="button" className={`abs footswitch ${down ? 'down' : ''}`} style={at([r[0], r[1], w, h])}
+    aria-label={`${name}: tap or hold. key ${keyName}`} aria-pressed={!!lit}
+    onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); press(); }}
+    onPointerUp={release} onPointerCancel={release}
+    onKeyDown={(event) => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); press(); } }}
+    onKeyUp={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); release(); } }}>
+    <i className="led" style={{ left: 13, top: h / 2 - 7, background: lit ? LIT : 'rgba(24,24,21,.25)' }}/>
+    <Txt r={[38, 0, 62, h]} size={nf(24)} color={INK}>{name}</Txt>
+    {middle >= 80 && <Txt r={[100, 0, middle, h]} align="center" cls="vl" size={vf(16)} color={MUTED}>TAP / HOLD</Txt>}
+    <Txt r={[w - 12 - 36, 0, 36, h]} align="right" cls="vl" size={vf(16)} color={INK}>[ {keyName} ]</Txt>
+  </button>;
+}
+
+// ───────── the take strip ─────────
+// The take: an ink window, with what plays in pale and the rest of the take dimmed, START and
+// END as markers, and the play heads. With nothing caught it says what the looper is doing.
+function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReadout, running, engine, openMenu }) {
+  const canvas = useRef(null);
+  const drag = useRef(null);
+  const [hot, setHot] = useState(-1);
+  const r = L.loopView, w = r[2], h = r[3];
+  const lsrc = state?.lsrc || 0;
+  const live = !lsrc || !wave || state?.recArmed || state?.loop === 'rec';
+  const markers = () => {
+    if (!state?.lsrc) return null;
+    const s = clamp(state.winStart, 0, state.lsrc);
+    return { s, e: clamp(s + state.winLen, s, state.lsrc), len: state.lsrc };
+  };
+  useEffect(() => {
+    const c = canvas.current, ratio = (window.devicePixelRatio || 1) * scale;
+    const pw = Math.round(w * ratio), ph = Math.round(h * ratio);
+    if (c.width !== pw) c.width = pw;
+    if (c.height !== ph) c.height = ph;
+    const g = c.getContext('2d');
+    g.setTransform(ratio, 0, 0, ratio, 0, 0);
+    g.fillStyle = INK; g.fillRect(0, 0, w, h);
+    const top = 16, bh = h - top, mid = top + bh / 2, rise = bh / 2 - 10;
+    const font = (n) => `${(n / 1.215).toFixed(2)}px "B612 Mono", monospace`;
+    g.textBaseline = 'middle';
+    const led = state?.loop === 'rec' ? 2 : state?.loop === 'dub' ? 3 : state?.loop === 'play' ? 1 : 0;
+    if (live) {
+      // Silence, as the plug-in draws it: the words where the waveform would be.
+      g.fillStyle = DIMMED; g.fillRect(12, mid + 14, w - 24, 1);
+      const record = params.recMode === 1, bars = params.recBars;
+      const idle = record ? 'PRESS LOOP TO RECORD_' : 'LISTENING. PRESS LOOP TO KEEP THE LAST MOMENT_';
+      const text = state?.recArmed ? 'WAITING FOR THE BAR LINE_' : led === 2 ? (record && bars ? `RECORDING ${describe('recBars', params).toUpperCase()}_` : 'RECORDING_') : idle;
+      const words = running ? text : 'PRESS START AUDIO, BELOW, TO HEAR BROOD_';
+      // Smaller until it fits: a phone's strip is less than half as wide.
+      let size = 18;
+      g.font = font(size);
+      while (size > 10 && g.measureText(words).width > w - 24) { size -= 0.5; g.font = font(size); }
+      g.fillStyle = PAPER; g.textAlign = 'center';
+      g.fillText(words, w / 2, top + (bh - 16) / 2);
+      return;
+    }
+    const m = markers();
+    const xs = w * m.s / m.len, xe = w * m.e / m.len;
+    const clock = Math.max(1, state.clockHz);
+    // A tick a second along the foot (every five, on a long take), so length can be read.
+    const seconds = m.len / clock, every = seconds > 16 ? 5 : 1;
+    g.fillStyle = TICK;
+    for (let t = every; t < seconds; t += every) g.fillRect(w * t / seconds, h - 6, 1, 6);
+    const peaks = wave.peaks, n = peaks.length, bw = w / n;
+    const gain = Math.pow(10, params.loopDb / 20);   // what you see is the level you hear
+    for (let i = 0; i < n; i++) {
+      const a = Math.min(1, peaks[i] * 1.6 * gain) * rise, x = i * bw;
+      g.fillStyle = x >= xs && x < xe ? PAPER : DIMMED;
+      g.fillRect(x, mid - a, Math.max(1, bw - 0.4), 2 * a + 1);
+    }
+    // The play heads: TAPE has one; STRETCH shows both grains and ENV the slice, each as bright as it's loud.
+    const heads = state.head || [state.pos, 0], levels = state.headLevel || [1, 0];
+    for (let k = 0; k < 2; k++) {
+      const level = clamp(levels[k]);
+      if (level < 0.02) continue;
+      g.globalAlpha = level; g.fillStyle = LIT;
+      g.fillRect(w * (state.winStart + heads[k]) / m.len - 0.5, top, 1, bh);
+    }
+    g.globalAlpha = 1;
+    const states = ['STOPPED', 'PLAYING', 'RECORDING', 'OVERDUB'];
+    g.font = font(14); g.textAlign = 'left';
+    g.fillStyle = led >= 2 ? LIT : PAPER;
+    g.fillText(`${state.parked ? 'WAITING FOR PLAY' : states[led]}  ${seconds.toFixed(2)} S${state.follows ? '  FOLLOWS THE HOST' : ''}`, 6, 8.5);
+    // The markers: a rule the full height, and a tab that names it. START's tab hangs inside
+    // the window from the top, END's from the bottom, so the two never cover each other.
+    const marker = (x, isEnd, lit) => {
+      const mw = lit ? 3 : 2;
+      g.fillStyle = lit ? LIT : PAPER;
+      g.fillRect(clamp(x - mw / 2, 2, w - mw - 2), top, mw, bh);
+      const label = isEnd ? 'END' : 'START';
+      g.font = font(14);
+      const tw = Math.ceil(g.measureText(label).width) + 8;
+      const tx = clamp(isEnd ? x - tw : x, 2, w - tw - 2), ty = isEnd ? h - 13 : top;
+      g.fillRect(tx, ty, tw, 13);
+      g.fillStyle = INK; g.textAlign = 'center';
+      g.fillText(label, tx + tw / 2, ty + 7);
+      g.textAlign = 'left';
+    };
+    marker(xs, false, hot === 0 || drag.current?.which === 0);
+    marker(xe, true, hot === 1 || drag.current?.which === 1);
+  });
+
+  // On a marker: that marker. Inside the window: the window. Outside it: the nearer marker.
+  const regionAt = (x) => {
+    const m = markers();
+    if (!m || live) return -1;
+    const xs = w * m.s / m.len, xe = w * m.e / m.len;
+    const nearest = () => {
+      const toStart = Math.abs(x - xs), toEnd = Math.abs(x - xe);
+      if (Math.abs(toStart - toEnd) < 0.5) return x > xe ? 1 : 0;
+      return toStart < toEnd ? 0 : 1;
+    };
+    if (Math.abs(x - xs) <= 8 || Math.abs(x - xe) <= 8) return nearest();
+    return x > xs && x < xe ? 2 : nearest();
+  };
+  const moveMarker = (x) => {
+    const d = drag.current;
+    const len = Math.max(64, lsrc), tape = params.loopMode === 1;
+    const atSample = x / w * len + d.grab;
+    const shortest = Math.max(64, 0.02 * len);
+    let first = d.s, width = d.e - d.s;
+    if (d.which === 0) { first = clamp(atSample, 0, d.e - shortest); width = d.e - first; }
+    else if (d.which === 1) width = clamp(atSample - d.s, shortest, len - d.s);
+    else first = clamp(atSample, 0, Math.max(0, len - width));
+    const trim = loopTrim(tape, len, params.length, first, width);
+    onChange('start', trim.start);
+    onChange('loopEnd', trim.end);
+    if (tape) onChange('length', trim.length);
+    const clock = Math.max(1, state.clockHz);
+    onTouch(d.which === 1 ? 'loopEnd' : 'start', false);
+    showReadout(d.which === 0 ? 'START' : d.which === 1 ? 'END' : 'THE WINDOW', `${(trim.firstSample / clock).toFixed(2)} S IN, PLAYS ${(trim.width / clock).toFixed(2)} S`);
+  };
+  const down = (event) => {
+    if (event.button !== 0 || event.target !== canvas.current) return;
+    const { x } = designPoint(canvas.current, event, w);
+    const which = regionAt(x);
+    if (which < 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const m = markers(), len = Math.max(64, lsrc), pressed = x / w * len, reach = 8 * len / w;
+    // Held where it was pressed, so a grab moves nothing. Outside the window a marker comes to the mouse.
+    const insideWindow = pressed >= m.s - reach && pressed <= m.e + reach;
+    drag.current = { which, s: m.s, e: m.e, grab: !insideWindow ? 0 : which === 1 ? m.e - pressed : m.s - pressed };
+    setHot(which === 2 ? -1 : which);
+    moveMarker(x);
+  };
+  const move = (event) => {
+    const { x } = designPoint(canvas.current, event, w);
+    if (drag.current) { moveMarker(x); return; }
+    const region = regionAt(x);
+    canvas.current.style.cursor = region === 2 ? 'grab' : region >= 0 ? 'ew-resize' : '';
+    const next = region === 2 ? -1 : region;
+    if (next !== hot) setHot(next);
+  };
+  const up = () => { drag.current = null; };
+  const key = (event) => {
+    // From the keyboard: the arrows move END, with shift they move START; right is towards the present.
+    const d = event.key === 'ArrowRight' ? 0.01 : event.key === 'ArrowLeft' ? -0.01 : 0;
+    if (!d) { if (event.key === 'Home') { event.preventDefault(); onChange('start', BASE.start); onChange('loopEnd', BASE.loopEnd); onTouch('loopEnd'); } return; }
+    event.preventDefault();
+    if (event.shiftKey) { onChange('start', clamp(params.start + d)); onTouch('start'); }
+    else { onChange('loopEnd', clamp(params.loopEnd + d, 0.02, 1)); onTouch('loopEnd'); }
+  };
+
+  // CLEAR, UNDO and GAIN on the heading line.
+  const can = running && !!state;
+  const canClear = can && (lsrc > 0 || state.loop === 'rec' || state.recArmed);
+  const canUndo = can && state.undoKind > 0 && state.loop !== 'rec' && !state.recArmed;
+  const redo = !!state?.undoRedo;
+  const gain = useRef(null);
+  const db = params.loopDb, half = Math.round(db * 2);
+  const normalise = () => {
+    const peak = wave?.peaks ? Math.max(...wave.peaks) : 0;
+    return peak > 1e-5 ? clamp(-1 - 20 * Math.log10(peak), -24, 12) : 0;
+  };
+  const gainDown = (event) => {
+    if (event.button === 2) return;
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    gain.current = { y: event.clientY, db, k: designPoint(event.currentTarget, event, 130).k };
+    onTouch('loopDb');
+  };
+  const gainMove = (event) => {
+    const gd = gain.current;
+    if (!gd) return;
+    // Each move adds its own change at the rate Shift sets now.
+    gd.db = clamp(gd.db + (gd.y - event.clientY) * gd.k * (event.shiftKey ? 0.02 : 0.15), -24, 12);
+    gd.y = event.clientY;
+    onChange('loopDb', Math.round(gd.db * 100) / 100);
+  };
+  useEffect(() => {
+    const el = document.getElementById('brood-gain');
+    const wheel = (event) => { event.preventDefault(); onTouch('loopDb'); onChange('loopDb', clamp(db + (event.deltaY < 0 ? 0.5 : -0.5), -24, 12)); };
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => el.removeEventListener('wheel', wheel);
+  }, [db, onChange, onTouch]);
+  const what = ['', 'the take before', 'the cleared take', 'the layer'];
+  return <>
+    <div className="abs take" style={at(r)} tabIndex={live ? -1 : 0} role="group" onKeyDown={key}
+      aria-label={live ? 'The take: nothing caught yet' : `The take. START ${describe('start', params)}, END ${describe('loopEnd', params)}. Arrow keys move END, shift and arrow keys move START.`}>
+      <canvas ref={canvas} style={{ width: w, height: h }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+        onPointerLeave={() => { if (!drag.current && hot !== -1) setHot(-1); }}
+        onDoubleClick={() => { onChange('start', BASE.start); onChange('loopEnd', BASE.loopEnd); onTouch('loopEnd'); }}/>
+    </div>
+    <button type="button" className="abs strip-key sc" style={{ ...at(L.clear), ...sf(14) }} disabled={!canClear}
+      onClick={() => { engine.clearLoop(); showReadout('LOOP', 'cleared. undo brings it back'); }}>CLEAR</button>
+    <button type="button" className="abs strip-key sc" style={{ ...at(L.undo), ...sf(14) }} disabled={!canUndo}
+      onClick={() => {
+        const kind = clamp(state.undoKind, 0, 3);
+        engine.undoLoop();
+        showReadout(redo ? 'REDO' : 'UNDO', `${redo ? 'again: ' : 'back to '}${kind === 3 ? (redo ? 'the layer is back' : 'before the layer') : what[kind]}`);
+      }}>{redo ? 'REDO' : 'UNDO'}</button>
+    <div id="brood-gain" className="abs gain sc" style={{ ...at(L.gain), ...sf(14), color: half === 0 ? PAPER : LIT }} role="slider" tabIndex="0"
+      aria-label="Loop gain" aria-valuemin="-24" aria-valuemax="12" aria-valuenow={db} aria-valuetext={`${db.toFixed(1)} dB`}
+      onPointerDown={gainDown} onPointerMove={gainMove} onPointerUp={() => { gain.current = null; }} onPointerCancel={() => { gain.current = null; }}
+      onDoubleClick={() => { onTouch('loopDb'); onChange('loopDb', 0); }}
+      onKeyDown={(event) => {
+        const d = event.key === 'ArrowUp' || event.key === 'ArrowRight' ? 0.5 : event.key === 'ArrowDown' || event.key === 'ArrowLeft' ? -0.5 : 0;
+        if (d) { event.preventDefault(); onTouch('loopDb'); onChange('loopDb', clamp(db + d, -24, 12)); }
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        openMenu(event, null, [
+          { label: 'Normalise (peak at -1 dB)', act: () => { onTouch('loopDb'); onChange('loopDb', Math.round(normalise() * 100) / 100); } },
+          { label: 'Reset to 0 dB', act: () => { onTouch('loopDb'); onChange('loopDb', 0); } },
+        ]);
+      }}>GAIN {half > 0 ? '+' : ''}{(half / 2).toFixed(1)} DB</div>
+  </>;
+}
+
+// ───────── modulation ─────────
+// A chip: its number, how many routes it has, an on square, and the last two seconds of what it did.
+function ModChip({ k, r, params, open, trace, onToggleOn, onClick, onDragTo, onDrop, openMenu, onChange }) {
+  const drag = useRef(null);
+  const on = !!params[`mod${k + 1}On`];
+  const routes = MOD_TARGETS.filter((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005).length;
+  const w = r[2] - 2, h = r[3] - 2;
+  const plot = [6, 22, w - 12, h - 26];
+  const points = trace.map((v, i) => `${(plot[0] + plot[2] * i / (trace.length - 1)).toFixed(1)},${(plot[1] + plot[3] - plot[3] * v).toFixed(1)}`).join(' ');
+  return <div className={`abs chip ${open ? 'open' : ''}`} style={{ ...at([r[0], r[1], w, h]), '--mod': MOD_COLOURS[k] }} role="button" tabIndex="0"
+    aria-label={`MOD ${k + 1}, ${routes} ${routes === 1 ? 'route' : 'routes'}. Click to show its controls; drag onto a knob or BALANCE to route it.`} aria-expanded={open}
+    onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(); } }}
+    onContextMenu={(event) => { event.preventDefault(); openMenu(event, null, [{ label: 'Clear this source\'s routes', act: () => MOD_TARGETS.forEach((t) => onChange(`mod${k + 1}_${t}`, 0)) }]); }}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      const { x, y } = designPoint(event.currentTarget, event, w);
+      if (x >= w - 24 && x <= w - 3 && y >= 1 && y <= 22) { onToggleOn(); return; }
+      event.currentTarget.setPointerCapture(event.pointerId);
+      drag.current = { x: event.clientX, y: event.clientY, moved: false };
+    }}
+    onPointerMove={(event) => {
+      const d = drag.current;
+      if (!d) return;
+      if (!d.moved && Math.hypot(event.clientX - d.x, event.clientY - d.y) > 4) d.moved = true;
+      if (d.moved) onDragTo(event);
+    }}
+    onPointerUp={(event) => {
+      const d = drag.current;
+      drag.current = null;
+      if (!d) return;
+      if (d.moved) onDrop(event); else onClick();
+    }}
+    onPointerCancel={() => { drag.current = null; onDrop(null); }}>
+    <i className="num vl" style={{ background: on ? MOD_COLOURS[k] : RULE, ...vf(15) }}>{k + 1}</i>
+    <Txt r={[24, 3, w - 48, 16]} cls="vl" size={vf(14)} color={MUTED}>{routes} {routes === 1 ? 'ROUTE' : 'ROUTES'}</Txt>
+    <i className="on-box" style={{ background: on ? LIT : 'rgba(24,24,21,.18)' }}/>
+    <svg className="abs" style={{ left: 0, top: 0 }} width={w} height={h} aria-hidden="true">
+      <polyline points={points} fill="none" stroke={on ? MOD_COLOURS[k] : RULE} strokeWidth="1.5"/>
+    </svg>
+  </div>;
+}
+
+// The kit's compact switch: a short pill, lit when on, and its name.
+function Switch({ r, text, on, onClick }) {
+  return <button type="button" className={`abs switch ${on ? 'on' : ''}`} style={at(r)} role="switch" aria-checked={!!on} onClick={onClick}>
+    <i className="pill" style={{ top: r[3] / 2 - 6 }}><i/></i>
+    <Txt r={[21, 0, r[2] - 21, r[3]]} size={nf(15)} color={on ? INK : MUTED}>{text}</Txt>
+  </button>;
+}
+
+// Every route in one list, with its depth, over the main sheet (RouteList).
+function RouteList({ L, params, onChange, close, openMenu }) {
+  const [rows, setRows] = useState(() => [0, 1].flatMap((k) => MOD_TARGETS.filter((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005).map((t) => ({ k, t }))));
+  const r = [L.overlay[0], L.overlay[1], L.overlay[2] + 3, L.overlay[3] + 3];
+  const nameW = L.phone ? 116 : 192, closeW = L.phone ? 70 : 90, clearW = L.phone ? 92 : 110;
+  const inner = [r[0] + 14, r[1] + 26 + 10, r[2] - 3 - 28, r[3] - 3 - 26 - 20];
+  return <div className="abs overlay sheet" style={at([r[0], r[1], r[2] - 3, r[3] - 3])} role="dialog" aria-label="Routes">
+    <div className="panel-head"><i className="sc" style={sf(16)}>M</i><span className="nm" style={nf(16)}>ROUTES</span><b/><span className="vl" style={{ ...vf(16), color: MUTED }}>{rows.length} {rows.length === 1 ? 'ROUTE' : 'ROUTES'}</span></div>
+    {!rows.length && <Txt r={[14, 36, inner[2], inner[3] - 40]} align="center" cls="vl" size={vf(19)} color={MUTED}>NO ROUTES YET. DRAG A SOURCE ONTO A KNOB.</Txt>}
+    {rows.map(({ k, t }, i) => {
+      const id = `mod${k + 1}_${t}`, y = 36 + i * 32, d = params[id];
+      return <React.Fragment key={id}>
+        <i className="abs num vl" style={{ left: 16, top: y + 7, background: MOD_COLOURS[k], ...vf(16) }}>{k + 1}</i>
+        <Txt fit r={[44, y, nameW, 32]} size={nf(19)} color={INK}>{MOD_TARGET_NAMES[t]}</Txt>
+        <Slider r={[52 + nameW, y, inner[2] - nameW - 142, 32]} value={(d + 1) / 2} onChange={(v) => onChange(id, Math.round((v * 2 - 1) * 100) / 100)} label={`MOD ${k + 1} depth on ${MOD_TARGET_NAMES[t]}`} valueText={`${Math.round(d * 100)}%`}/>
+        <Txt r={[inner[2] - 90, y, 60, 32]} align="right" cls="vl" size={vf(19)} color={MUTED}>{Math.round(d * 100) > 0 ? '+' : ''}{Math.round(d * 100)}%</Txt>
+        <Key r={[inner[2] - 20, y + 2, 34, 28]} label={`Remove MOD ${k + 1} from ${MOD_TARGET_NAMES[t]}`} onClick={() => { onChange(id, 0); setRows((all) => all.filter((row) => !(row.k === k && row.t === t))); }}>X</Key>
+      </React.Fragment>;
+    })}
+    {[0, 1].map((k) => <Key key={k} r={[13 + k * 82, r[3] - 3 - 10 - 32, 76, 32]} label={`Add a route for MOD ${k + 1}`} onClick={(event) => {
+      const free = MOD_TARGETS.filter((t) => !rows.some((row) => row.k === k && row.t === t));
+      openMenu(event, `MOD ${k + 1} TO`, free.length ? free.map((t) => ({ label: MOD_TARGET_NAMES[t], act: () => { onChange(`mod${k + 1}_${t}`, 0.5); setRows((all) => [...all, { k, t }]); } }))
+        : [{ label: 'Routed to everything already.', disabled: true }]);
+    }}>+ MOD {k + 1}</Key>)}
+    <Key r={[r[2] - 3 - 14 - closeW - 8 - clearW, r[3] - 3 - 10 - 32, clearW, 32]} onClick={() => { [0, 1].forEach((k) => MOD_TARGETS.forEach((t) => onChange(`mod${k + 1}_${t}`, 0))); setRows([]); }}>CLEAR ALL</Key>
+    <Key r={[r[2] - 3 - 14 - closeW, r[3] - 3 - 10 - 32, closeW, 32]} onClick={close}>CLOSE</Key>
+  </div>;
+}
+
+// What the plug-in has that this page doesn't, in one place over the main sheet.
+const PLUGIN_ONLY = [
+  ['LEVEL', 'past the middle, the input is driven into old tape: rounder, duller, a little hiss. here LEVEL only sets how loud the input reaches Brood.'],
+  ['THE TAKE STRIP', 'with nothing caught, the input scrolls past, newest at the right, over the window a tap would keep, so you can see what a tap will catch. here the strip says what the looper is doing instead.'],
+  ['AT TAP', 'beside BARS in RECORD. off: a bar count starts on the next bar line while the host plays, so loops land on the grid. on: it starts the moment you tap. here there is no host, so a bar count always starts at the tap.'],
+  ['TEMPO', 'follows the host. here you set it under the panel.'],
+  ['THE BENCH', 'passes takes between Brood and Silt in a DAW: SEND the loop or a few bars of the output, TAKE one back as the loop.'],
+];
+function PluginOnly({ L, close }) {
+  const r = L.overlay;
+  return <div className="abs overlay sheet" style={at(r)} role="dialog" aria-label="In the plug-in">
+    <div className="panel-head"><i className="sc" style={sf(16)}>+</i><span className="nm" style={nf(16)}>IN THE PLUG-IN</span><b/><span className="vl" style={{ ...vf(16), color: MUTED }}>NOT ON THIS PAGE</span></div>
+    <dl className={`abs plugin-list ${L.phone ? 'narrow' : ''}`} style={at([14, 38, r[2] - 28, r[3] - 38 - 52])}>
+      {PLUGIN_ONLY.map(([name, text]) => <React.Fragment key={name}>
+        <dt className="nm" style={nf(19)}>{name}</dt>
+        <dd className="vl" style={vf(17)}>{text}</dd>
+      </React.Fragment>)}
+    </dl>
+    <Key r={[r[2] - 14 - 90, r[3] - 10 - 32, 90, 32]} onClick={close}>CLOSE</Key>
+  </div>;
+}
+
+// The preset browser the plug-ins share: search, categories, stars. Clicking a preset plays
+// it; KEEP keeps it, CANCEL puts back the sound there was.
+function PresetBrowser({ L, patches, current, favourites, onChoose, onStar, onKeep, onCancel, onSave, onDelete }) {
+  const [view, setView] = useState('ALL');
+  const [search, setSearch] = useState('');
+  const query = search.trim().toUpperCase();
+  const shown = patches.filter((patch) => (view === 'ALL' || (view === 'FAV' ? favourites.includes(patch.name) : patch.category === view))
+    && (!query || patch.name.toUpperCase().includes(query) || patch.category.includes(query)));
+  const r = L.overlay, narrow = L.phone;
+  const views = ['ALL', 'FAV', ...PRESET_CATEGORIES];
+  // On a phone the search box has its own row, over the category keys.
+  const keysX = narrow ? 10 : 218, keysY = narrow ? 70 : 34, listY = narrow ? 108 : 72;
+  const keyW = Math.floor((r[2] - keysX - 10) / views.length);
+  return <div className="abs overlay sheet" style={at(r)} role="dialog" aria-label="Presets" onKeyDown={(event) => {
+    if (event.key === 'Escape') onCancel();
+    if (event.key === 'Enter' && event.target.tagName !== 'BUTTON') onKeep();
+  }}>
+    <div className="panel-head"><i className="sc" style={sf(16)}>P</i><span className="nm" style={nf(16)}>PRESETS</span><b/><span className="vl" style={{ ...vf(16), color: MUTED }}>{shown.length} {shown.length === 1 ? 'SOUND' : 'SOUNDS'}</span></div>
+    <input autoFocus={!narrow} className="abs search sc" style={{ ...at([10, 34, narrow ? r[2] - 20 : 200, 30]), ...sf(17) }} aria-label="Search presets" placeholder="SEARCH" value={search} onChange={(event) => setSearch(event.target.value)}/>
+    {views.map((name, i) => <Key key={name} r={[keysX + i * keyW + 1, keysY, keyW - 2, 30]} pressed={view === name} onClick={() => setView(name)}><span className={view === name ? 'lit-text' : ''}>{name}</span></Key>)}
+    <ul className={`abs preset-list ${narrow ? 'narrow' : ''}`} style={at([10, listY, r[2] - 20, r[3] - listY - 48])}>
+      {shown.map((patch) => <li key={patch.name} className={patch.name === current ? 'current' : ''}>
+        <button type="button" className="star" aria-pressed={favourites.includes(patch.name)} aria-label={`Favourite ${patch.name}`} onClick={() => onStar(patch.name)}>
+          <svg width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path d="M0 -7.5L2 -3L7.1 -2.3L3.3 1.1L4.4 6.1L0 3.5L-4.4 6.1L-3.3 1.1L-7.1 -2.3L-2 -3Z" fill={favourites.includes(patch.name) ? '#8f5f12' : 'none'} stroke={favourites.includes(patch.name) ? '#8f5f12' : MUTED} strokeWidth="1.2"/></svg>
+        </button>
+        <button type="button" className="name sc" style={sf(19)} onClick={() => onChoose(patch)}>{patch.name === current ? '> ' : ''}{patch.name}</button>
+        <span className="sc" style={sf(17)}>{patch.category}</span><span className="sc" style={sf(17)}>{patch.factory ? 'FACTORY' : 'USER'}</span>
+        {!patch.factory ? <button type="button" className="remove sc" style={sf(17)} aria-label={`Delete ${patch.name}`} onClick={() => onDelete(patch.name)}>X</button> : <span/>}
+      </li>)}
+    </ul>
+    <Key r={[13, r[3] - 10 - 32, 94, 32]} onClick={() => onSave(PRESET_CATEGORIES.includes(view) ? view : 'USER')}>SAVE AS...</Key>
+    {!narrow && <Txt r={[113, r[3] - 10 - 32, r[2] - 113 - 196, 32]} align="center" cls="sc" size={sf(15)} color={MUTED}>CLICK TO HEAR   RETURN KEEPS   ESC GOES BACK</Txt>}
+    <Key r={[r[2] - 10 - 180 + 3, r[3] - 10 - 32, 84, 32]} onClick={onCancel}>CANCEL</Key>
+    <Key r={[r[2] - 10 - 90 + 3, r[3] - 10 - 32, 84, 32]} onClick={onKeep}>KEEP</Key>
+  </div>;
+}
+
+// The whole canvas scaled to the window: nothing reflows, and a narrow window gets a small panel.
+// On a phone (700 wide or less) the phone canvas fills the width and the page scrolls.
+// ───────── the tour ─────────
+// A picture book over the real panel: each step leaves a few controls open and veils the rest,
+// so the sound, the source and every setting carry on from step to step. The screen keeps
+// explaining whatever is pointed at. The last step is the whole panel.
+const TOUR_DESK_H = 140;                       // the tour's strip under the desktop panel
+const TOUR_BAR = [24, H + 4, 1152, 124];
+const PHONE_BAR_H = 272;                       // the tour's bar along the bottom of a phone
+const deskColumn = (c) => [24 + c * 276, 268, 276, 388];
+const TOUR = [
+  { title: 'START WITH SOUND',
+    body: 'To start things off, let\'s hear something, press START AUDIO.\n\nIf you don\'t like what you hear feel free to load your own sounds using LOAD FILE or even use your own voice with MIC.',
+    try: 'press START AUDIO and listen for a moment.',
+    holes: (L) => [L.phone ? [12, 1403, 366, 224] : [24, 744, 1152, 60], L.loopView] },
+  { title: 'SHAPE THE LOOP', tab: 2,
+    body: 'Tap LOOP and brood keeps the length of audio you specify using the MEMORY slider. tap LOOP again to stop, hold it to overdub. ENV, TAPE and STRETCH are different ways to change how the loop plays back.',
+    try: 'Pick TAPE, then turn SPEED left: the loop plays backwards.',
+    holes: (L) => [L.loopView, L.fsLoop, L.overdub, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(2)])] },
+  { title: 'START AND END', tab: 2,
+    body: 'the two markers in the window are START and END. drag one to trim what plays, or drag between them to slide the window along the take. double-click the window to open the whole take again. every move crossfades, so nothing clicks.',
+    bodyPhone: 'the two markers in the window are START and END. drag one to trim what plays, or drag between them to slide the window along the take. every move crossfades, so nothing clicks.',
+    try: 'catch a long loop, then drag END in until a single phrase repeats.',
+    holes: (L) => [L.loopView, L.fsLoop, ...(L.phone ? [L.tabs, L.tabSheet] : [grow(L.knob[2], 10)])] },
+  { title: 'IN BETWEEN', tab: 1,
+    body: 'MIX moves between the input and the recorded loop, BALANCE between the loop and the full WET signal. ROUTING picks what WET affects: IN the input, IN + LOOP both, LOOP only the loop, leaving the input clean. CLOCK is the rate both sides run at: lower is darker and grittier, like pitching down on an old sampler.',
+    try: 'with a loop playing, turn CLOCK down a little at a time, then set WEAR to WORN.',
+    holes: (L) => (L.phone ? [L.tabs, L.tabSheet, L.loopArea] : [deskColumn(1), [300, 216, 276, 54], L.loopArea]) },
+  { title: 'ADD SOME SPACE', tab: 0, wet: true,
+    body: 'WET switches on the space around the sound, and TIME sets how long it lasts. the screen names each knob as you turn it.',
+    try: 'tap WET (key A), then turn TIME up slowly.',
+    tryPhone: 'tap WET, then turn TIME up slowly.',
+    holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [0, 1].map((i) => [L.knob[i][0] - 20, L.knob[i][1] - 8, L.knob[i][2] + 40, L.knob[i][3] + 40]))] },
+  { title: 'FOUR KINDS OF SPACE', tab: 0, wet: true,
+    body: 'REVERB, DELAY, SLIP and WEAVE treat time four ways, and the knob under TIME changes its job with them. hold WET to freeze the space; let go and it moves on.',
+    try: 'pick DELAY, set TIME short, then hold WET.',
+    holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(0)])] },
+  { title: 'MOVEMENT AND PATCHES',
+    body: 'MOD 1 and MOD 2 turn knobs for you: drag a chip onto a knob or BALANCE to route it, and click it for its shape and rate. the arrows by the patch name step through sounds.',
+    try: 'drag MOD 1 onto TIME, then click MOD 1 and raise its RATE.',
+    tryPhone: 'in ROUTES, add MOD 1 on TIME, then tap MOD 1 and raise its RATE.',
+    holes: (L) => [L.rampArea, L.presetBar, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : L.knob.map((r) => grow(r, 8)))] },
+  { title: 'ALL OF BROOD', all: true,
+    body: 'that is the whole panel. point at anything and the screen says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
+    bodyPhone: 'that is the whole panel. tap anything and this bar says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
+    try: 'SAVE keeps a sound on this device. TOUR, under the panel, brings this strip back.' },
+];
+// The open parts of a step, a little larger than the controls; null for the whole panel.
+function tourHoles(step, L, overlayOpen) {
+  const s = TOUR[step];
+  if (!s || s.all) return null;
+  const out = [L.lcd, L.src.start, ...s.holes(L)];
+  if (overlayOpen) out.push(L.overlay);
+  return out.filter(Boolean).map((r) => grow(r, 6));
+}
+function TourVeil({ L, holes }) {
+  const h = L.phone ? L.H : H;
+  return <svg className="abs veil" style={at([0, 0, L.W, h])} width={L.W} height={h} aria-hidden="true">
+    <defs><mask id="tour-holes">
+      <rect width={L.W} height={h} fill="#fff"/>
+      {holes.map((r, i) => <rect key={i} x={r[0]} y={r[1]} width={r[2]} height={r[3]} rx="8" fill="#000"/>)}
+    </mask></defs>
+    <rect width={L.W} height={h} fill="#efebe0" fillOpacity=".84" mask="url(#tour-holes)"/>
+  </svg>;
+}
+// The tour's own strip: where we are, what this part does, one thing to try, and the way on.
+function TourBar({ step, phone, help, go, end, clearHelp, quiet }) {
+  const s = TOUR[step], last = TOUR.length - 1;
+  const r = phone ? [0, 0, PW, PHONE_BAR_H] : TOUR_BAR;
+  const box = phone
+    ? { count: [12, 8, 110, 24], dots: (i) => [124 + i * 26, 8, 22, 24], all: [310, 8, 68, 24], title: [12, 38, 366, 22], text: [12, 64, 366, 160],
+      back: [12, 230, 112, 34], end: [132, 230, 112, 34], next: [252, 230, 126, 34] }
+    : { count: [14, 10, 190, 16], dots: (i) => [860 + i * 22, 10, 18, 24], all: [1014, 10, 38, 24], title: [14, 30, 200, 56], text: [224, 8, 620, 110],
+      back: [860, 78, 138, 36], end: [1058, 10, 84, 24], next: [1004, 78, 138, 36] };
+  const keys = (event) => {
+    if (/INPUT|TEXTAREA/.test(event.target.tagName)) return;
+    if (event.key === 'ArrowRight' && step < last) { event.preventDefault(); go(step + 1); }
+    if (event.key === 'ArrowLeft' && step > 0) { event.preventDefault(); go(step - 1); }
+  };
+  // A phone's screen is often scrolled away, so a tap's help comes up here instead.
+  const showing = phone && help;
+  return <section className={`${phone ? 'tourbar-phone' : 'abs'} tourbar sheet`} style={phone ? undefined : at(r)} aria-label="Tour" onKeyDown={keys} onPointerDown={clearHelp}>
+    <Txt r={box.count} cls="vl" size={vf(16)} color={MUTED}>{s.all ? 'TOUR  THE END' : `TOUR  ${step + 1} / ${last}`}</Txt>
+    {TOUR.slice(0, last).map((t, i) => <button key={t.title} type="button" className={`abs tour-dot vl ${i === step ? 'on' : ''}`} style={{ ...at(box.dots(i)), ...vf(16) }}
+      aria-label={`Step ${i + 1}: ${t.title.toLowerCase()}`} aria-current={i === step ? 'step' : undefined} onClick={() => go(i)}>{i + 1}</button>)}
+    <Key r={box.all} pressed={step === last} label="All of Brood: the whole panel" onClick={() => go(last)}>ALL</Key>
+    <div key={showing ? `help-${help.label}` : step} className="abs tour-text" style={at([box.title[0], box.title[1], box.title[2], box.text[1] + box.text[3] - box.title[1]])} aria-live="polite">
+      <h2 className="abs nm" style={{ ...at([0, 0, box.title[2], box.title[3]]), ...nf(phone ? 24 : 22) }}>{showing ? help.label : s.title}</h2>
+      <div className="abs tour-body vl" style={{ ...at([box.text[0] - box.title[0], box.text[1] - box.title[1], box.text[2], box.text[3]]), ...vf(17) }}>
+        {showing ? <><p>{help.text}</p><p className="tour-aside">tap this bar for the step again.</p></> : <>
+          {(phone && s.bodyPhone ? s.bodyPhone : s.body).split('\n\n').map((para) => <p key={para}>{para}</p>)}
+          <p><b className="nm" style={nf(16)}>TRY</b> {phone && s.tryPhone ? s.tryPhone : s.try}</p>
+          {s.wet && quiet && <p className="tour-quiet">the wet side is quiet with these settings: {quiet.why}. <button type="button" className="tour-fix nm" style={nf(15)} onClick={quiet.fix}>SET IT UP</button></p>}
+        </>}
+      </div>
+    </div>
+    <Key r={box.back} disabled={step === 0} onClick={() => go(step - 1)}>BACK</Key>
+    <Key r={box.next} disabled={step === last} onClick={() => go(step + 1)}>NEXT</Key>
+    <Key r={box.end} onClick={end}>END TOUR</Key>
+  </section>;
+}
+
+function useScale(tall) {
+  const measure = () => {
+    const phone = window.innerWidth <= 700;
+    return { phone, scale: phone ? window.innerWidth / PW : Math.max(0.1, Math.min(window.innerWidth / W, window.innerHeight / (H + (tall ? TOUR_DESK_H : 0)))) };
+  };
+  const [fit, setFit] = useState(measure);
+  useEffect(() => {
+    const resize = () => setFit(measure());
+    resize();
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, [tall]);
+  useEffect(() => { document.documentElement.classList.toggle('phone', fit.phone); }, [fit.phone]);
+  return fit;
+}
+
+// The input level, as the plug-in's LEVEL slider has it: a gain from silence to +24 dB, with
+// unity in the middle of the travel (JUCE's skew from the mid point).
+const LEVEL_MAX = 15.85, LEVEL_SKEW = Math.log(0.5) / Math.log(1 / LEVEL_MAX);
+const levelPos = (g) => Math.pow(clamp(g / LEVEL_MAX), LEVEL_SKEW);
+const levelGain = (pos) => LEVEL_MAX * Math.pow(clamp(pos), 1 / LEVEL_SKEW);
+const levelDb = (g) => (g <= 1e-5 ? -100 : 20 * Math.log10(g));
+
 function App() {
   const [params, setParams] = useState(() => {
     const now = safeRead('brood-params-v4');
@@ -793,85 +1271,124 @@ function App() {
   });
   const [favourites, setFavourites] = useState(() => { const f = safeRead('brood-favourites-v1'); return Array.isArray(f) ? f : []; });
   const [browsing, setBrowsing] = useState(null);   // the sound to go back to while the browser is open
+  const [routesOpen, setRoutesOpen] = useState(false);
+  const [pluginOpen, setPluginOpen] = useState(false);
   const [preset, setPreset] = useState(0);
   const [source, setSource] = useState('demo');
+  const [demoId, setDemoId] = useState(() => { const d = safeRead('brood-demo-v1'); return DEMOS.some((x) => x.id === d) ? d : DEMOS[0].id; });
   const [fileName, setFileName] = useState('');
-  const [inputLevel, setInputLevel] = useState(0.8);
+  const [inputGain, setInputGain] = useState(1);
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState(null);
   const [wave, setWave] = useState(null);
   const [notice, setNotice] = useState('');
-  const [guideOpen, setGuideOpen] = useState(false);
-  const [touched, setTouched] = useState('clock');
   const [modSource, setModSource] = useState(0);
-  // One sentence about whatever the mouse is resting on, for the controls that do
-  // not already explain themselves. It shows in the footer, where the readout is.
+  const [modOpen, setModOpen] = useState(false);
+  const [lcd, setLcd] = useState({ label: 'PATCH', value: PRESETS[0].name.toLowerCase(), follows: null });
   const [hover, setHover] = useState(null);
+  // On a phone in the tour, a tap's help borrows the tour bar for a few seconds.
+  const [barHelp, setBarHelp] = useState(null);
+  useEffect(() => { if (!barHelp) return undefined; const id = setTimeout(() => setBarHelp(null), 5000); return () => clearTimeout(id); }, [barHelp]);
+  const [hoverKnob, setHoverKnob] = useState(-1);
+  const [activeKnob, setActiveKnob] = useState(-1);   // the knob a finger is turning
+  const [tab, setTab] = useState(0);                  // a phone's column: WET, SHARED, LOOP
+  const [menu, setMenu] = useState(null);
+  const [chipDrag, setChipDrag] = useState(null);   // { k, x, y, target } in design units
+  const [blink, setBlink] = useState(true);
+  // The tour: the step showing, or -1. A first visit opens it; after that it stays as it was left.
+  const [tour, setTour] = useState(() => {
+    const t = safeRead('brood-tour-v1');
+    if (!t || typeof t.step !== 'number') return 0;
+    return t.open ? clamp(Math.round(t.step), 0, TOUR.length - 1) : -1;
+  });
+  const { scale, phone } = useScale(tour >= 0);
+  const stage = useRef(null);
+  const traces = useRef([new Array(64).fill(0), new Array(64).fill(0)]);
+  const loopFlash = useRef({ cycles: -1, until: 0 });
+  const lastLoop = useRef('off');
   const fileInput = useRef(null);
   const engineRef = useRef(null);
   const paramsRef = useRef(params); paramsRef.current = params;
   const runningRef = useRef(running); runningRef.current = running;
   if (!engineRef.current) {
     engineRef.current = new AudioEngine((message) => {
-      if (message.type === 'state') setState(message.st);
+      if (message.type === 'state') {
+        // The chips' traces: the last two seconds of each source, at the rate state arrives.
+        for (let k = 0; k < 2; k++) { traces.current[k].shift(); traces.current[k].push(message.st.mods?.[k] ?? 0); }
+        setState(message.st);
+      }
       if (message.type === 'wave') setWave(message);
       // A new take plays all of itself: the knobs follow what the engine has already done.
       if (message.type === 'fit') setParams((previous) => ({ ...previous, start: 1, loopEnd: 1, ...(message.length ? { length: 1 } : {}) }));
     }, (message) => setNotice(message));
+    engineRef.current.demoId = demoId;
   }
   useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v4', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
-  const update = React.useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
-  const help = React.useCallback((label, text) => ({
-    onMouseEnter: () => setHover({ label, text }),
-    onMouseLeave: () => setHover(null),
-    onFocus: () => setHover({ label, text }),
-    onBlur: () => setHover(null),
-  }), []);
-  const touch = React.useCallback((id) => setTouched(id), []);
-  const gesture = React.useCallback((which, action) => {
-    if (!runningRef.current) { if (action === 'down') setNotice('Start audio first, then tap a channel to play.'); return; }
+  useEffect(() => { const id = setInterval(() => setBlink(Math.floor(performance.now() / 160) % 2 === 0), 40); return () => clearInterval(id); }, []);
+  const update = useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
+  const showReadout = useCallback((label, value) => setLcd({ label, value, follows: null }), []);
+  // The readout's own names for the parameters, so it never shows a raw id.
+  const touch = useCallback((id, follow = true) => {
+    const names = { loopEnd: 'END', start: 'START', balance: 'BALANCE', mod1Rate: 'MOD 1 RATE', mod2Rate: 'MOD 2 RATE', wetDiv: 'WET DIV', loopDiv: 'LOOP DIV', wearNoise: 'NOISE', loopDb: 'GAIN' };
+    const i = KNOB_IDS.indexOf(id);
+    if (follow) setLcd({ label: i >= 0 ? null : names[id] || id.toUpperCase(), value: '', follows: id, knob: i });
+  }, []);
+  useEffect(() => { if (notice) showReadout('AUDIO', notice.replace(/\.$/, '').toLowerCase()); }, [notice, showReadout]);
+  const gesture = useCallback((which, action) => {
+    if (!runningRef.current) { if (action === 'down') setNotice('Press START AUDIO first, then tap a switch to play.'); return; }
     engineRef.current.footswitch(which, action);
   }, []);
+  const overlayOpen = !!browsing || routesOpen || pluginOpen;
   useEffect(() => {
     const held = {};
     const keyMap = { a: 'wet', l: 'loop' };
     const down = (e) => {
       const which = keyMap[e.key.toLowerCase()];
-      if (!which || e.repeat || held[which] || /INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName) || e.target.getAttribute('role') === 'slider') return;
+      if (!which || e.repeat || held[which] || overlayOpen || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
       held[which] = true; gesture(which, 'down');
     };
     const up = (e) => { const which = keyMap[e.key.toLowerCase()]; if (which && held[which]) { held[which] = false; gesture(which, 'up'); } };
     const blur = () => { for (const which of Object.keys(held)) if (held[which]) { held[which] = false; gesture(which, 'up'); } };
     window.addEventListener('keydown', down); window.addEventListener('keyup', up); window.addEventListener('blur', blur);
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); window.removeEventListener('blur', blur); };
-  }, [gesture]);
+  }, [gesture, overlayOpen]);
+  // The loop switch's state in words, when it changes.
+  useEffect(() => {
+    const now = running ? state?.loop || 'off' : 'off';
+    if (now !== lastLoop.current) {
+      const msg = { play: 'playing', rec: 'recording...', dub: 'overdubbing...' }[now];
+      if (msg) showReadout('LOOP', msg);
+      else if (lastLoop.current === 'play') showReadout('LOOP', 'stopped');
+      lastLoop.current = now;
+    }
+  }, [state?.loop, running, showReadout]);
+
   const patches = [...PRESETS.map((p) => ({ ...p, factory: true })), ...userPatches.map((p) => ({ ...p, subtitle: 'saved on this device' }))];
   const currentPatch = patches[Math.min(preset, patches.length - 1)];
   const loadPatch = (index) => {
     const n = (index + patches.length) % patches.length;
-    setPreset(n); setParams(sanitize(patches[n].params)); setNotice(`Loaded ${patches[n].name.toLowerCase()}.`);
+    setPreset(n); setParams(sanitize(patches[n].params)); showReadout('PATCH', patches[n].name.toLowerCase());
   };
-  const stepPatch = (d) => loadPatch(preset + d);
-  const openBrowser = () => setBrowsing({ params, preset });
+  const openBrowser = () => { setRoutesOpen(false); setPluginOpen(false); setBrowsing({ params, preset }); };
   // Every preset kept here is in today's form (v 2: START counts from the oldest audio in every mode).
   const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 4 })); setUserPatches(marked); safeWrite('brood-user-presets-v4', marked); };
   const savePatch = (category) => {
     const name = (window.prompt('A name for this sound:', currentPatch.factory ? '' : currentPatch.name) || '').trim().toUpperCase();
     if (!name) return;
-    if (PRESETS.some((p) => p.name === name)) { setNotice('That name belongs to a factory preset.'); return; }
+    if (PRESETS.some((p) => p.name === name)) { showReadout('PATCH', 'that name belongs to a factory preset'); return; }
     const next = [...userPatches.filter((p) => p.name !== name), { name, category, params: sanitize(params) }]
       .sort((a, b) => a.name.localeCompare(b.name));
     storeUser(next);
     setPreset(PRESETS.length + next.findIndex((p) => p.name === name));
     setBrowsing((b) => (b ? { params, preset: PRESETS.length + next.findIndex((p) => p.name === name) } : b));
-    setNotice(`Saved ${name.toLowerCase()} on this device.`);
+    showReadout('PATCH', `saved ${name.toLowerCase()} on this device`);
   };
   const saveCurrent = () => {
     if (currentPatch.factory) { savePatch('USER'); return; }
     storeUser(userPatches.map((p) => (p.name === currentPatch.name ? { ...p, params: sanitize(params) } : p)));
-    setNotice(`Saved ${currentPatch.name.toLowerCase()} on this device.`);
+    showReadout('PATCH', `saved ${currentPatch.name.toLowerCase()} on this device`);
   };
   const deletePatch = (name) => {
     if (!window.confirm(`Delete ${name}?`)) return;
@@ -888,174 +1405,404 @@ function App() {
     if (busy) return;
     setBusy(true); setNotice('');
     try {
-      if (engineRef.current.running) { await engineRef.current.pause(); setRunning(false); }
-      else { await engineRef.current.start(paramsRef.current); setRunning(true); }
+      if (engineRef.current.running) { await engineRef.current.pause(); setRunning(false); showReadout('AUDIO', 'stopped'); }
+      else { engineRef.current.setInputLevel(inputGain); await engineRef.current.start(paramsRef.current); setRunning(true); showReadout('AUDIO', 'running'); }
     } catch (error) {
       setRunning(!!engineRef.current.running);
       setNotice(error?.name === 'NotAllowedError' ? 'Microphone access was denied. Choose DEMO or allow access in your browser.' : (error.message || 'Could not start audio.'));
     } finally { setBusy(false); }
   };
   const chooseSource = async (kind) => {
-    if (kind === 'file') { fileInput.current?.click(); return; }
+    if (kind === 'file' && !fileName) { fileInput.current?.click(); return; }
     setSource(kind); setNotice('');
+    showReadout('SOURCE', kind === 'demo' ? `the demo: ${DEMOS.find((d) => d.id === demoId).name.toLowerCase()}` : kind === 'file' ? fileName : 'the microphone. use headphones');
     try { await engineRef.current.connectSource(kind); }
     catch (error) { setNotice(error?.name === 'NotAllowedError' ? 'Microphone access was denied. Choose DEMO or allow access in your browser.' : (error.message || 'Could not connect input.')); }
+  };
+  // A demo loop: it becomes the source, and TEMPO follows it so SYNC and RECORD's bars fit.
+  const chooseDemo = async (id) => {
+    const demo = DEMOS.find((d) => d.id === id);
+    setDemoId(id); safeWrite('brood-demo-v1', id);
+    setSource('demo'); setNotice('');
+    update('bpm', demo.bpm);
+    showReadout('DEMO', `${demo.name.toLowerCase()}: ${demo.detail}`);
+    try {
+      if (source === 'demo') await engineRef.current.chooseDemo(id);
+      else { engineRef.current.demoId = id; await engineRef.current.connectSource('demo'); }
+    } catch (error) { setNotice(error.message || 'Could not load that demo.'); }
   };
   const readFile = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    setNotice('Loading your audio file…');
-    try { await engineRef.current.chooseFile(file); setSource('file'); setFileName(file.name); setNotice('File loaded and looping.'); }
+    showReadout(file.name, 'loading');
+    try { await engineRef.current.chooseFile(file); setSource('file'); setFileName(file.name); showReadout(file.name, 'loaded, and looping into Brood'); }
     catch (error) { setNotice(error.message || 'Could not load that file.'); }
   };
-  const wetActive = !!state?.wetOn;
-  const loopActive = !!state && state.loop !== 'off';
-  const loopStatus = !running ? 'LISTENING' : state?.loop === 'dub' ? 'OVERDUB' : state?.loop === 'rec' ? 'RECORDING' : state?.loop === 'play' ? 'PLAYING' : 'LISTENING';
-  const wetStatus = state?.freeze && running ? 'FROZEN' : wetActive ? 'ON' : 'OFF';
-  const meter = (v = 0) => `${clamp((20 * Math.log10(v + 1e-9) + 60) / 60) * 100}%`;
+  const setLevel = (pos) => {
+    const g = levelGain(pos);
+    setInputGain(g); engineRef.current.setInputLevel(g);
+    const db = levelDb(g);
+    showReadout('LEVEL', `${db.toFixed(1)} dB`);
+  };
+  const openMenu = useCallback((event, title, items) => {
+    const box = stage.current.getBoundingClientRect(), w = stage.current.offsetWidth, k = w / box.width;
+    setMenu({ x: (event.clientX - box.left) * k, y: (event.clientY - box.top) * k, w, h: stage.current.offsetHeight, title, items });
+  }, []);
+  const selectSource = useCallback((k) => setModSource(k), []);
 
-  return <div className="page">
-    <div className="utility-bar layout-width">
-      <div className="utility-brand"><span className="brand-mark"><Spark size={14}/></span><span>GLYPH AUDIO <i>/</i> BROOD</span></div>
-      <div className="utility-center">A LITTLE MACHINE FOR HAPPY ACCIDENTS <span>✳</span></div>
-      <div className="utility-actions">
-        <button className="utility-help" onClick={() => setGuideOpen(!guideOpen)} aria-expanded={guideOpen}><span>?</span> {guideOpen ? 'CLOSE GUIDE' : 'HOW TO PLAY'}</button>
+  // Where each modulated control is now: the knob, plus each source's swing (the worklet's
+  // applyRamps, without its smoothing).
+  const effective = (t) => {
+    const id = MOD_TARGETS[t];
+    let v = params[id];
+    for (let k = 0; k < 2; k++) {
+      if (!params[`mod${k + 1}On`] || !running) continue;
+      const raw = state?.mods?.[k] ?? 0;
+      v += (params[`mod${k + 1}Uni`] ? raw : raw * 2 - 1) * params[`mod${k + 1}_${id}`];
+    }
+    return clamp(v);
+  };
+  const routeMask = [0, 1].map((k) => MOD_TARGETS.map((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005));
+  const balanceRouted = routeMask[0][6] || routeMask[1][6];
+
+  const L = phone ? phoneLayout(params, tab) : { ...deskLayout(params), H: H + (tour >= 0 ? TOUR_DESK_H : 0) };
+  const holes = tour >= 0 ? tourHoles(tour, L, overlayOpen) : null;
+  const open = (x, y) => !holes || holes.some((h) => inside(h, x, y));
+  useEffect(() => { safeWrite('brood-tour-v1', { open: tour >= 0, step: Math.max(0, tour) }); }, [tour]);
+  // Veiled controls are out of reach for the mouse, a finger and the Tab key alike.
+  useLayoutEffect(() => {
+    for (const el of stage.current?.children || []) {
+      if (!(el instanceof HTMLElement)) continue;
+      const keep = el.matches('.tourbar, .menu, input[type=file]') || !holes;
+      el.inert = !keep && !open(el.offsetLeft + el.offsetWidth / 2, el.offsetTop + el.offsetHeight / 2);
+    }
+  });
+  // What would keep the wet side silent in the wet steps, and the least that puts it right.
+  const loopPlaying = running && (state?.loop === 'play' || state?.loop === 'dub');
+  const quietWhy = [
+    params.mix < 0.05 && 'MIX is all dry',
+    params.balance < 0.05 && 'BALANCE is the loop alone',
+    params.routing === 2 && !loopPlaying && 'ROUTING is LOOP, and no loop is playing',
+  ].filter(Boolean);
+  const quiet = quietWhy.length ? {
+    why: quietWhy.join('; '),
+    fix: () => {
+      setParams((p) => ({ ...p, ...(p.mix < 0.05 ? { mix: 0.5 } : {}), ...(p.balance < 0.05 ? { balance: 0.5 } : {}), ...(p.routing === 2 && !loopPlaying ? { routing: 1 } : {}) }));
+      showReadout('TOUR', 'set up to hear the wet side');
+    },
+  } : null;
+  const goTour = (i) => {
+    const next = clamp(i, 0, TOUR.length - 1);
+    setTour(next); setHover(null); setBarHelp(null);
+    if (!phone) return;
+    if (TOUR[next].tab != null) { setTab(TOUR[next].tab); setActiveKnob(-1); }
+    // A phone's page is long: bring the step's first open part into view.
+    const first = TOUR[next].holes?.(phoneLayout(params, TOUR[next].tab ?? tab))[0];
+    if (!first) return;
+    requestAnimationFrame(() => {
+      const top = stage.current.getBoundingClientRect().top + window.scrollY;
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      window.scrollTo({ top: Math.max(0, top + (first[1] - 12) * scale), behavior: reduce ? 'auto' : 'smooth' });
+    });
+  };
+  // A phone that opens on step 1 goes straight down to START AUDIO, as pressing 1 would.
+  const openedAt = useRef(false);
+  useEffect(() => {
+    if (openedAt.current) return;
+    openedAt.current = true;
+    if (phone && tour === 0) goTour(0);
+  }, []);
+  // On a phone the key that opens a sheet can be far down the page: bring the sheet into view.
+  useEffect(() => {
+    if (!phone || !(browsing || routesOpen || pluginOpen)) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    document.querySelector('.overlay')?.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+  }, [phone, !!browsing, routesOpen, pluginOpen]);
+  const toDesign = (event) => {
+    const box = stage.current.getBoundingClientRect(), k = L.W / box.width;
+    return { x: (event.clientX - box.left) * k, y: (event.clientY - box.top) * k };
+  };
+  // Hover help: the mouse mapped back into design units and matched against the table, so a
+  // click is never intercepted. While a button is held, help stands down for the gesture.
+  // A phone has no hover: a tap shows the help, and it stays until the next touch.
+  const table = helpTable(params, modOpen, L);
+  const helpAt = ({ x, y }) => {
+    // An open browser or route list covers the main sheet: nothing under it explains itself.
+    if (overlayOpen && inside(L.overlay, x, y)) return null;
+    if (!open(x, y)) return null;
+    return table.find((h) => inside(h.r, x, y)) || null;
+  };
+  const showHelp = (item) => { if (item?.label !== hover?.label || item?.text !== hover?.text) setHover(item ? { label: item.label, text: item.text } : null); };
+  const onStageMove = (event) => {
+    if (event.buttons || event.pointerType === 'touch' || phone) return;
+    const at = toDesign(event);
+    showHelp(helpAt(at));
+    const knob = (overlayOpen && inside(L.overlay, at.x, at.y)) || !open(at.x, at.y) ? -1 : KNOB_IDS.findIndex((_, i) => L.knob[i] && inside(L.knob[i], at.x, at.y));
+    if (knob !== hoverKnob) setHoverKnob(knob);
+  };
+  const tapStart = useRef(null);
+  const onStageDown = (event) => {
+    if (hover) setHover(null);
+    if (barHelp) setBarHelp(null);
+    tapStart.current = { x: event.clientX, y: event.clientY };
+  };
+  const onStageUp = (event) => {
+    const t = tapStart.current;
+    tapStart.current = null;
+    if (!(phone || event.pointerType === 'touch') || !t || Math.hypot(event.clientX - t.x, event.clientY - t.y) > 8) return;
+    const item = helpAt(toDesign(event));
+    showHelp(item);
+    // In the steps, a tap is using the control: the bar keeps the step. Only the last step, the
+    // whole panel, lends the bar to help, and never for a button, which does what it says.
+    if (phone && TOUR[tour]?.all) setBarHelp(item && !event.target.closest('button, [role=button], [role=radio], [role=switch]') ? { label: item.label, text: item.text } : null);
+  };
+  // Dragging a chip: the control it would land on, and a tag at the mouse.
+  const targetRect = (t) => (t === 6 ? grow(L.balance, 4, 6) : L.knob[KNOB_IDS.indexOf(MOD_TARGETS[t])]);
+  const chipTarget = (event) => {
+    const { x, y } = toDesign(event);
+    return { x, y, target: MOD_TARGETS.findIndex((_, t) => targetRect(t) && inside(targetRect(t), x, y)) };
+  };
+  const dropChip = (k, event) => {
+    setChipDrag(null);
+    if (!event) return;
+    const { target } = chipTarget(event);
+    if (target < 0) return;
+    const key = `mod${k + 1}_${MOD_TARGETS[target]}`;
+    const depth = Math.abs(params[key]) < 0.005 ? 0.5 : params[key];
+    if (Math.abs(params[key]) < 0.005) update(key, 0.5);
+    setModSource(k);
+    showReadout(`MOD ${k + 1} > ${MOD_TARGET_NAMES[MOD_TARGETS[target]]}`, `${depth > 0 ? '+' : ''}${Math.round(depth * 100)}%`);
+  };
+
+  // The readout: help while the mouse rests on something; otherwise the last thing moved.
+  const helping = !!hover && !menu;
+  const lcdLabel = lcd.follows ? (lcd.knob >= 0 ? knobName(lcd.knob, params) : lcd.label) : lcd.label;
+  const lcdValue = (lcd.follows ? describe(lcd.follows, params) : lcd.value).toUpperCase();
+  const lsrc = state?.lsrc || 0;
+  const meta = `${((state?.clockHz ?? clockHz(params.clock, params.smooth)) / 1000).toFixed(1)} kHz    ${lsrc > 0 && state ? `loop ${(state.winLen / state.clockHz).toFixed(2)} s` : 'no loop'}`;
+
+  // The switches' lights: the wet side blinks while frozen; the loop blinks while it records or
+  // layers, and flashes once each time a stopped looper fills its memory.
+  if (state && state.histCycles !== loopFlash.current.cycles) { loopFlash.current = { cycles: state.histCycles, until: performance.now() + 120 }; }
+  const wetLit = running && !!state?.wetOn && !(state.freeze && !blink);
+  const loopState = running ? state?.loop || 'off' : 'off';
+  const loopLit = loopState === 'play' || ((loopState === 'rec' || loopState === 'dub') && blink) || (running && loopState === 'off' && performance.now() < loopFlash.current.until);
+  const canDub = running && !!state && (state.canOverdub || state.dubLatched);
+  const record = params.recMode === 1;
+  const worn = !!params.classic, wear = worn ? 2 : params.hiQ ? 0 : 1;
+  const n = modSource + 1;
+  const spanMode = !!params[`mod${n}Sync`];
+  const rateValue = params[`mod${n}Rate`];
+  const rateFigure = spanMode ? rampDivLabel(rateValue) : (() => { const secs = 1 / rampHertz(rateValue); return secs < 1 ? `${Math.round(secs * 1000)}ms` : `${secs.toFixed(secs < 10 ? 1 : 0)}s`; })();
+  const memoryFigure = params.memory <= 0.001 ? 'PEDAL' : `${expMap(params.memory, 1, 30).toFixed(1)}s`;
+  const hoodValues = [
+    `${levelDb(inputGain) > 0.05 ? '+' : ''}${levelDb(inputGain).toFixed(1)} dB`,
+    params.tone > 0.995 ? 'open' : `cut ${pct(1 - params.tone)}`,
+    params.fade <= 0.001 ? 'pedal' : `keeps ${pct(1 - params.fade)}`,
+    params.width <= 0.005 ? 'mono' : params.width < 0.49 ? `narrow ${pct(params.width * 2)}` : params.width > 0.51 ? `wide ${pct((params.width - 0.5) * 2)}` : 'as built',
+    worn ? (params.wearNoise <= 0.005 ? 'off' : pct(params.wearNoise)) : 'when worn',
+  ];
+  const balanceShown = balanceRouted && running ? effective(6) : params.balance;
+  const pressSwitch = (id, label, on, off) => { const next = params[id] ? 0 : 1; update(id, next); showReadout(label, next ? on : off); };
+  const demo = DEMOS.find((d) => d.id === demoId);
+  const sourceText = notice || (source === 'demo' ? '' : source === 'file' ? fileName : 'use headphones');
+
+  const lcdW = L.lcd[2];
+  const src = L.src;
+  const shownKnob = phone ? activeKnob : hoverKnob;
+  const mast = phone
+    ? <>
+      <Wordmark r={[12, 18, 190.8, 18]}/>
+      <Txt r={[210, 16, 168, 22]} align="right" size={nf(15)} color={MUTED}>MICRO-LOOPER + SPACE</Txt>
+      <div className="abs" style={{ ...at([12, 102, 366, 2]), background: INK }}/>
+    </>
+    : <>
+      <div className="abs" style={{ ...at([24, 94, 1152, 2]), background: INK }}/>
+      <Wordmark r={[24, 41, 296.8, 28]}/>
+      <Txt r={[343, 38, 300, 17]} size={nf(17)} color={MUTED}>GLYPH AUDIO</Txt>
+      <Txt r={[343, 55, 300, 17]} size={nf(17)} color={MUTED}>MICRO-LOOPER + SPACE</Txt>
+      <Txt r={[720, 30, 48, 34]} align="right" size={nf(17)} color={MUTED}>PATCH</Txt>
+    </>;
+
+  return <div className={`page ${phone ? 'phone' : ''}`} style={phone && tour >= 0 ? { paddingBottom: PHONE_BAR_H * scale } : undefined}>
+    <div className="frame" style={{ width: L.W * scale, height: L.H * scale }}>
+      <div ref={stage} className="stage" style={{ width: L.W, height: L.H, transform: `scale(${scale})` }}
+        onPointerMove={onStageMove} onPointerDownCapture={onStageDown} onPointerUpCapture={onStageUp} onPointerLeave={() => { if (!phone) { setHover(null); setHoverKnob(-1); } }}>
+        {mast}
+        <Key r={L.presetPrev} label="Previous preset" onClick={() => loadPatch(preset - 1)}><ArrowGlyph dir={-1}/></Key>
+        <Key r={L.presetName} label={`Browse presets: ${currentPatch.name}`} pressed={!!browsing} onClick={() => (browsing ? setBrowsing(null) : openBrowser())}>{currentPatch.name}</Key>
+        <Key r={L.presetNext} label="Next preset" onClick={() => loadPatch(preset + 1)}><ArrowGlyph dir={1}/></Key>
+        <Key r={L.save} onClick={saveCurrent}>SAVE</Key>
+
+        {/* the main sheet: three columns on a desktop, one at a time on a phone */}
+        {!phone && <>
+          <div className="abs sheet" style={at(R.pedal)}/>
+          {['WET CHANNEL', 'SHARED', 'MICRO-LOOPER'].map((name, c) => <React.Fragment key={name}>
+            {c > 0 && <div className="abs" style={{ ...at([24 + c * 276, 274, 1, 381]), background: RULE }}/>}
+            <Txt r={[24 + c * 276, 272, 276, 16]} align="center" size={nf(15)} color={MUTED}>{name}</Txt>
+          </React.Fragment>)}
+        </>}
+        {phone && <>
+          <ThreeWay r={L.tabs} labels={['Wet channel', 'Shared', 'Micro-looper']} index={tab} label="Column" onChange={(i) => { setTab(i); setActiveKnob(-1); }}/>
+          <div className="abs sheet" style={at(L.tabSheet)}/>
+        </>}
+        <TakeStrip L={L} wave={wave} state={running ? state : null} params={params} scale={scale} onChange={update} onTouch={touch} showReadout={showReadout}
+          running={running} engine={engineRef.current} openMenu={openMenu}/>
+        <Footswitch r={L.fsWet} name="WET" keyName="A" which="wet" lit={wetLit} onGesture={gesture}/>
+        <Footswitch r={L.fsLoop} name="LOOP" keyName="L" which="loop" lit={loopLit} onGesture={gesture}/>
+        <Plate r={L.overdub} text="OVERDUB" on={state?.dubLatched && running} disabled={!canDub}
+          onClick={() => { const on = !state?.dubLatched; engineRef.current.overdub(on); showReadout('OVERDUB', on ? 'layering until you switch it off' : 'off'); }}/>
+        {L.character && <Stepper r={L.character} caption="WEAR" names={['CLEAN', 'PEDAL', 'WORN']} index={wear} onStep={(d) => {
+          const next = (wear + d + 3) % 3;
+          setParams((p) => ({ ...p, hiQ: next === 0 ? 1 : 0, classic: next === 2 ? 1 : 0 }));
+          showReadout('WEAR', next === 0 ? 'clean: fewer artifacts, wet a little later' : next === 2 ? 'worn: a noisy clock, a restless loop, a longer reverb' : 'the pedal as built');
+        }}/>}
+        {worn && L.wearPost && <ThreeWay r={L.wearPost} labels={['Pre loop', 'Post loop']} index={params.wearPost} label="Pre or post loop"
+          onChange={(i) => { update('wearPost', i); showReadout('PRE / POST LOOP', describe('wearPost', params, i)); }}/>}
+        {L.wetMode && <ThreeWay r={L.wetMode} labels={['Reverb', 'Delay', 'Slip', 'Weave']} index={params.wetMode} label="Wet mode"
+          onChange={(i) => { update('wetMode', i); showReadout('WET MODE', WET[i].toLowerCase()); }}/>}
+        {L.routing && <ThreeWay r={L.routing} labels={['In', 'In + Loop', 'Loop']} index={params.routing} label="Routing"
+          onChange={(i) => { update('routing', i); showReadout('ROUTING', ['in', 'in + loop', 'loop'][i]); }}/>}
+        {L.loopMode && <ThreeWay r={L.loopMode} labels={['Env', 'Tape', 'Stretch']} index={params.loopMode} label="Loop mode"
+          onChange={(i) => { update('loopMode', i); showReadout('LOOP MODE', ['env', 'tape', 'stretch'][i]); }}/>}
+        {KNOB_IDS.map((id, i) => L.knob[i] && <Knob key={id} i={i} r={L.knob[i]} valueW={L.knobValueW} params={params} effective={effective(MOD_TARGETS.indexOf(id))}
+          onChange={update} onTouch={touch} modSource={modSource} selectSource={selectSource} showReadout={showReadout} openMenu={openMenu}
+          active={shownKnob === i ? describe(id, params).toUpperCase() : null} onActive={setActiveKnob}/>)}
+        {L.wetSync && (params.wetMode === 1 || params.wetMode === 3) && <Plate r={L.wetSync} text="SYNC" on={params.sync} onClick={() => pressSwitch('sync', 'SYNC', 'on the beat', 'free')}/>}
+        {L.tapeDelay && params.wetMode === 1 && <Plate r={L.tapeDelay} text="TAPE" on={params.tapeDelay} onClick={() => pressSwitch('tapeDelay', 'TAPE', 'tape echo: TIME bends the pitch', 'digital: TIME crossfades')}/>}
+        {L.envSync && params.loopMode === 0 && <Plate r={L.envSync} text="SYNC" on={params.envSync} onClick={() => pressSwitch('envSync', 'SYNC', 'on the beat', 'free')}/>}
+        {L.envSoft && params.loopMode === 0 && <Plate r={L.envSoft} text="SOFT" on={params.envSoft} onClick={() => pressSwitch('envSoft', 'SOFT', 'slices fade', 'slices cut')}/>}
+        {L.freeze && <Plate r={L.freeze} text="FREEZE" on={params.freeze} onClick={() => pressSwitch('freeze', 'FREEZE', 'held, ringing', 'moving')}/>}
+        {L.trails && params.wetMode !== 2 && <Plate r={L.trails} text="TRAILS" on={params.trails} onClick={() => pressSwitch('trails', 'TRAILS', 'tails keep falling', 'tails cut')}/>}
+        {L.smooth && <Plate r={L.smooth} text="SMOOTH" on={params.smooth} onClick={() => {
+          const next = params.smooth ? 0 : 1;
+          // Turning SMOOTH on starts from the step CLOCK is on, so the click doesn't move the sound.
+          setParams((p) => ({ ...p, smooth: next, ...(next ? { clock: Math.floor(clamp(p.clock) * 10 + 0.5) / 10 } : {}) }));
+          showReadout('SMOOTH', next ? 'clock glides' : 'clock steps');
+        }}/>}
+        {[['wetDiv', 'WET DIV', L.wetDiv], ['loopDiv', 'LOOP DIV', L.loopDiv]].map(([id, caption, r]) => {
+          if (!r) return null;
+          const index = divIndex(params[id]);
+          return <Stepper key={id} r={r} caption={caption} capWidth={60} names={['1x', '2x', '4x']} index={index}
+            onStep={(d) => { const next = rampValue((index + d + 3) % 3, 3); update(id, next); showReadout(caption, describe(id, params, next)); }}/>;
+        })}
+
+        {/* the screen */}
+        <div className="abs lcd" style={at(L.lcd)} aria-live="polite">
+          <Txt fit r={[10, 6, lcdW - 72, 16]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)">{helping ? hover.label : lcdLabel}</Txt>
+          <i className="chip-label sc" style={sf(15)}>{helping ? 'HELP' : 'LIVE'}</i>
+          {helping
+            ? <div className="abs lcd-help sc" style={{ ...at([10, 22, lcdW - 20, 84]), ...sf(17) }}>{hover.text}</div>
+            : <>
+              <Txt fit r={[10, 22, lcdW - 20, 69]} cls="sc" size={sf(28)} color={PAPER}>{lcdValue}{blink ? '_' : ''}</Txt>
+              <Txt r={[10, 91, lcdW - 20, 15]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)" style={{ whiteSpace: 'pre' }}>{meta}</Txt>
+            </>}
+        </div>
+
+        {/* LOOP */}
+        <Section r={L.loopArea} mark={MOSS} name="LOOP" tail={describe('balance', params, balanceShown).toUpperCase()}/>
+        <Txt r={L.memoryLabel} size={nf(16)} color={INK} style={{ opacity: record ? 0.35 : 1 }}>MEMORY</Txt>
+        <Slider r={L.memory} value={params.memory} disabled={record} label="Loop memory" valueText={describe('memory', params)}
+          onTouch={() => touch('memory')} onChange={(v) => update('memory', v)}/>
+        <Txt r={L.memoryFigure} align="right" cls="vl" size={vf(14)} color={MUTED} style={{ opacity: record ? 0.35 : 1 }}>{memoryFigure}</Txt>
+        <Txt r={L.balanceLabel} size={nf(16)} color={INK}>BALANCE</Txt>
+        <Txt r={[L.balance[0] - 32, L.balance[1], 32, 21]} size={nf(15)} color={MUTED}>LOOP</Txt>
+        <Txt r={L.wetEnd} size={nf(15)} color={MUTED}>WET</Txt>
+        <Slider r={L.balance} value={params.balance} label="Balance" valueText={describe('balance', params)} targetId="balance"
+          onTouch={() => touch('balance')} onChange={(v) => update('balance', v)}>
+          {({ inset, span, cy }) => {
+            // Clear of the tab: the first source's swing under the track, the second's over it.
+            const bars = [0, 1].map((k) => {
+              const d = params[`mod${k + 1}_balance`];
+              if (Math.abs(d) < 0.005) return null;
+              const uni = params[`mod${k + 1}Uni`], v = params.balance;
+              const lo = clamp(uni ? Math.min(v, v + d) : v - Math.abs(d)), hi = clamp(uni ? Math.max(v, v + d) : v + Math.abs(d));
+              return <rect key={k} x={inset + span * lo} y={k === 0 ? cy + 8 : cy - 13} width={span * (hi - lo)} height="3" rx="1.5" fill={MOD_COLOURS[k]} fillOpacity={params[`mod${k + 1}On`] ? 1 : 0.35}/>;
+            });
+            if (!balanceRouted) return bars;
+            const moving = [0, 1].filter((k) => routeMask[k][6] && params[`mod${k + 1}On`]);
+            return <>{bars}<rect x={inset + span * effective(6) - 2.5} y={cy - 7.5} width="5" height="13" rx="2" fill={moving.length === 1 ? MOD_COLOURS[moving[0]] : INK}/></>;
+          }}
+        </Slider>
+        <ThreeWay r={L.recMode} labels={['Capture', 'Record']} index={params.recMode} label="Capture or record"
+          onChange={(i) => { update('recMode', i); showReadout('CAPTURE / RECORD', i ? 'record: tap, play, tap. or hold while you play' : 'capture: a tap keeps the recent past'); }}/>
+        {record && <Stepper r={L.recBars} caption="BARS" names={['FREE', '1', '2', '3', '4', '6', '8', '12', '16']} index={REC_BARS.indexOf(params.recBars)}
+          onStep={(d) => { const i = (REC_BARS.indexOf(params.recBars) + d + REC_BARS.length) % REC_BARS.length; update('recBars', REC_BARS[i]); const t = describe('recBars', params, REC_BARS[i]); showReadout('RECORD', `${t}${t === 'free' ? ': until the next tap' : ', then it plays'}`); }}/>}
+
+        {/* MODULATION */}
+        <Section r={L.rampArea} mark={INK} name="MODULATION"/>
+        {[0, 1].map((k) => <ModChip key={k} k={k} r={k ? L.chip1 : L.chip0} params={params} open={modOpen && modSource === k} trace={traces.current[k]}
+          onToggleOn={() => update(`mod${k + 1}On`, params[`mod${k + 1}On`] ? 0 : 1)}
+          onClick={() => { setModOpen(!(modOpen && modSource === k)); setModSource(k); }}
+          onDragTo={(event) => setChipDrag({ k, ...chipTarget(event) })} onDrop={(event) => dropChip(k, event)} openMenu={openMenu} onChange={update}/>)}
+        <Key r={L.routes} pressed={routesOpen} onClick={() => { setBrowsing(null); setPluginOpen(false); setRoutesOpen(!routesOpen); }}>ROUTES</Key>
+        {modOpen && <>
+          <Stepper r={L.rampWave} caption="SHAPE" names={RAMP_WAVES} index={rampIndex(params[`mod${n}Wave`], RAMP_WAVES.length)} label={`MOD ${n} shape`}
+            onStep={(d) => { const i = (rampIndex(params[`mod${n}Wave`], 6) + d + 6) % 6; update(`mod${n}Wave`, rampValue(i, 6)); showReadout(`MOD ${n} SHAPE`, RAMP_WAVES[i].toLowerCase()); }}/>
+          <Txt r={[L.rampRate[0], L.rampRate[1], 34, 28]} size={nf(16)} color={MUTED}>{spanMode ? 'SPAN' : 'RATE'}</Txt>
+          <Slider r={[L.rampRate[0] + 36, L.rampRate[1] + 3, L.rampRate[2] - 76, 22]} value={rateValue} label={`MOD ${n} rate`} valueText={describe(`mod${n}Rate`, params)}
+            onTouch={() => touch(`mod${n}Rate`)} onChange={(v) => update(`mod${n}Rate`, v)} onReset={() => update(`mod${n}Rate`, BASE[`mod${n}Rate`])}/>
+          <Txt r={[L.rampRate[0] + L.rampRate[2] - 40, L.rampRate[1], 40, 28]} align="right" cls="vl" size={vf(14)} color={MUTED}>{rateFigure}</Txt>
+          {['Uni', 'Sync', 'Hold'].map((f, i) => <Switch key={f} r={L.rampSwitch[i]} text={f.toUpperCase()} on={params[`mod${n}${f}`]}
+            onClick={() => { const next = params[`mod${n}${f}`] ? 0 : 1; update(`mod${n}${f}`, next); showReadout(`MOD ${n} ${f.toUpperCase()}`, next ? 'on' : 'off'); }}/>)}
+        </>}
+
+        {/* the bottom strip: five cells on a desktop, five rows on a phone */}
+        <div className="abs sheet" style={at(L.hood)}/>
+        {['LEVEL', 'TONE', 'FADE', 'WIDTH', 'NOISE'].map((name, i) => {
+          const cell = L.hoodCell[i], id = ['input', 'tone', 'fade', 'width', 'wearNoise'][i];
+          const nameW = Math.ceil(name.length * 8.6) + 2;
+          const slider = [cell[0], cell[1] + 22, cell[2], 26];
+          return <React.Fragment key={name}>
+            <Txt r={[cell[0], cell[1], nameW, 18]} size={nf(16)} color={INK}>{name}</Txt>
+            <Txt r={[cell[0] + nameW + 8, cell[1], cell[2] - nameW - 8, 18]} align="right" cls="vl" size={vf(14)} color={MUTED}>{hoodValues[i]}</Txt>
+            {i === 0
+              ? <Slider r={slider} value={levelPos(inputGain)} label="Input level" valueText={hoodValues[0]} onChange={setLevel} onReset={() => setLevel(0.5)}/>
+              : <Slider r={slider} value={params[id]} label={name} valueText={describe(id, params)} onTouch={() => touch(id)}
+                onChange={(v) => update(id, v)} onReset={() => update(id, BASE[id])}/>}
+          </React.Fragment>;
+        })}
+
+        {/* the source picker: the browser's own, in the Bench's place */}
+        <Txt r={src.caption} size={nf(20)} color={INK}>SOURCE</Txt>
+        <ThreeWay r={src.picker} labels={['Demo', 'File', 'Mic']} index={['demo', 'file', 'live'].indexOf(source)} label="Source"
+          onChange={(i) => chooseSource(['demo', 'file', 'live'][i])}/>
+        <Stepper r={src.demo} caption="DEMO" capWidth={40} names={DEMOS.map((d) => d.name.toUpperCase())} index={DEMOS.indexOf(demo)} label="Demo loop"
+          onStep={(d) => chooseDemo(DEMOS[(DEMOS.indexOf(demo) + d + DEMOS.length) % DEMOS.length].id)}/>
+        <Key r={src.load} onClick={() => fileInput.current?.click()}>LOAD FILE</Key>
+        <input ref={fileInput} type="file" accept="audio/*,.wav,.aif,.aiff,.flac" onChange={readFile} hidden/>
+        <Txt fit r={src.status} cls="vl" size={vf(16)} color={notice ? INK : MUTED}>{sourceText.toUpperCase()}</Txt>
+        <Key r={src.tour} pressed={tour >= 0} label="Tour: a few steps through Brood" onClick={() => (tour >= 0 ? setTour(-1) : goTour(0))}>TOUR</Key>
+        <Key r={src.plugin} pressed={pluginOpen} onClick={() => { setBrowsing(null); setRoutesOpen(false); setPluginOpen(!pluginOpen); }}>IN THE PLUG-IN</Key>
+        <Txt r={src.tempoLabel} align={phone ? 'left' : 'right'} size={nf(16)} color={MUTED} style={{ paddingRight: 8 }}>TEMPO</Txt>
+        <label className="abs tempo vl" style={{ ...at(src.tempo), ...vf(18) }}>
+          <input type="number" min="40" max="300" step="1" aria-label="Tempo in BPM" value={params.bpm}
+            onChange={(e) => update('bpm', clamp(Math.round(Number(e.target.value) || 120), 40, 300))}/>
+          <span>BPM</span>
+        </label>
+        <button type="button" className={`abs start ${running ? 'on' : ''}`} style={{ ...at(src.start), ...nf(18) }} onClick={startAudio} disabled={busy}>
+          <i className="led" style={{ background: running ? LIT : 'rgba(24,24,21,.25)', top: src.start[3] / 2 - 7 }}/>{busy ? 'ONE MOMENT' : running ? 'STOP AUDIO' : 'START AUDIO'}
+        </button>
+
+        {browsing && <PresetBrowser L={L} patches={patches} current={currentPatch.name} favourites={favourites} onStar={starPatch} onSave={savePatch} onDelete={deletePatch}
+          onChoose={(patch) => { setPreset(patches.findIndex((p) => p.name === patch.name)); setParams(sanitize(patch.params)); }}
+          onKeep={() => { setBrowsing(null); showReadout('PATCH', currentPatch.name.toLowerCase()); }}
+          onCancel={() => { setParams(browsing.params); setPreset(browsing.preset); setBrowsing(null); }}/>}
+        {pluginOpen && <PluginOnly L={L} close={() => setPluginOpen(false)}/>}
+        {routesOpen && <RouteList L={L} params={params} onChange={update} openMenu={openMenu} close={() => setRoutesOpen(false)}/>}
+        {chipDrag && <>
+          {chipDrag.target >= 0 && <div className="abs drop" style={{ ...at(targetRect(chipDrag.target)), borderColor: MOD_COLOURS[chipDrag.k] }}/>}
+          <div className="abs drag-tag vl" style={{ ...at(centred(58, 20, chipDrag.x, chipDrag.y - 16)), background: MOD_COLOURS[chipDrag.k], ...vf(16) }}>MOD {chipDrag.k + 1}</div>
+        </>}
+        {holes && <TourVeil L={L} holes={holes}/>}
+        {tour >= 0 && !phone && <TourBar step={tour} phone={false} quiet={quiet} go={goTour} end={() => setTour(-1)}/>}
+        <Menu menu={menu} close={() => setMenu(null)}/>
       </div>
     </div>
-
-    <main className="window layout-width">
-      <div className="window-bar">
-        <div className="window-name"><span className="window-icon">✳</span> BROOD.EXE <span className="bar-divider">/</span> <span className="window-sub">A SOUND EXPERIMENT</span></div>
-        <div className="window-actions"><button title="Reset controls" aria-label="Reset controls" onClick={() => { setParams({ ...BASE }); setPreset(0); setNotice('Controls reset.'); }}>↺</button><button title="Open guide" aria-label="Open guide" onClick={() => setGuideOpen(!guideOpen)}>?</button><span aria-hidden="true">×</span></div>
-      </div>
-      <header className="hero">
-        <div className="hero-title">
-          <div className="hero-kicker"><Spark size={12}/> MICRO-LOOPER <span>+</span> SPATIAL EFFECTS</div>
-          <div className="wordmark">BROOD<span className="wordmark-dot">.</span></div>
-          <div className="hero-subtitle">a little world of sound <span>&amp;</span> space</div>
-        </div>
-        <div className="hero-art" aria-hidden="true"><Orbit/><div className="art-caption">SOUND GOES IN<br/>SOMETHING NEW COMES OUT</div></div>
-        <div className="patch-box">
-          <div className="patch-top"><span>✦ &nbsp;PATCH SELECTOR</span><span>{String(preset + 1).padStart(2, '0')} / {String(patches.length).padStart(2, '0')}</span></div>
-          <div className="patch-controls"><button aria-label="Previous patch" onClick={() => stepPatch(-1)}><TinyArrow direction="left"/></button><button className="patch-name" aria-label={`Browse presets: ${currentPatch.name}`} aria-expanded={!!browsing} onClick={() => (browsing ? setBrowsing(null) : openBrowser())}>{currentPatch.name}</button><button aria-label="Next patch" onClick={() => stepPatch(1)}><TinyArrow/></button></div>
-          <div className="patch-bottom"><span>{patches[preset]?.subtitle || 'a place to begin'}</span><button onClick={saveCurrent}>[ SAVE ]</button></div>
-        </div>
-      </header>
-
-      <div className="body-grid">
-        <section className="control-panel" aria-label="Effect controls">
-          {browsing && <PresetBrowser patches={patches} current={currentPatch.name} favourites={favourites} onStar={starPatch} onSave={savePatch} onDelete={deletePatch}
-            onChoose={(patch) => { setPreset(patches.indexOf(patches.find((p) => p.name === patch.name))); setParams(sanitize(patch.params)); }}
-            onKeep={() => setBrowsing(null)}
-            onCancel={() => { setParams(browsing.params); setPreset(browsing.preset); setBrowsing(null); }}/>}
-          <div className="section-heading"><div><span className="heading-num">01</span><strong>THE CONTROL ROOM</strong><span className="heading-detail">/ MAKE A LITTLE MAGIC</span></div><span className="heading-end">DRAG KNOBS TO ADJUST ↕</span></div>
-          <div className="control-columns">
-            <div className="channel-column wet-column">
-              <div className="column-title"><span className="pixel-icon">✳</span><div><strong>WET CHANNEL</strong><small>SPACE &amp; TIME</small></div><span className="column-no">A</span></div>
-              <ModeSelector label="WET MODE" options={WET} value={params.wetMode} onChange={(v) => update('wetMode', v)} help={help} hint="four ways of treating time: reverb, delay, slip, weave."/>
-              <div className="knob-row">
-                <Knob id="time" title="TIME" dark sub={WHISPERS.time[params.wetMode]} value={params.time} params={params} onChange={update} onTouch={touch} modSource={modSource}
-                  toggle={params.wetMode === 1 ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }, { id: 'tapeDelay', name: 'Tape echo: TIME bends the pitch', label: 'TAPE' }] : params.wetMode === 3 ? [{ id: 'sync', name: 'Sync wet to tempo', label: 'SYNC' }] : null}/>
-                <Knob id="modWet" title="MODIFY" sub={WHISPERS.modWet[params.wetMode]} value={params.modWet} params={params} onChange={update} onTouch={touch} modSource={modSource} dark/>
-              </div>
-              <Footswitch kind="wet" active={wetActive} state={wetStatus} running={running} onGesture={gesture}/>
-            </div>
-            <div className="channel-column global-column">
-              <div className="column-title"><span className="pixel-icon globe-icon">◎</span><div><strong>THE IN-BETWEEN</strong><small>SHARED CONTROLS</small></div><span className="column-no">✦</span></div>
-              <div className="knob-row">
-                <Knob id="mix" title="MIX" sub={SHARED_WHISPER.mix} value={params.mix} params={params} onChange={update} onTouch={touch} modSource={modSource}/>
-                <Knob id="clock" title="CLOCK" sub={params.smooth ? 'the heartbeat, breathing freely' : SHARED_WHISPER.clock} value={params.clock} params={params} onChange={update} onTouch={touch} modSource={modSource}/>
-              </div>
-              <ModeSelector label="ROUTING TO WET" options={ROUTE} value={params.routing} onChange={(v) => update('routing', v)} help={help} hint="in: the wet side hears the input, and the loop keeps it. in + loop: it hears the input and the loop, and the loop keeps it. loop: it hears only the loop, and the loop keeps only the input."/>
-              <div className="between-card"><div className="between-art"><span>IN</span><span className="between-dash">···▶</span><Spark size={18}/><span className="between-dash">▶···</span><span>OUT</span></div><p>ONE CLOCK. TWO WORLDS.</p></div>
-            </div>
-            <div className="channel-column loop-column">
-              <div className="column-title"><span className="pixel-icon">◉</span><div><strong>MICRO-LOOPER</strong><small>MEMORY &amp; MOTION</small></div><span className="column-no">B</span></div>
-              <ModeSelector label="LOOP MODE" options={LOOP} value={params.loopMode} onChange={(v) => update('loopMode', v)} help={help} hint="three ways of holding a moment: envelope, tape, stretch."/>
-              <div className="knob-row">
-                <Knob id="length" title="LENGTH" sub={WHISPERS.length[params.loopMode]} value={params.length} params={params} onChange={update} onTouch={touch} modSource={modSource}
-                  toggle={params.loopMode === 0 ? [{ id: 'envSync', name: 'Sync envelope to tempo', label: 'SYNC' }, { id: 'envSoft', name: 'Fade the envelope slices', label: 'SOFT' }] : null}/>
-                <Knob id="modLoop" title="MODIFY" sub={WHISPERS.modLoop[params.loopMode]} value={params.modLoop} params={params} onChange={update} onTouch={touch} modSource={modSource}/>
-              </div>
-              <Footswitch kind="loop" active={loopActive} state={loopStatus} running={running} onGesture={gesture}/>
-              <TakeKeys state={state} running={running} engine={engineRef.current} help={help}/>
-            </div>
-          </div>
-          <div className="capture-strip">
-            <div className="capture-label"><span className="capture-icon">▧</span><div><strong>LOOP MEMORY</strong><small>{state?.lsrc ? `${timeText(state.winLen / state.clockHz)} CAPTURED` : params.recMode === 1 ? 'PRESS LOOP TO RECORD' : 'ALWAYS LISTENING'}</small></div></div>
-            <LoopWave wave={wave} state={state} params={params} onChange={update} onTouch={touch} modSource={modSource} help={help}/>
-            <div className="capture-end"><Eyes/><span>LISTEN<br/>CLOSER.</span></div>
-          </div>
-          <TrimStrip params={params} onChange={update} help={help}/>
-        </section>
-
-        <aside className="side-panel" aria-label="Audio input and options">
-          <div className="section-heading side-heading"><div><span className="heading-num">02</span><strong>THE SIGNAL</strong></div><span className="heading-end">●</span></div>
-          <div className="side-inner">
-            <div className="scope-head"><div><strong>HELLO, SOUND.</strong><small>YOUR SIGNAL, IN REAL TIME</small></div><span className={`scope-chip ${running ? 'live' : ''}`}>{running ? 'LIVE' : 'STANDBY'}</span><span className="scope-star"><Spark size={20}/></span></div>
-            <Scope engineRef={engineRef} running={running}/>
-            <div className="meter-row"><span>IN</span><div className="meter"><i style={{ width: running ? meter(state?.peakIn) : '0%' }}/></div><span>OUT</span><div className="meter"><i style={{ width: running ? meter(state?.peakOut) : '0%' }}/></div></div>
-            <div className="side-rule"><span>INPUT SOURCE</span><span>01—03</span></div>
-            <div className="source-buttons" role="group" aria-label="Input source">
-              <button className={source === 'demo' ? 'selected' : ''} onClick={() => chooseSource('demo')}>DEMO</button>
-              <button className={source === 'file' ? 'selected' : ''} onClick={() => chooseSource('file')}>FILE ↗</button>
-              <button className={source === 'live' ? 'selected' : ''} onClick={() => chooseSource('live')}>LIVE IN</button>
-            </div>
-            <input ref={fileInput} type="file" accept="audio/*,.wav,.aif,.aiff,.flac" onChange={readFile} hidden />
-            <div className="source-description">{source === 'demo' ? 'A little guitar phrase, made for exploring.' : source === 'file' ? (fileName || 'Choose an audio file to loop.') : 'Your microphone or audio interface. Use headphones.'}</div>
-            <button className={`power-button ${running ? 'playing' : ''}`} onClick={startAudio} disabled={busy}><span>{busy ? '···' : running ? 'Ⅱ' : '▶'}</span>{busy ? 'ONE MOMENT' : running ? 'PAUSE AUDIO' : 'START AUDIO'}<span>↗</span></button>
-            <label className="level-row"><span>INPUT LEVEL</span><input aria-label="Input level" type="range" min="0" max="1.5" step="0.01" value={inputLevel} onChange={(e) => { const v = Number(e.target.value); setInputLevel(v); engineRef.current.setInputLevel(v); }}/><b>{Math.round(inputLevel * 100)}%</b></label>
-            {notice && <div className="notice" role="status">✳ {notice}</div>}
-            <div className="side-rule dip-heading"><span>THE LITTLE SWITCHES</span><span>ON ↑</span></div>
-            <div className="dips">
-              {[['trails', 'TRAILS', 'the tails keep falling after you switch the wet side off.'],
-              ['smooth', 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.'],
-              ['classic', 'CLASSIC', 'the MK I in the room: a noisy clock, a loop that never sits still.'],
-              ...(params.classic ? [['wearPost', 'AFTER LOOP', 'CLASSIC is heard but not recorded: the loop keeps a clean take, so switching CLASSIC off gives it back clean. a little less grit.']] : []),
-              ['hiQ', 'HI-Q', 'cleaner conversion in and out of CLOCK: far fewer artifacts and a fuller top. the wet side runs a little later; dry is not delayed. CLASSIC ignores it.']].map(([id, label, hint]) => <Dip key={id} label={label} checked={params[id]} onClick={() => update(id, params[id] ? 0 : 1)} help={help(label, hint)}/>)}
-            </div>
-            <label className={`level-row tempo-row ${params.sync || params.envSync || params.rampSync ? 'live' : ''}`}>
-              <span>TEMPO {params.sync || params.envSync || params.rampSync ? '· SYNCED' : ''}</span>
-              <input aria-label="Tempo in BPM" type="number" min="40" max="300" step="1" value={params.bpm}
-                onChange={(e) => update('bpm', clamp(Math.round(Number(e.target.value) || 120), 40, 300))}/>
-              <b>BPM</b>
-            </label>
-            <label className="level-row balance-row" data-mod-target="balance" {...help('WET / LOOP', 'how much of the wet side you hear. hard left: the loop alone. hard right: the wet side alone. in the middle, both at full level.')}><span>WET / LOOP</span><input aria-label="Wet and loop balance" type="range" min="0" max="1" step="0.01" value={params.balance} onChange={(e) => update('balance', Number(e.target.value))}/><b>{Math.round(params.balance * 100)}</b></label>
-            <ModPanel params={params} onChange={update} help={help} source={modSource} setSource={setModSource} state={state}/>
-            <HoodPanel params={params} onChange={update} help={help}/>
-            <div className="side-note"><Heart size={15}/><span>GOOD THINGS HAPPEN<br/>WHEN YOU GET LOST.</span><Spark size={14}/></div>
-          </div>
-        </aside>
-      </div>
-      <div className="window-footer"><span><span className="footer-led"/> {running ? 'AUDIO IS RUNNING' : 'READY WHEN YOU ARE'}</span><span className="footer-readout">{hover ? `${hover.label} : ${hover.text}` : `${touched === 'modWet' ? 'MODIFY / WET' : touched === 'modLoop' ? 'MODIFY / LOOP' : touched === 'loopEnd' ? 'END' : touched.toUpperCase()} : ${describe(touched, params)}`}</span><span>✳ &nbsp;MADE FOR GETTING LOST &nbsp; ✳</span></div>
-    </main>
-
-    <div className="below-window layout-width"><span>✦ &nbsp; UNOFFICIAL PEDAL-INSPIRED STUDY</span><span>MADE WITH CURIOSITY <Heart size={12}/></span><div className="below-actions"><button onClick={() => setGuideOpen(!guideOpen)}>{guideOpen ? 'CLOSE THE FIELD GUIDE ↑' : 'OPEN THE FIELD GUIDE ↓'}</button></div></div>
-    {guideOpen && <section className="guide layout-width" aria-label="Field guide">
-      <div className="guide-title"><span>✳</span><div><small>THE FIELD GUIDE / 001</small><h2>LET'S GET LOST.</h2></div><button onClick={() => setGuideOpen(false)} aria-label="Close guide">×</button></div>
-      <div className="guide-grid"><div><b>01 / SEND SOME SOUND</b><p>Start the built-in demo, choose an audio file, or connect a live input. Use headphones with live input to avoid feedback.</p></div><div><b>02 / CATCH A MOMENT</b><p>The looper is always listening. Tap MICRO-LOOPER to catch the recent past; tap again to listen for something new. Hold while playing to overdub.</p></div><div><b>03 / MAKE SOME SPACE</b><p>Tap WET CHANNEL for reverb, delay, slip or weave. Hold it to freeze. Routing chooses whether the wet side hears the input, the loop, or both.</p></div><div><b>04 / TURN THE CLOCK</b><p>Lower CLOCK for longer, grainier loops and pitch changes. Try the switches, drag knobs, or use arrow keys. Double-click a knob to reset it.</p></div>
-        <div><b>05 / KEEP THE BEAT</b><p>The SYNC switch under TIME makes the delay a musical division — 1/32 to a whole note, triplets and dotted notes included — instead of a length of time, and does the same for WEAVE's reach. It only appears in the modes that can use it: REVERB and SLIP ignore the beat, so the switch is not there at all. ENV has its own SYNC under LENGTH, and the modulation panel has a third. The plugin follows your DAW's tempo automatically; here you set it yourself, and the readout shows the division and what it lands on.</p></div></div>
-      <div className="guide-whispers">
-        <b>WHAT AM I TURNING?</b>
-        <p className="guide-whispers-note">Every knob whispers rather than explains. These are the whispers for the modes you have selected; the readout beside each knob gives the exact value.</p>
-        <dl>
-          <div><dt>TIME <span>/ {WET[params.wetMode]}</span></dt><dd>{WHISPERS.time[params.wetMode]}</dd></div>
-          <div><dt>MODIFY <span>/ {WET[params.wetMode]}</span></dt><dd>{WHISPERS.modWet[params.wetMode]}</dd></div>
-          <div><dt>LENGTH <span>/ {LOOP[params.loopMode]}</span></dt><dd>{WHISPERS.length[params.loopMode]}</dd></div>
-          <div><dt>MODIFY <span>/ {LOOP[params.loopMode]}</span></dt><dd>{WHISPERS.modLoop[params.loopMode]}</dd></div>
-          <div><dt>MIX <span>/ shared</span></dt><dd>{SHARED_WHISPER.mix}</dd></div>
-          <div><dt>CLOCK <span>/ shared</span></dt><dd>{SHARED_WHISPER.clock}</dd></div>
-          <div><dt>ROUTING <span>/ shared</span></dt><dd>{SHARED_WHISPER.routing}</dd></div>
-          <div><dt>MEMORY <span>/ loop trim</span></dt><dd>How much of the recent past the looper may keep. At the far left it waits for about a second, like the pedal; turn it clockwise and it holds up to half a minute. The plugin version works the same way, except that at PEDAL it follows the CLOCK like the hardware.</dd></div>
-          <div><dt>START / END <span>/ the waveform</span></dt><dd>The two markers on the waveform. Drag either one, or press anywhere and the nearer marker jumps to you; moving START keeps the end where it is, and a double-click opens the whole take again. In TAPE the window is LENGTH's share of the newest audio, so END can only pull in that far. Everything trimmed away still shows, dimmed, so you can see what you let go of.</dd></div>
-          <div><dt>MODULATION <span>/ two sources</span></dt><dd>Two sources, each with its own rate and shape. Drag one onto any knob or WET / LOOP to route it, and it moves that control around where the knob sits. Drag up or down around a knob, or Alt-drag it, to set depth; a negative depth inverts it. Double-click a ring to remove that source, or press Delete on a clicked knob to remove both. Six shapes: triangle, square, sine, sawtooth, random and smooth random. <b>UNI</b> keeps the swing above the knob, <b>SYNC</b> makes a turn a division of the beat, and <b>HOLD</b> stops it where it is.</dd></div>
-          <div><dt>SOFT <span>/ under LENGTH, in ENV</span></dt><dd>The slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. A rounder, less percussive stutter. Off is the sharp cut the pedal makes.</dd></div>
-          <div><dt>UNDER THE HOOD <span>/ the options under the options</span></dt><dd>Five more controls and one switch, down at the bottom of the panel — the pedal keeps them behind both footswitches, but there is no reason for a menu here. <b>TONE</b> cuts the top off the wet side. <b>FADE</b> decides how much of the old loop survives each overdub pass — turn it right and the loop becomes whatever you just played. <b>WIDTH</b> moves the two speakers apart, or folds them to mono. <b>WET DIV</b> and <b>LOOP DIV</b> run each side on its own divided clock, so one can drift slower and lower than the other. <b>CLASSIC</b> brings back MK I manners: a noisy clock, a loop that never sits quite still, a reverb that rings.</dd></div>
-        </dl>
-      </div>
-      <div className="guide-disclaimer">This is an independent approximation, not the original firmware and not affiliated with Chase Bliss. Some hardware features are not implemented.</div>
-    </section>}
+    {tour >= 0 && phone && <div className="tourbar-holder" style={{ width: PW, height: PHONE_BAR_H, transform: `scale(${scale})` }}>
+      <TourBar step={tour} phone quiet={quiet} help={barHelp} clearHelp={() => { setHover(null); setBarHelp(null); }} go={goTour} end={() => setTour(-1)}/>
+    </div>}
   </div>;
 }
 

@@ -32,12 +32,9 @@ done
 # values); Overpass and Chivo Mono come from their own repositories because google/fonts only
 # carries them as variable fonts, and the plug-in wants the weight it was designed at.
 MANIFEST="
-VT323-Regular.ttf|cf4de751ada78ceac033dbe16a687742939995b77bc2a052ae17a4957958594d|ofl/vt323/VT323-Regular.ttf
 B612Mono-Regular.ttf|b98cb96cc8a6206dae08c063d60902df7e6d40f86139ebdb97256704253c9c69|ofl/b612mono/B612Mono-Regular.ttf
 Overpass-Medium.ttf|6a83ad9b089b049e2f18b977a77590718178b037b064711c19032cb8469bc7b0|https://raw.githubusercontent.com/RedHatOfficial/Overpass/cc00971b35aa2ebf42e147ed81ff81e94763acd1/fonts/ttf/Overpass-Medium.ttf
 ChivoMono-Regular.ttf|c495de432d15afbcf3163621e3b9115ee4bcc09d85732da179b2d2f57265ba2a|https://raw.githubusercontent.com/Omnibus-Type/Chivo/dc61c468d79781eb5183426e88e844af16cdc3e5/fonts/Chivo%20Mono/ttf/ChivoMono-Regular.ttf
-PressStart2P-Regular.ttf|034c77f1f05ec89421e4a63f0e3a4ca1ecf852cc6d2bf611f126f275728e017d|ofl/pressstart2p/PressStart2P-Regular.ttf
-SpaceMono-Regular.ttf|95837e182baeeada83368f7748db28357f0a1b75c6b84ff7065b5edf933c8e18|ofl/spacemono/SpaceMono-Regular.ttf
 "
 
 say() { [ "$QUIET" = 1 ] || printf '%s\n' "$*"; }
@@ -112,7 +109,7 @@ if [ "$failed" = 1 ]; then
   cat >&2 <<'MSG'
 
 Some fonts could not be fetched. The plug-in builds without them and falls back
-to the kit's VT323 and the system sans. Download them by hand from the sources
+to the kit's VT323 and the system sans; the browser version falls back to the system's faces. Download them by hand from the sources
 listed at the top of scripts/fetch-fonts.sh and put the .ttf files in assets/fonts/.
 MSG
   exit 1
