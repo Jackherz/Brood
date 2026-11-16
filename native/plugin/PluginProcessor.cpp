@@ -1,6 +1,9 @@
 #include <cmath>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#if BROOD_DEMOS
+#include "BroodDemos.h"
+#endif
 
 namespace {
 using APF = juce::AudioParameterFloat;
@@ -135,9 +138,9 @@ BroodProcessor::BroodProcessor()
           return layout;
       }()) {
     formats_.registerBasicFormats();
-    // The standalone starts on the built-in phrase so it makes sound with nothing plugged in;
-    // in a DAW the plugin processes the track.
-    if (wrapperType == wrapperType_Standalone) source = Demo;
+    // The standalone starts on a demo loop so it makes sound with nothing plugged in; in a DAW
+    // the plugin processes the track.
+    if (wrapperType == wrapperType_Standalone && loadDemo(0)) source = Demo;
     pullParams();
     core_.prepare(48000.0);
     coreRight_.p = core_.p;
@@ -339,38 +342,32 @@ juce::String BroodProcessor::describe(const juce::String& id) const {
     return p ? describe(id, p->load()) : juce::String();
 }
 
-void BroodProcessor::makeDemo(double sr) {
-    // Karplus-Strong fingerpicking, 8 s seamless loop (same phrase as the web version).
-    const int len = static_cast<int>(8 * sr);
-    demo_.setSize(1, len);
-    demo_.clear();
-    float* out = demo_.getWritePointer(0);
-    juce::Random rnd(1234);
-    auto pluck = [&](double t0, int note, float amp, double decay) {
-        const double f = 440.0 * std::pow(2.0, (note - 69) / 12.0);
-        const int N = std::max(2, juce::roundToInt(sr / f));
-        std::vector<float> buf(static_cast<size_t>(N));
-        float lp = 0;
-        for (auto& b : buf) { lp += 0.55f * (rnd.nextFloat() * 2 - 1 - lp); b = lp; }
-        const float rho = static_cast<float>(std::pow(0.001, 1.0 / (f * decay)));
-        const int start = static_cast<int>(t0 * sr), n = static_cast<int>(decay * sr);
-        int idx = 0;
-        for (int k = 0; k < n; ++k) {
-            const int nx = idx + 1 == N ? 0 : idx + 1;
-            const float a = buf[static_cast<size_t>(idx)], b = buf[static_cast<size_t>(nx)];
-            out[(start + k) % len] += a * amp;
-            buf[static_cast<size_t>(idx)] = rho * 0.5f * (a + b);
-            idx = nx;
+bool BroodProcessor::loadDemo(int index) {
+#if BROOD_DEMOS
+    const auto& demo = kDemos[juce::jlimit(0, static_cast<int>(std::size(kDemos)) - 1, index)];
+    for (int i = 0; i < BroodDemos::namedResourceListSize; ++i) {
+        if (juce::String(BroodDemos::originalFilenames[i]) != demo.file) continue;
+        int size = 0;
+        const char* data = BroodDemos::getNamedResource(BroodDemos::namedResourceList[i], size);
+        juce::FlacAudioFormat flac;
+        std::unique_ptr<juce::AudioFormatReader> reader(flac.createReaderFor(new juce::MemoryInputStream(data, static_cast<size_t>(size), false), true));
+        if (reader == nullptr || reader->lengthInSamples < 2) return false;
+        juce::AudioBuffer<float> loop(2, static_cast<int>(reader->lengthInSamples));
+        reader->read(&loop, 0, loop.getNumSamples(), 0, true, true);
+        {
+            const juce::SpinLock::ScopedLockType lock(demoLock_);
+            demo_ = std::move(loop);
+            demoRate_ = reader->sampleRate;
+            demoPos_ = 0;
         }
-    };
-    const std::vector<std::vector<int>> chords = {   // Em9, Cmaj7, G6, D/F#
-        {40, 47, 55, 62, 66, 59}, {48, 55, 59, 64, 67, 64}, {43, 50, 59, 64, 67, 62}, {42, 50, 57, 66}};
-    for (size_t c = 0; c < chords.size(); ++c)
-        for (size_t i = 0; i < chords[c].size(); ++i)
-            pluck(c * 2.0 + i / 3.0, chords[c][i], i == 0 ? 0.32f : 0.22f + 0.04f * rnd.nextFloat(), i == 0 ? 3.5 : 2.2);
-    const float pk = demo_.getMagnitude(0, 0, len);
-    if (pk > 0) demo_.applyGain(0.5f / pk);
-    demoPos_ = 0;
+        hostBpm_.store(demo.bpm);   // a host that reports a tempo overrides this every block
+        ui.bpm.store(demo.bpm);
+        return true;
+    }
+#else
+    juce::ignoreUnused(index);
+#endif
+    return false;
 }
 
 void BroodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
@@ -386,7 +383,6 @@ void BroodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     const auto capacity = static_cast<size_t>(std::max(samplesPerBlock, 32));
     inputLeft_.assign(capacity, 0.f); inputRight_.assign(capacity, 0.f);
     scratchLeft_.assign(capacity, 0.f); scratchRight_.assign(capacity, 0.f);
-    if (demo_.getNumSamples() != static_cast<int>(8 * sampleRate)) makeDemo(sampleRate);
 }
 
 void BroodProcessor::pullParams() {
@@ -607,12 +603,23 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     if (inputLeft_.size() < needed) { inputLeft_.resize(needed); inputRight_.resize(needed); scratchLeft_.resize(needed); scratchRight_.resize(needed); }
     float* xL = inputLeft_.data(); float* xR = inputRight_.data();
     const int src = source.load();
-    if (src == Demo && demo_.getNumSamples() > 0) {
-        const float* d = demo_.getReadPointer(0);
-        const int len = demo_.getNumSamples();
-        int pos = static_cast<int>(demoPos_);
-        for (int i = 0; i < n; ++i) { xL[i] = xR[i] = d[pos]; if (++pos >= len) pos = 0; }
-        demoPos_ = pos;
+    if (src == Demo) {
+        // The loop at its own rate, read across to the host's.
+        std::fill(xL, xL + n, 0.f); std::fill(xR, xR + n, 0.f);
+        const juce::SpinLock::ScopedTryLockType lock(demoLock_);
+        if (lock.isLocked() && demo_.getNumSamples() > 1 && demoRate_ > 0) {
+            const double ratio = demoRate_ / getSampleRate();
+            const int len = demo_.getNumSamples();
+            const float* left = demo_.getReadPointer(0);
+            const float* right = demo_.getReadPointer(1);
+            for (int i = 0; i < n; ++i) {
+                const int i0 = static_cast<int>(demoPos_), i1 = (i0 + 1) % len;
+                const float fr = static_cast<float>(demoPos_ - i0);
+                xL[i] = left[i0] + (left[i1] - left[i0]) * fr;
+                xR[i] = right[i0] + (right[i1] - right[i0]) * fr;
+                demoPos_ += ratio; while (demoPos_ >= len) demoPos_ -= len;
+            }
+        }
     } else if (src == File) {
         std::fill(xL, xL + n, 0.f); std::fill(xR, xR + n, 0.f);
         const juce::SpinLock::ScopedTryLockType lock(fileLock_);

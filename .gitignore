@@ -13,3 +13,6 @@ release/
 # The font trial page's local copies (the repo never carries font files)
 docs/plans/font-trial/fonts/*.ttf
 docs/plans/font-trial/fonts/*.woff2
+
+# The demo loops: fetched by scripts/fetch-demos.sh, never committed
+assets/demos/*.flac

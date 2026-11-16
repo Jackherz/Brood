@@ -72,6 +72,17 @@ public:
     // ---- input source ----
     enum Source { Live = 0, Demo = 1, File = 2 };
     std::atomic<int> source { Live };
+    // The demo loops (assets/demos, embedded when the build found them), in this order, with the
+    // tempo each was played at. loadDemo decodes one on the calling thread (never the audio
+    // thread) and, with no host to say otherwise, sets the tempo to it. False without the loops.
+    struct DemoLoop { const char* file; const char* name; float bpm; };
+    static constexpr DemoLoop kDemos[] = {
+        {"ambiotica.flac", "Ambiotica", 128.f}, {"feedback-ambience.flac", "Feedback ambience", 128.f},
+        {"tela-tape-loop.flac", "Tela tape loop", 97.f}, {"habit-and-keys-1.flac", "Habit and keys 1", 64.f},
+        {"habit-and-keys-2.flac", "Habit and keys 2", 64.f}, {"chroma-rhodes.flac", "Chroma Rhodes", 60.f},
+        {"nylon-tines.flac", "Nylon tines", 70.f},
+    };
+    bool loadDemo(int index);
     std::atomic<float> inputGain { 1.f };   // up to +24 dB; past 0 dB it drives the tape
     bool loadFile(const juce::File& f);           // message thread
     bool canReadAudio(const juce::File& f) const { return formats_.findFormatForFileExtension(f.getFileExtension()) != nullptr; }
@@ -129,7 +140,6 @@ public:
 
 private:
     void pullParams();
-    void makeDemo(double sr);
     float param(const char* id) const { return apvts.getRawParameterValue(id)->load(); }
 
     brood::Core core_, coreRight_;
@@ -167,7 +177,8 @@ private:
     void publishLive();
 
     juce::AudioBuffer<float> demo_;
-    double demoPos_ = 0;
+    double demoRate_ = 0, demoPos_ = 0;
+    juce::SpinLock demoLock_;
 
     juce::AudioFormatManager formats_;
     juce::AudioBuffer<float> file_;

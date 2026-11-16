@@ -1,37 +1,18 @@
 import workletUrl from './brood-worklet.js?url';
 
-// A small, local demo phrase. No sample download or external audio is needed.
-function makeDemo(context) {
-  const fs = context.sampleRate;
-  const length = Math.floor(8 * fs);
-  const samples = new Float32Array(length);
-  let seed = 1234567;
-  const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-  const pluck = (time, note, amplitude, decay) => {
-    const frequency = 440 * Math.pow(2, (note - 69) / 12);
-    const size = Math.max(2, Math.round(fs / frequency));
-    const delay = new Float32Array(size);
-    let low = 0;
-    for (let i = 0; i < size; i++) { low += 0.55 * (random() * 2 - 1 - low); delay[i] = low; }
-    const loss = Math.pow(0.001, 1 / (frequency * decay));
-    let index = 0;
-    const first = Math.floor(time * fs);
-    for (let i = 0; i < Math.floor(decay * fs); i++) {
-      const next = (index + 1) % size;
-      samples[(first + i) % length] += delay[index] * amplitude;
-      delay[index] = loss * 0.5 * (delay[index] + delay[next]);
-      index = next;
-    }
-  };
-  const chords = [[40, 47, 55, 62, 66, 59], [48, 55, 59, 64, 67, 64], [43, 50, 59, 64, 67, 62], [42, 50, 57, 66]];
-  chords.forEach((notes, chord) => notes.forEach((note, i) => pluck(chord * 2 + i / 3, note, i === 0 ? 0.32 : 0.24, i === 0 ? 3.5 : 2.2)));
-  let peak = 0;
-  for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(samples[i]));
-  if (peak) for (let i = 0; i < length; i++) samples[i] *= 0.5 / peak;
-  const buffer = context.createBuffer(1, length, fs);
-  buffer.copyToChannel(samples, 0);
-  return buffer;
-}
+// The demo loops: Jack Herz's recordings, cut to whole bars, in assets/demos (fetched by
+// scripts/fetch-demos.sh, never committed). Each is fetched only when it is first played, so
+// the page stays light. The order is the plug-in's (kDemos in native/plugin/PluginProcessor.cpp).
+export const DEMOS = [
+  { id: 'ambiotica', name: 'Ambiotica', detail: 'ambient pad, 128 bpm', bpm: 128 },
+  { id: 'feedback-ambience', name: 'Feedback ambience', detail: 'drifting feedback, 128 bpm', bpm: 128 },
+  { id: 'tela-tape-loop', name: 'Tela tape loop', detail: 'D dorian tape loop, 97 bpm', bpm: 97 },
+  { id: 'habit-and-keys-1', name: 'Habit and keys 1', detail: 'keys, 64 bpm', bpm: 64 },
+  { id: 'habit-and-keys-2', name: 'Habit and keys 2', detail: 'keys, 64 bpm', bpm: 64 },
+  { id: 'chroma-rhodes', name: 'Chroma Rhodes', detail: 'chill house chords, 60 bpm', bpm: 60 },
+  { id: 'nylon-tines', name: 'Nylon tines', detail: 'A flat minor, 70 bpm', bpm: 70 },
+];
+const demoUrl = (id) => new URL(`../assets/demos/${id}.flac`, import.meta.url).href;
 
 export class AudioEngine {
   constructor(onMessage, onError) {
@@ -43,7 +24,8 @@ export class AudioEngine {
     this.stream = null;
     this.sourceKind = 'demo';
     this.fileBuffer = null;
-    this.demoBuffer = null;
+    this.demoId = DEMOS[0].id;
+    this.demoBuffers = new Map();   // id -> Promise<AudioBuffer>
     this.sourceVersion = 0;
     this.inputLevel = 0.8;
     this.sentParams = {};
@@ -143,7 +125,11 @@ export class AudioEngine {
       this.source.connect(this.gain);
       return;
     }
-    const buffer = kind === 'file' ? this.fileBuffer : (this.demoBuffer ||= makeDemo(this.context));
+    let buffer = this.fileBuffer;
+    if (kind === 'demo') {
+      buffer = await this.loadDemo(this.demoId);
+      if (version !== this.sourceVersion || !this.running) return;
+    }
     if (!buffer) throw new Error('Choose an audio file first.');
     const source = this.context.createBufferSource();
     source.buffer = buffer;
@@ -151,6 +137,25 @@ export class AudioEngine {
     source.connect(this.gain);
     source.start();
     this.source = source;
+  }
+
+  loadDemo(id) {
+    if (!this.demoBuffers.has(id)) {
+      const decoder = this.context || new OfflineAudioContext(2, 1, 44100);
+      const loading = fetch(demoUrl(id))
+        .then((response) => { if (!response.ok) throw new Error(); return response.arrayBuffer(); })
+        .then((data) => decoder.decodeAudioData(data))
+        .catch(() => { this.demoBuffers.delete(id); throw new Error('Could not load that demo. Check your connection and try again.'); });
+      this.demoBuffers.set(id, loading);
+    }
+    return this.demoBuffers.get(id);
+  }
+
+  // Picking a demo while audio runs swaps it straight away; otherwise it plays on START AUDIO.
+  async chooseDemo(id) {
+    if (!DEMOS.some((demo) => demo.id === id)) return;
+    this.demoId = id;
+    if (this.running) await this.connectSource('demo');
   }
 
   async chooseFile(file) {

@@ -1,7 +1,7 @@
 // Renders the editor to a PNG without a DAW, so a layout change can be looked at
 // (and diffed) from the command line.
 //   editor_snapshot <out.png> [scale] [loop|listen|record|hold|dub] [paramId=normalisedValue ...]
-// "loop" plays two seconds of the demo phrase and catches it, so the waveform and
+// "loop" plays two seconds of the first demo loop and catches it, so the waveform and
 // its markers have something to show. The others show the strip mid-gesture:
 // "listen" plays the demo with nothing caught, "record" taps the loop switch and keeps
 // playing (pass recMode=1 for RECORD), "hold" holds it down in CAPTURE, and "dub" catches a
@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
     SnapshotHead head;
     proc.setPlayHead(&head);
     if (scene.isNotEmpty()) {
+        proc.loadDemo(0);
         proc.source = BroodProcessor::Demo;
         juce::AudioBuffer<float> b(2, 256);
         juce::MidiBuffer m;

@@ -10,8 +10,9 @@
     "test": "node --test test/*.test.js",
     "test:browser": "node tests/browser-smoke.cjs",
     "fetch-fonts": "bash scripts/fetch-fonts.sh",
-    "predev": "bash scripts/fetch-fonts.sh --quiet || true",
-    "prebuild": "bash scripts/fetch-fonts.sh --quiet || true"
+    "predev": "bash scripts/fetch-fonts.sh --quiet || true; bash scripts/fetch-demos.sh --quiet || true",
+    "prebuild": "bash scripts/fetch-fonts.sh --quiet || true; bash scripts/fetch-demos.sh --quiet || true",
+    "fetch-demos": "bash scripts/fetch-demos.sh"
   },
   "dependencies": {
     "react": "^18.3.1",
