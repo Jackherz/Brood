@@ -204,9 +204,9 @@ html.phone.touring, html.phone.touring body, html.phone.touring #root { height: 
 .tp-text p { margin: 0 0 3px; color: var(--muted); line-height: 1.36; }
 .tp-text p:last-child { margin-bottom: 0; }
 .tp-nav { display: flex; align-items: center; gap: 4px; }
-.tp-nav .tp-key { flex: 0 1 84px; min-width: 62px; padding: 0; }
+.tp-nav .tp-key { flex: 0 1 84px; min-width: 60px; padding: 0; }
 .tp-dots { flex: 1; display: flex; justify-content: center; }
-.tp-dot { width: 24px; height: 36px; border: 0; padding: 0; background: none; display: grid; place-items: center; cursor: pointer; }
+.tp-dot { width: 22px; height: 36px; border: 0; padding: 0; background: none; display: grid; place-items: center; cursor: pointer; }
 .tp-dot i { width: 8px; height: 8px; border-radius: 50%; background: rgba(24, 24, 21, .25); }
 .tp-dot.all i { border-radius: 2px; }
 .tp-dot.on i { width: 11px; height: 11px; background: var(--ink); }

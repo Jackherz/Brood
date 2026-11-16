@@ -418,7 +418,7 @@ function helpTable(p, modOpen, L) {
   add(L.loopView, 'THE WINDOW', 'drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.');
   add(L.recMode, 'CAPTURE / RECORD', 'capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.');
   if (record) add(L.recBars, 'BARS', 'free records until the next tap. a number records that many bars, then plays.');
-  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'the loop against the wet side. left: the loop alone. right: the wet side alone. in the middle, both in full. drop a source here: its bar is the swing, the small tab is where it is now.');
+  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'the loop against the wet side. left: the loop alone. right: the wet side alone. in the middle, both in full. drag up or down on it, or drop a source here, to swing it: the bar is the swing, the tab where it is now.');
   // The plug-in's LEVEL drives into old tape past the middle; this one only sets the level
   // (IN THE PLUG-IN says so).
   add(L.hoodCell[0], 'LEVEL', 'how loud the input reaches Brood. the middle is as it comes in.');
@@ -507,20 +507,38 @@ function designPoint(element, event, width) {
 
 // A horizontal slider: a rounded track that fills to the value, and a round thumb (the kit's
 // frameless drawLinearSlider). JUCE keeps the thumb inside, a thumb's radius from each end.
-function Slider({ r, value, onChange, onReset, onTouch, label, valueText, disabled = false, children, targetId }) {
+// modDepth (BALANCE): the slider is also a modulation handle, as a knob's edge is. Drag left or
+// right and it moves; drag up or down and the selected source's swing on it follows, up for
+// more. The first few pixels of movement decide which, and a tap without moving sets the value.
+function Slider({ r, value, onChange, onReset, onTouch, label, valueText, disabled = false, children, targetId, modDepth }) {
   const el = useRef(null);
+  const drag = useRef(null);
   const inset = Math.min(12, r[3] / 2);
   const span = r[2] - 2 * inset;
   const posAt = (event) => clamp((designPoint(el.current, event, r[2]).x - inset) / span);
   const down = (event) => {
     if (event.button !== 0 || disabled) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    event.currentTarget.dataset.dragging = '1';
     onTouch?.();
-    onChange(posAt(event));
+    if (!modDepth) { drag.current = { mode: 'value' }; onChange(posAt(event)); return; }
+    drag.current = { mode: null, x: event.clientX, y: event.clientY, k: designPoint(el.current, event, r[2]).k };
   };
-  const move = (event) => { if (event.currentTarget.dataset.dragging) onChange(posAt(event)); };
-  const up = (event) => { delete event.currentTarget.dataset.dragging; };
+  const move = (event) => {
+    const d = drag.current;
+    if (!d) return;
+    if (!d.mode) {
+      const dx = event.clientX - d.x, dy = event.clientY - d.y;
+      if (Math.hypot(dx, dy) < 6) return;
+      d.mode = Math.abs(dy) > Math.abs(dx) ? 'depth' : 'value';
+      if (d.mode === 'depth') { d.source = modDepth.source(); d.start = modDepth.get(d.source); }
+    }
+    if (d.mode === 'value') onChange(posAt(event));
+    else modDepth.set(d.source, clamp(d.start - (event.clientY - d.y) * d.k / (event.shiftKey ? 600 : 150), -1, 1));
+  };
+  const up = (event) => {
+    if (drag.current && !drag.current.mode) onChange(posAt(event));   // a tap: the value goes there
+    drag.current = null;
+  };
   const key = (event) => {
     const step = event.shiftKey ? 0.01 : 0.05;
     let v = value;
@@ -1195,12 +1213,18 @@ const TOUR = [
     holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(0)])],
     tasks: [{ target: (L) => L.wetMode, done: (now) => now.wetMode === 1 },
       { target: (L) => L.fsWet, done: (now, was) => now.freeze && !was.freeze }] },
-  { title: 'MOVEMENT',
-    body: 'MOD 1 and MOD 2 move knobs for you.',
-    try: 'Drag MOD 1 onto TIME.',
-    tryPhone: 'In ROUTES, add MOD 1 on TIME.',
-    holes: (L) => [L.rampArea, L.presetBar, L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : L.knob.map((r) => grow(r, 8)))],
-    tasks: [{ target: (L) => (L.phone ? L.routes : L.chip0), done: (now, was) => now.routes > was.routes }] },
+  { title: 'MOVE A KNOB', tab: 0,
+    body: 'MOD 1 and MOD 2 can turn knobs for you. Drag up or down around the edge of a knob to set how far one swings it. BALANCE works the same way.',
+    try: 'Drag up around the edge of TIME.',
+    holes: (L) => [L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : [knobCell(L, 0), knobCell(L, 3)])],
+    tasks: [{ target: (L) => knobCell(L, 0), done: (now, was) => now.timeMod > was.timeMod + 0.04 }] },
+  { title: 'SHAPE THE MOVEMENT', tab: 0,
+    body: 'Tap a MOD chip to open its controls: RATE sets how fast it moves, SHAPE how it moves.',
+    try: 'Open MOD 1, then change its RATE and its SHAPE.',
+    holes: (L) => [L.rampArea, ...(L.phone ? [L.tabs, L.tabSheet] : [knobCell(L, 0)])],
+    tasks: [{ target: (L) => L.chip0, done: (now) => now.modOpen },
+      { target: (L) => L.rampRate, done: (now, was) => Math.abs(now.rate - was.rate) >= 0.03 },
+      { target: (L) => L.rampWave, done: (now, was) => now.wave !== was.wave }] },
   { title: 'ALL OF BROOD', all: true,
     body: 'That is the whole panel. Point at anything and the screen says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
     bodyPhone: 'That is the whole panel. Tap anything and this bar says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
@@ -1218,7 +1242,7 @@ function tourHoles(step, L, overlayOpen) {
 // try, and the way on.
 function TourBar({ step, go, end, quiet, done }) {
   const s = TOUR[step], last = TOUR.length - 1;
-  const box = { count: [14, 10, 190, 16], dots: (i) => [860 + i * 22, 10, 18, 24], all: [1014, 10, 38, 24], title: [14, 30, 200, 56], text: [224, 8, 620, 110],
+  const box = { count: [14, 10, 190, 16], dots: (i) => [860 + i * 20, 10, 17, 24], all: [1020, 10, 34, 24], title: [14, 30, 200, 56], text: [224, 8, 620, 110],
     back: [860, 78, 138, 36], end: [1058, 10, 84, 24], next: [1004, 78, 138, 36] };
   const keys = (event) => {
     if (/INPUT|TEXTAREA/.test(event.target.tagName)) return;
@@ -1609,6 +1633,8 @@ function App() {
     running, loop: running ? state?.loop || 'off' : 'off', take: running ? state?.lsrc || 0 : 0, time: params.time,
     start: params.start, loopEnd: params.loopEnd, clock: params.clock,
     wetOn: running && !!state?.wetOn, freeze: running && !!state?.freeze, wetMode: params.wetMode, routes: routeCount,
+    timeMod: Math.abs(params.mod1_time) + Math.abs(params.mod2_time), modOpen,
+    rate: params[`mod${modSource + 1}Rate`], wave: params[`mod${modSource + 1}Wave`],
   };
   const tourWas = useRef(null);
   const [tourTask, setTourTask] = useState(0);   // the first task in this step still to do
@@ -1830,7 +1856,14 @@ function App() {
         <Txt r={[L.balance[0] - 32, L.balance[1], 32, 21]} size={nf(15)} color={MUTED}>LOOP</Txt>
         <Txt r={L.wetEnd} size={nf(15)} color={MUTED}>WET</Txt>
         <Slider r={L.balance} value={params.balance} label="Balance" valueText={describe('balance', params)} targetId="balance"
-          onTouch={() => touch('balance')} onChange={(v) => update('balance', v)}>
+          onTouch={() => touch('balance')} onChange={(v) => update('balance', v)}
+          modDepth={{
+            // Which source a vertical drag works on: the one already on BALANCE if only one is,
+            // otherwise the selected one (as a knob's edge picks).
+            source: () => (routeMask[0][6] !== routeMask[1][6] ? (routeMask[0][6] ? 0 : 1) : modSource),
+            get: (k) => params[`mod${k + 1}_balance`] || 0,
+            set: (k, v) => { update(`mod${k + 1}_balance`, v); setModSource(k); showReadout(`MOD ${k + 1} > BALANCE`, `${Math.round(v * 100) > 0 ? '+' : ''}${Math.round(v * 100)}%`); },
+          }}>
           {({ inset, span, cy }) => {
             // Clear of the tab: the first source's swing under the track, the second's over it.
             const bars = [0, 1].map((k) => {
