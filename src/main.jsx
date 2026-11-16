@@ -1289,6 +1289,7 @@ function useScale(tall) {
     return () => window.removeEventListener('resize', resize);
   }, [tall]);
   useEffect(() => { document.documentElement.classList.toggle('phone', fit.phone); }, [fit.phone]);
+  useEffect(() => { document.documentElement.classList.toggle('touring', fit.phone && tall); }, [fit.phone, tall]);
   return fit;
 }
 
@@ -1338,11 +1339,11 @@ function App() {
   const [hover, setHover] = useState(null);
   // On a phone in the tour, a tap's help borrows the tour bar for a few seconds.
   const [barHelp, setBarHelp] = useState(null);
-  // The phone's tour bar: its height on screen, measured, and whether the step's sentence is open.
-  // Short screens (most phones inside the site's frame) start with it closed.
-  const [barPx, setBarPx] = useState(0);
+  // Whether the phone tour bar's sentence is open. Short screens (most phones inside the
+  // site's frame) start with it closed.
   const [tourOpen, setTourOpen] = useState(() => window.innerHeight >= 640);
   const holder = useRef(null);
+  const scroller = useRef(null);   // a phone's panel, scrolling on its own above the tour bar
   useEffect(() => { if (!barHelp) return undefined; const id = setTimeout(() => setBarHelp(null), 5000); return () => clearTimeout(id); }, [barHelp]);
   const [hoverKnob, setHoverKnob] = useState(-1);
   const [activeKnob, setActiveKnob] = useState(-1);   // the knob a finger is turning
@@ -1573,11 +1574,19 @@ function App() {
         if (over > 0) host.scrollBy({ top: Math.min(over, Math.max(0, box.top)), behavior: reduce ? 'auto' : 'smooth' });
       }
     } catch (_) { /* another site's frame: leave it */ }
-    const bar = holder.current?.getBoundingClientRect().height || 0;
-    const room = window.innerHeight - bar;
-    const top = stage.current.getBoundingClientRect().top + window.scrollY + target[1] * scale, tall = target[3] * scale;
+    // During the tour a phone's panel scrolls in its own area, above the bar.
+    const box = scroller.current;
+    if (!box) return;
+    const room = box.clientHeight;
+    const top = stage.current.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop + target[1] * scale, tall = target[3] * scale;
     const y = tall > room - 16 ? top - 8 : top + tall / 2 - room / 2;
-    window.scrollTo({ top: Math.max(0, y), behavior: reduce ? 'auto' : 'smooth' });
+    box.scrollTo({ top: Math.max(0, y), behavior: reduce ? 'auto' : 'smooth' });
+  };
+  // Ending the tour on a phone hands the panel back to the page, at the same place.
+  const endTour = () => {
+    const y = phone ? scroller.current?.scrollTop || 0 : 0;
+    setTour(-1);
+    if (phone) requestAnimationFrame(() => window.scrollTo(0, y));
   };
   const goTour = (i) => {
     const next = clamp(i, 0, TOUR.length - 1);
@@ -1588,14 +1597,6 @@ function App() {
     // After the new step (and its tab) has drawn and the bar has its new height.
     setTimeout(() => showTarget(next, onTab), 80);
   };
-  // The bar's height on screen, as it changes with its words and with an open sentence.
-  useEffect(() => {
-    const el = holder.current;
-    if (!el || !('ResizeObserver' in window)) { setBarPx(0); return undefined; }
-    const ro = new ResizeObserver(() => setBarPx(el.getBoundingClientRect().height));
-    ro.observe(el.firstChild || el);
-    return () => ro.disconnect();
-  }, [tour >= 0, phone]);
   // Opening or closing the sentence changes the room: keep the lit control in view.
   useEffect(() => { if (phone && tour >= 0) { const id = setTimeout(() => showTarget(tour, tab, tourTask), 80); return () => clearTimeout(id); } return undefined; }, [tourOpen]);
 
@@ -1741,8 +1742,11 @@ function App() {
       <Txt r={[720, 30, 48, 34]} align="right" size={nf(17)} color={MUTED}>PATCH</Txt>
     </>;
 
-  return <div className={`page ${phone ? 'phone' : ''}`} style={phone && tour >= 0 ? { paddingBottom: barPx } : undefined}>
-    <div className="frame" style={{ width: L.W * scale, height: L.H * scale }}>
+  // A phone in the tour: the panel scrolls in its own area and the bar sits under it as
+  // ordinary content. (A fixed bar inside the site's frame is drawn in one place on iPhones
+  // and tapped in another, so NEXT landed on the TOUR key above it.)
+  const touring = phone && tour >= 0;
+  const panel = <div className="frame" style={{ width: L.W * scale, height: L.H * scale }}>
       <div ref={stage} className="stage" style={{ width: L.W, height: L.H, transform: `scale(${scale})` }}
         onPointerMove={onStageMove} onPointerDownCapture={onStageDown} onPointerUpCapture={onStageUp} onPointerLeave={() => { if (!phone) { setHover(null); setHoverKnob(-1); } }}>
         {mast}
@@ -1889,7 +1893,7 @@ function App() {
         <Key r={src.load} onClick={() => fileInput.current?.click()}>LOAD FILE</Key>
         <input ref={fileInput} type="file" accept="audio/*,.wav,.aif,.aiff,.flac" onChange={readFile} hidden/>
         <Txt fit r={src.status} cls="vl" size={vf(16)} color={notice ? INK : MUTED}>{sourceText.toUpperCase()}</Txt>
-        <Key r={src.tour} pressed={tour >= 0} label="Tour: a few steps through Brood" onClick={() => (tour >= 0 ? setTour(-1) : goTour(0))}>TOUR</Key>
+        <Key r={src.tour} pressed={tour >= 0} label="Tour: a few steps through Brood" onClick={() => (tour >= 0 ? endTour() : goTour(0))}>TOUR</Key>
         <Key r={src.plugin} pressed={pluginOpen} onClick={() => { setBrowsing(null); setRoutesOpen(false); setPluginOpen(!pluginOpen); }}>IN THE PLUG-IN</Key>
         <Txt r={src.tempoLabel} align={phone ? 'left' : 'right'} size={nf(16)} color={MUTED} style={{ paddingRight: 8 }}>TEMPO</Txt>
         <label className="abs tempo vl" style={{ ...at(src.tempo), ...vf(18) }}>
@@ -1911,13 +1915,15 @@ function App() {
           {chipDrag.target >= 0 && <div className="abs drop" style={{ ...at(targetRect(chipDrag.target)), borderColor: MOD_COLOURS[chipDrag.k] }}/>}
           <div className="abs drag-tag vl" style={{ ...at(centred(58, 20, chipDrag.x, chipDrag.y - 16)), background: MOD_COLOURS[chipDrag.k], ...vf(16) }}>MOD {chipDrag.k + 1}</div>
         </>}
-        {tour >= 0 && !phone && <TourBar step={tour} quiet={quiet} done={tourDone} go={goTour} end={() => setTour(-1)}/>}
+        {tour >= 0 && !phone && <TourBar step={tour} quiet={quiet} done={tourDone} go={goTour} end={endTour}/>}
         {tour >= 0 && !tourDone && (() => { const t = tasks[tourTask]?.target(L); return t && <div key={`${tour}-${tourTask}`} className="abs tour-ring" style={at(grow(t, 2))} aria-hidden="true"/>; })()}
         <Menu menu={menu} close={() => setMenu(null)}/>
       </div>
-    </div>
-    {tour >= 0 && phone && <div ref={holder} className="tourbar-holder" style={{ width: PW, transform: `scale(${scale})` }}>
-      <PhoneTourBar step={tour} quiet={quiet} done={tourDone} help={barHelp} clearHelp={() => { setHover(null); setBarHelp(null); }} go={goTour} end={() => setTour(-1)}
+    </div>;
+  return <div className={`page ${phone ? 'phone' : ''} ${touring ? 'touring' : ''}`}>
+    {touring ? <div ref={scroller} className="phone-scroll">{panel}</div> : panel}
+    {touring && <div ref={holder} className="tourbar-holder">
+      <PhoneTourBar step={tour} quiet={quiet} done={tourDone} help={barHelp} clearHelp={() => { setHover(null); setBarHelp(null); }} go={goTour} end={endTour}
         open={tourOpen} setOpen={setTourOpen}/>
     </div>}
   </div>;
