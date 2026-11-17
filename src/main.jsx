@@ -943,6 +943,8 @@ function Footswitch({ r, name, keyName, lit, onGesture, which }) {
 function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReadout, running, engine, openMenu, history }) {
   const canvas = useRef(null);
   const drag = useRef(null);
+  const pending = useRef(null);      // the latest finger or mouse position, applied once a frame
+  const lastPointer = useRef('mouse');
   const [hot, setHot] = useState(-1);
   const r = L.loopView, w = r[2], h = r[3];
   const lsrc = state?.lsrc || 0;
@@ -980,7 +982,10 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
       return;
     }
     const m = markers();
-    const xs = w * m.s / m.len, xe = w * m.e / m.len;
+    // While a marker is dragged it's drawn where it's going: in TAPE the loop's window glides
+    // there (as LENGTH does), and the marker shouldn't trail the finger.
+    const going = drag.current?.cur;
+    const xs = w * (going ? going.s : m.s) / m.len, xe = w * (going ? going.e : m.e) / m.len;
     const clock = Math.max(1, state.clockHz);
     // A tick a second along the foot (every five, on a long take), so length can be read.
     const seconds = m.len / clock, every = seconds > 16 ? 5 : 1;
@@ -1026,7 +1031,8 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
   });
 
   // On a marker: that marker. Inside the window: the window. Outside it: the nearer marker.
-  const regionAt = (x) => {
+  // A finger gets a wider reach than a mouse, so a thumb near END takes END, not the window.
+  const regionAt = (x, reach = 8) => {
     const m = markers();
     if (!m || live) return -1;
     const xs = w * m.s / m.len, xe = w * m.e / m.len;
@@ -1035,7 +1041,7 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
       if (Math.abs(toStart - toEnd) < 0.5) return x > xe ? 1 : 0;
       return toStart < toEnd ? 0 : 1;
     };
-    if (Math.abs(x - xs) <= 8 || Math.abs(x - xe) <= 8) return nearest();
+    if (Math.abs(x - xs) <= reach || Math.abs(x - xe) <= reach) return nearest();
     return x > xs && x < xe ? 2 : nearest();
   };
   const moveMarker = (x) => {
@@ -1051,17 +1057,21 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
     onChange('start', trim.start);
     onChange('loopEnd', trim.end);
     if (tape) onChange('length', trim.length);
+    d.cur = { s: trim.firstSample, e: trim.firstSample + trim.width };
     const clock = Math.max(1, state.clockHz);
     onTouch(d.which === 1 ? 'loopEnd' : 'start', false);
     showReadout(d.which === 0 ? 'START' : d.which === 1 ? 'END' : 'THE WINDOW', `${(trim.firstSample / clock).toFixed(2)} S IN, PLAYS ${(trim.width / clock).toFixed(2)} S`);
   };
   const down = (event) => {
     if (event.button !== 0 || event.target !== canvas.current) return;
+    lastPointer.current = event.pointerType;
+    const touch = event.pointerType !== 'mouse', near = touch ? 24 : 8;
     const { x } = designPoint(canvas.current, event, w);
-    const which = regionAt(x);
+    const which = regionAt(x, near);
     if (which < 0) return;
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    const m = markers(), len = Math.max(64, lsrc), pressed = x / w * len, reach = 8 * len / w;
+    const m = markers(), len = Math.max(64, lsrc), pressed = x / w * len, reach = near * len / w;
     // Held where it was pressed, so a grab moves nothing. Outside the window a marker comes to the mouse.
     const insideWindow = pressed >= m.s - reach && pressed <= m.e + reach;
     drag.current = { which, s: m.s, e: m.e, grab: !insideWindow ? 0 : which === 1 ? m.e - pressed : m.s - pressed };
@@ -1070,13 +1080,23 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
   };
   const move = (event) => {
     const { x } = designPoint(canvas.current, event, w);
-    if (drag.current) { moveMarker(x); return; }
+    if (drag.current) {
+      // Touch screens send moves faster than the panel redraws: keep the latest, apply it once a frame.
+      if (pending.current === null) requestAnimationFrame(() => { const at = pending.current; pending.current = null; if (drag.current && at !== null) moveMarker(at); });
+      pending.current = x;
+      return;
+    }
+    if (event.pointerType !== 'mouse') return;
     const region = regionAt(x);
     canvas.current.style.cursor = region === 2 ? 'grab' : region >= 0 ? 'ew-resize' : '';
     const next = region === 2 ? -1 : region;
     if (next !== hot) setHot(next);
   };
-  const up = () => { drag.current = null; };
+  const up = () => {
+    if (drag.current && pending.current !== null) moveMarker(pending.current);
+    pending.current = null; drag.current = null;
+    setHot(-1);
+  };
   const key = (event) => {
     // From the keyboard: the arrows move END, with shift they move START; right is towards the present.
     const d = event.key === 'ArrowRight' ? 0.01 : event.key === 'ArrowLeft' ? -0.01 : 0;
@@ -1098,7 +1118,7 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
       aria-label={live ? 'The take: nothing caught yet' : `The take. START ${describe('start', params)}, END ${describe('loopEnd', params)}. Arrow keys move END, shift and arrow keys move START.`}>
       <canvas ref={canvas} style={{ width: w, height: h }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
         onPointerLeave={() => { if (!drag.current && hot !== -1) setHot(-1); }}
-        onDoubleClick={() => { onChange('start', BASE.start); onChange('loopEnd', BASE.loopEnd); onTouch('loopEnd'); }}/>
+        onDoubleClick={() => { if (lastPointer.current !== 'mouse') return; onChange('start', BASE.start); onChange('loopEnd', BASE.loopEnd); onTouch('loopEnd'); }}/>
     </div>
     <button type="button" className="abs strip-key sc" style={{ ...at(L.clear), ...sf(14) }} disabled={!canClear}
       onClick={() => { engine.clearLoop(); showReadout('LOOP', 'cleared. undo brings it back'); }}>CLEAR</button>
