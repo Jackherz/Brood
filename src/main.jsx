@@ -1785,10 +1785,14 @@ function App() {
   // strip into view, in the middle of the window if they fit. If they're taller than the
   // window, their bottom goes to the window's bottom, where START AUDIO and the strip are.
   // On its own page Brood already fits the window, and there is nothing to scroll.
-  const showPanel = () => {
+  // The host grows its frame to fit Brood a moment after the tour's strip appears, so this waits
+  // (up to a second and a half) until the frame is as tall as Brood before it scrolls.
+  const showPanel = (tries = 0) => {
     try {
       const frame = window.frameElement, host = window.parent;
       if (!frame || !host || host === window) return;
+      const need = document.body.scrollHeight;
+      if (Math.abs(frame.clientHeight - need) > 2 && tries < 25) { setTimeout(() => showPanel(tries + 1), 60); return; }
       const box = frame.getBoundingClientRect(), room = host.innerHeight;
       const by = box.height <= room ? box.top - (room - box.height) / 2 : box.bottom - room;
       const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -1805,7 +1809,7 @@ function App() {
     const next = clamp(i, 0, TOUR.length - 1);
     setTour(next); setHover(null); setBarHelp(null);
     // Opening the tour on a desktop: once the strip has drawn and the frame has grown to hold it.
-    if (!phone) { if (tour < 0) setTimeout(showPanel, 160); return; }
+    if (!phone) { if (tour < 0) setTimeout(showPanel, 60); return; }
     const onTab = TOUR[next].tab ?? tab;
     if (TOUR[next].tab != null) { setTab(TOUR[next].tab); setActiveKnob(-1); }
     // After the new step (and its tab) has drawn and the bar has its new height.
@@ -1846,7 +1850,7 @@ function App() {
     openedAt.current = true;
     if (phone && tour === 0) goTour(0);
     // A desktop that opens in the tour (a first visit) does the same, once the host has sized the frame.
-    else if (!phone && tour >= 0) setTimeout(showPanel, 600);
+    else if (!phone && tour >= 0) setTimeout(showPanel, 300);
   }, []);
   // On a phone the key that opens a sheet can be far down the page: bring the sheet into view.
   useEffect(() => {
