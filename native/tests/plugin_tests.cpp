@@ -426,8 +426,8 @@ int main() {
                 if (auto* slider = dynamic_cast<juce::Slider*>(child); slider != nullptr && slider->getTitle() == "TIME") return slider->getDescription();
             return juce::String();
         };
-        CHECK(timeHelp(0.f) == "how long the room keeps breathing.", "TIME explains itself in REVERB");
-        CHECK(timeHelp(1.f) == "how far back the echo remembers.", "and again in DELAY");
+        CHECK(timeHelp(0.f) == "How long the room keeps breathing.", "TIME explains itself in REVERB");
+        CHECK(timeHelp(1.f) == "How far back the echo remembers.", "and again in DELAY");
     }
     {   // A set saved before START meant the same in every mode: TAPE's START is rewritten so the
         // window comes back where it was; ENV's is left alone.

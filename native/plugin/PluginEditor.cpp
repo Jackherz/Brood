@@ -85,20 +85,20 @@ constexpr int W = 1200, H = 820;
 // never quite enough to stop wondering. It lives in hover help; the exact value
 // appears under the knob when you touch it.
 const char* kWhisper[6][4] = {
-    {"how long the room keeps breathing", "how far back the echo remembers",
-     "how wide a slice of time is borrowed", "how far back the threads reach"},
-    {"your dry sound against Brood: the loop and the room. left is dry alone, right is Brood alone, the middle both in full",
-     "your dry sound against Brood: the loop and the echoes. left is dry alone, right is Brood alone, the middle both in full",
-     "your dry sound against Brood: the loop and the slipped slices. left is dry alone, right is Brood alone, the middle both in full",
-     "your dry sound against Brood: the loop and the threads. left is dry alone, right is Brood alone, the middle both in full"},
-    {"how much of the moment gets caught", "the size of the window that repeats",
-     "how wide each grain is stretched", "how much of the moment gets caught"},
-    {"how much the surface smears", "how much the echo wants to stay",
-     "which way, and how fast, time slides", "long cloth, or short clipped stitches"},
-    {"the heartbeat everything obeys", "the heartbeat everything obeys",
-     "the heartbeat everything obeys", "the heartbeat everything obeys"},
-    {"how softly it must speak to be caught", "which way the tape runs, and how fast",
-     "how far the grains drift from now", "how softly it must speak to be caught"},
+    {"How long the room keeps breathing", "How far back the echo remembers",
+     "How wide a slice of time is borrowed", "How far back the threads reach"},
+    {"Your dry sound against Brood: the loop and the room. Left is dry alone, right is Brood alone, the middle both in full",
+     "Your dry sound against Brood: the loop and the echoes. Left is dry alone, right is Brood alone, the middle both in full",
+     "Your dry sound against Brood: the loop and the slipped slices. Left is dry alone, right is Brood alone, the middle both in full",
+     "Your dry sound against Brood: the loop and the threads. Left is dry alone, right is Brood alone, the middle both in full"},
+    {"How much of the moment gets caught", "The size of the window that repeats",
+     "How wide each grain is stretched", "How much of the moment gets caught"},
+    {"How much the surface smears", "How much the echo wants to stay",
+     "Which way, and how fast, time slides", "Long cloth, or short clipped stitches"},
+    {"The heartbeat everything obeys", "The heartbeat everything obeys",
+     "The heartbeat everything obeys", "The heartbeat everything obeys"},
+    {"How softly it must speak to be caught", "Which way the tape runs, and how fast",
+     "How far the grains drift from now", "How softly it must speak to be caught"},
 };
 
 // Which knob listens to which mode: 0 = wet modes, 1 = loop modes, 2 = shared.
@@ -976,7 +976,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     // WEAR: one line from clean to worn, not two opposing checkboxes.
     character = std::make_unique<Stepper>(*proc.apvts.getParameter("character"), "WEAR", juce::StringArray { "CLEAN", "PEDAL", "WORN" }, [this] {
         const float v = proc.apvts.getRawParameterValue("character")->load();
-        showReadout("WEAR", v < 0.25f ? "clean: fewer artifacts, wet a little later" : v > 0.75f ? "worn: a noisy clock, a restless loop, a longer reverb" : "the pedal as built");
+        showReadout("WEAR", v < 0.25f ? "clean: fewer artefacts, wet a little later" : v > 0.75f ? "worn: a noisy clock, a restless loop, a longer reverb" : "the pedal as built");
         repaintDesign(hoodArea);   // NOISE says a figure only while it's worn
     });
     addAndMakeVisible(*character);
@@ -1568,75 +1568,75 @@ void BroodEditor::rebuildHoverHelp() {
         hoverHelp.push_back({r, juce::String(label), juce::String(text)});
     };
     static const char* dipText[] = {
-        "the tails keep falling after you switch the wet side off.",
-        "the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
-        "the hold gesture without the holding: the wet side comes up frozen and rings on its own.",
+        "The tails keep falling after you switch the wet side off.",
+        "The sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
+        "The hold gesture without the holding: the wet side comes up frozen and rings on its own.",
     };
     static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE"};
-    add(characterDesign, "WEAR", "clean to worn. clean= fewer artifacts. worn= noise, a loop that warbles and a longer reverb.");
+    add(characterDesign, "WEAR", "Clean to worn. Clean= fewer artefacts. Worn= noise, a loop that warbles and a longer reverb.");
     for (size_t i = 0; i < dips.size(); ++i) if (dips[i].button->isVisible()) add(dipCellDesign[i], dipNames[i], dipText[i]);
     if (wearPost->isVisible())
-        add(wearPostDesign, "PRE / POST LOOP", "where the wear sits. pre: the loop records it worn. post: you hear it worn, but the loop keeps a clean take.");
+        add(wearPostDesign, "PRE / POST LOOP", "Where the wear sits. Pre: the loop records it worn. Post: you hear it worn, but the loop keeps a clean take.");
     // These two are only in the table while their mode is on, so help never explains
     // a control that is not on the panel.
     if (tapeDelay.isVisible())
-        add(tapeDelayDesign.expanded(4), "TAPE", "a tape echo: turning TIME bends the pitch, with wow, flutter and saturation. off, TIME changes the speed of the delay without pitch changes.");
+        add(tapeDelayDesign.expanded(4), "TAPE", "A tape echo: turning TIME bends the pitch, with wow, flutter and saturation. Off: TIME changes the delay without changing the pitch.");
     if (wetSync.isVisible())
         add(wetSyncDesign.expanded(4), "SYNC", "TIME becomes a division of the beat, so the echoes or threads land on the grid.");
     if (envSync.isVisible())
-        add(envSyncDesign.expanded(4), "SYNC", "the envelope slices by a division of the beat instead of a free length, so the loop stutters in time.");
+        add(envSyncDesign.expanded(4), "SYNC", "The envelope slices by a division of the beat instead of a free length, so the loop stutters in time.");
     if (envSoft.isVisible())
-        add(envSoftDesign.expanded(4), "SOFT", "the slices fade in and out instead of cutting: a rounder, softer stutter with no clicks.");
+        add(envSoftDesign.expanded(4), "SOFT", "The slices fade in and out instead of cutting: a rounder, softer stutter with no clicks.");
 
-    add(chipDesign[0], "MOD 1", "tap for its shape and rate. drag it onto a control, or drag around a knob's edge, to route it. the square is on or off.");
-    add(chipDesign[1], "MOD 2", "tap for its shape and rate. drag it onto a control, or drag around a knob's edge, to route it. the square is on or off.");
-    add(routesDesign, "ROUTES", "every route in one list, with its depth.");
-    if (modOpen) add(rampWaveDesign, "SHAPE", "click to step the shape: triangle, square, sine, sawtooth, random, smooth random.");
-    if (modOpen) add(rampRateDesign, "RATE", "how slowly this source turns. with SYNC on it becomes a span of the beat.");
+    add(chipDesign[0], "MOD 1", "Tap for its shape and rate. Drag it onto a control, or drag around a knob's edge, to route it. The square is on or off.");
+    add(chipDesign[1], "MOD 2", "Tap for its shape and rate. Drag it onto a control, or drag around a knob's edge, to route it. The square is on or off.");
+    add(routesDesign, "ROUTES", "Every route in one list, with its depth.");
+    if (modOpen) add(rampWaveDesign, "SHAPE", "Click to step the shape: triangle, square, sine, sawtooth, random, smooth random.");
+    if (modOpen) add(rampRateDesign, "RATE", "How slowly this source turns. With SYNC on it becomes a span of the beat.");
     static const char* rampSwitchText[] = {
-        "the swing sits above the knob instead of either side of it.",
-        "the rate becomes a division of the beat: eight bars down to a sixteenth.",
-        "this source stops where it is and its knobs stay pushed there. CC 52 holds both.",
+        "The swing sits above the knob instead of either side of it.",
+        "The rate becomes a division of the beat: eight bars down to a sixteenth.",
+        "This source stops where it is and its knobs stay pushed there. CC 52 holds both.",
     };
     static const char* rampSwitchNames[] = {"UNI", "SYNC", "HOLD"};
     if (modOpen) for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
-    add(memoryDesign.expanded(0, 2), "MEMORY", "in CAPTURE mode, MEMORY relates to how much of the input audio is captured all the way left for short loops and all the way right for loops of up to 30 seconds.");
-    add(gainDesign, "GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
+    add(memoryDesign.expanded(0, 2), "MEMORY", "In CAPTURE mode, MEMORY relates to how much of the input audio is captured. All the way left for short loops, and all the way right for loops of up to 30 seconds.");
+    add(gainDesign, "GAIN", "The loop's own level. Drag or scroll; hold Shift for fine. Double-click for 0 dB, right-click to normalise.");
     // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
-    add(clearDesign, "CLEAR", "empties the take. undo brings it back.");
-    add(undoDesign, "UNDO", "one step back: a clear, a new take, or the last overdub layer. press again to redo.");
-    add(loopViewDesign, "THE WINDOW", "drag start or end to trim the loop, double-click for the whole take.");
+    add(clearDesign, "CLEAR", "Empties the take. UNDO brings it back.");
+    add(undoDesign, "UNDO", "One step back: a clear, a new take, or the last overdub layer. Press again to redo.");
+    add(loopViewDesign, "THE WINDOW", "Drag START or END to trim the loop. Double-click for the whole take.");
     add(recModeDesign, "CAPTURE / RECORD", "CAPTURE= a tap keeps what you just played. RECORD= tap to start, tap to play, or hold to overdub.");
     if (recBars->isVisible()) {
-        add(recBarsDesign, "BARS", "free records until the next tap. a number records that many bars, then plays.");
-        add(recAtTapDesign, "AT TAP", "off= a bar count waits for the next bar line, so loops land on the grid. on= it starts the moment you tap.");
+        add(recBarsDesign, "BARS", "Free records until the next tap. A number records that many bars, then plays.");
+        add(recAtTapDesign, "AT TAP", "Off= a bar count waits for the next bar line, so loops land on the grid. On= it starts the moment you tap.");
     }
-    add(balanceDesign.withTrimmedLeft(-kBalanceEnd).expanded(0, 2), "BALANCE", "left= just the loop. right= just the wet side. middle: both in full. drag up or down on it to add a MOD swing.");
+    add(balanceDesign.withTrimmedLeft(-kBalanceEnd).expanded(0, 2), "BALANCE", "Left= just the loop. Right= just the wet side. Middle= both in full. Drag up or down on it to add modulation.");
 
-    add(hoodCellDesign[0], "LEVEL", "how hard the input hits the machine. past the middle it's driven into old tape: rounder, duller, a little hiss.");
+    add(hoodCellDesign[0], "LEVEL", "How hard the input hits the machine. Past the middle it's driven into old tape: rounder, duller, a little hiss.");
 
-    add(wetModeDesign, "WET MODE", "four ways of treating time: reverb, delay, slip, weave.");
-    add(routingDesign, "ROUTING", "What the wet side hears, IN= the input. in + loop= input and loop. loop= just the loop.");
-    add(loopModeDesign, "LOOP MODE", "three ways of holding a moment: envelope, tape, stretch.");
+    add(wetModeDesign, "WET MODE", "Four ways of treating time: reverb, delay, slip, weave.");
+    add(routingDesign, "ROUTING", "What the wet side hears. IN= the input. IN + LOOP= input and loop. LOOP= just the loop.");
+    add(loopModeDesign, "LOOP MODE", "Three ways of holding a moment: envelope, tape, stretch.");
 
-    add(fsWetDesign, "WET", "tap for the wet side, hold to freeze it where it stands. key A.");
-    add(fsLoopDesign, "LOOP", "tap to catch the recent past, tap again to stop, hold to overdub. key L.");
-    add(overdubDesign, "OVERDUB", "latches: layers into the playing loop until you switch it off. needs a loop playing.");
+    add(fsWetDesign, "WET", "Tap for the wet side, hold to freeze it where it stands. Key A.");
+    add(fsLoopDesign, "LOOP", "Tap to catch the recent past, tap again to stop, hold to overdub. Key L.");
+    add(overdubDesign, "OVERDUB", "Latches: layers into the playing loop until you switch it off. Needs a loop playing.");
 
-    add(benchSourceDesign, "SEND", "what SEND sends: the loop, or the exact output for that many bars, from the next bar line.");
-    add(presetBarDesign, "PATCH", "click the name to search, star and audition sounds. the arrows step through them. SAVE keeps what you hear.");
+    add(benchSourceDesign, "SEND", "What SEND sends: the loop, or the exact output for that many bars, from the next bar line.");
+    add(presetBarDesign, "PATCH", "Click the name to search, star and audition sounds. The arrows step through them. SAVE keeps what you hear.");
 
     static const char* hoodText[] = {
-        "a hi-cut on the wet side. right is open, left is soft and far away.",
-        "how much of the old take an overdub erases. left keeps the pedal's slow erosion, right replaces it.",
-        "how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.",
-        "how much of the worn clock's hiss is let through. only heard with WEAR on WORN; left is silent.",
+        "A high-cut on the wet side. Right is open, left is soft and far away.",
+        "How much of the old take an overdub erases. Left keeps the pedal's slow erosion, right replaces it.",
+        "How far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.",
+        "How much of the worn clock's hiss is let through. Only heard with WEAR on WORN; left is silent.",
     };
     static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "NOISE"};
     for (int i = 0; i < 4; ++i) add(hoodCellDesign[i + 1], hoodNames[i], hoodText[i]);
-    add(wetDivDesign, "WET DIV", "the wet side runs on a divided clock, so the room and the echo stretch out.");
-    add(loopDivDesign, "LOOP DIV", "the loop runs on a divided clock: lower, longer, further from the other side.");
+    add(wetDivDesign, "WET DIV", "The wet side runs on a divided clock, so the room and the echo stretch out.");
+    add(loopDivDesign, "LOOP DIV", "The loop runs on a divided clock: lower, longer, further from the other side.");
 
     // The knobs say what they do in the current mode, on hover and to a screen reader.
     // Last in the table, so a switch beside a knob explains itself first.
@@ -1916,7 +1916,7 @@ void BroodEditor::timerCallback() {
     fsLoop->setLit(loopOn);
     updateTakeControls();
     if (led != lastLoopLed) {
-        const char* msg[] = {nullptr, "playing", "recording...", "overdubbing..."};
+        const char* msg[] = {nullptr, "playing", "recording", "overdubbing"};
         if (msg[led] != nullptr) showReadout("LOOP", msg[led]);
         else if (lastLoopLed == 1) showReadout("LOOP", "stopped");
         lastLoopLed = led;

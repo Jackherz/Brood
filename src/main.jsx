@@ -97,20 +97,20 @@ const REC_BARS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
 const KNOB_IDS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop'];
 const KNOB_MODE = [0, 2, 1, 0, 2, 1];   // 0 = wet modes, 1 = loop modes, 2 = shared
 const WHISPER = [
-  ['how long the room keeps breathing', 'how far back the echo remembers',
-    'how wide a slice of time is borrowed', 'how far back the threads reach'],
-  ['your dry sound against Brood: the loop and the room. left is dry alone, right is Brood alone, the middle both in full',
-    'your dry sound against Brood: the loop and the echoes. left is dry alone, right is Brood alone, the middle both in full',
-    'your dry sound against Brood: the loop and the slipped slices. left is dry alone, right is Brood alone, the middle both in full',
-    'your dry sound against Brood: the loop and the threads. left is dry alone, right is Brood alone, the middle both in full'],
-  ['how much of the moment gets caught', 'the size of the window that repeats',
-    'how wide each grain is stretched', 'how much of the moment gets caught'],
-  ['how much the surface smears', 'how much the echo wants to stay',
-    'which way, and how fast, time slides', 'long cloth, or short clipped stitches'],
-  ['the heartbeat everything obeys', 'the heartbeat everything obeys',
-    'the heartbeat everything obeys', 'the heartbeat everything obeys'],
-  ['how softly it must speak to be caught', 'which way the tape runs, and how fast',
-    'how far the grains drift from now', 'how softly it must speak to be caught'],
+  ['How long the room keeps breathing', 'How far back the echo remembers',
+    'How wide a slice of time is borrowed', 'How far back the threads reach'],
+  ['Your dry sound against Brood: the loop and the room. Left is dry alone, right is Brood alone, the middle both in full',
+    'Your dry sound against Brood: the loop and the echoes. Left is dry alone, right is Brood alone, the middle both in full',
+    'Your dry sound against Brood: the loop and the slipped slices. Left is dry alone, right is Brood alone, the middle both in full',
+    'Your dry sound against Brood: the loop and the threads. Left is dry alone, right is Brood alone, the middle both in full'],
+  ['How much of the moment gets caught', 'The size of the window that repeats',
+    'How wide each grain is stretched', 'How much of the moment gets caught'],
+  ['How much the surface smears', 'How much the echo wants to stay',
+    'Which way, and how fast, time slides', 'Long cloth, or short clipped stitches'],
+  ['The heartbeat everything obeys', 'The heartbeat everything obeys',
+    'The heartbeat everything obeys', 'The heartbeat everything obeys'],
+  ['How softly it must speak to be caught', 'Which way the tape runs, and how fast',
+    'How far the grains drift from now', 'How softly it must speak to be caught'],
 ];
 // A knob says what it does in this mode: MODIFY alone tells you nothing.
 function knobName(i, p) {
@@ -390,62 +390,62 @@ function helpTable(p, modOpen, L) {
   const out = [];
   const add = (r, label, text) => { if (r) out.push({ r, label, text }); };
   const wm = p.wetMode, lm = p.loopMode, worn = !!p.classic, record = p.recMode === 1;
-  add(L.character, 'WEAR', 'clean to worn. clean= fewer artifacts. worn= noise, a loop that warbles and a longer reverb.');
-  if (wm !== 2) add(L.trails, 'TRAILS', 'the tails keep falling after you switch the wet side off.');
-  add(L.smooth, 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.');
-  add(L.freeze, 'FREEZE', 'the hold gesture without the holding: the wet side comes up frozen and rings on its own.');
-  if (worn) add(L.wearPost, 'PRE / POST LOOP', 'where the wear sits. pre: the loop records it worn. post: you hear it worn, but the loop keeps a clean take.');
-  if (wm === 1) add(grow(L.tapeDelay, 4), 'TAPE', 'a tape echo: turning TIME bends the pitch, with wow, flutter and saturation. off, TIME changes the speed of the delay without pitch changes.');
+  add(L.character, 'WEAR', 'Clean to worn. Clean= fewer artefacts. Worn= noise, a loop that warbles and a longer reverb.');
+  if (wm !== 2) add(L.trails, 'TRAILS', 'The tails keep falling after you switch the wet side off.');
+  add(L.smooth, 'SMOOTH', 'The sample rate slides instead of stepping, so CLOCK bends pitch as it turns.');
+  add(L.freeze, 'FREEZE', 'The hold gesture without the holding: the wet side comes up frozen and rings on its own.');
+  if (worn) add(L.wearPost, 'PRE / POST LOOP', 'Where the wear sits. Pre: the loop records it worn. Post: you hear it worn, but the loop keeps a clean take.');
+  if (wm === 1) add(grow(L.tapeDelay, 4), 'TAPE', 'A tape echo: turning TIME bends the pitch, with wow, flutter and saturation. Off: TIME changes the delay without changing the pitch.');
   if (wm === 1 || wm === 3) add(grow(L.wetSync, 4), 'SYNC', 'TIME becomes a division of the beat, so the echoes or threads land on the grid.');
   if (lm === 0) {
-    add(grow(L.envSync, 4), 'SYNC', 'the envelope slices by a division of the beat instead of a free length, so the loop stutters in time.');
-    add(grow(L.envSoft, 4), 'SOFT', 'the slices fade in and out instead of cutting: a rounder, softer stutter with no clicks.');
+    add(grow(L.envSync, 4), 'SYNC', 'The envelope slices by a division of the beat instead of a free length, so the loop stutters in time.');
+    add(grow(L.envSoft, 4), 'SOFT', 'The slices fade in and out instead of cutting: a rounder, softer stutter with no clicks.');
   }
-  add(L.chip0, 'MOD 1', 'tap for its shape and rate. drag it onto a control, or drag around a knob\'s edge, to route it. the square is on or off.');
-  add(L.chip1, 'MOD 2', 'tap for its shape and rate. drag it onto a control, or drag around a knob\'s edge, to route it. the square is on or off.');
-  add(L.routes, 'ROUTES', 'every route in one list, with its depth.');
+  add(L.chip0, 'MOD 1', 'Tap for its shape and rate. Drag it onto a control, or drag around a knob\'s edge, to route it. The square is on or off.');
+  add(L.chip1, 'MOD 2', 'Tap for its shape and rate. Drag it onto a control, or drag around a knob\'s edge, to route it. The square is on or off.');
+  add(L.routes, 'ROUTES', 'Every route in one list, with its depth.');
   if (modOpen) {
-    add(L.rampWave, 'SHAPE', 'click to step the shape: triangle, square, sine, sawtooth, random, smooth random.');
-    add(L.rampRate, 'RATE', 'how slowly this source turns. with SYNC on it becomes a span of the beat.');
-    add(L.rampSwitch[0], 'UNI', 'the swing sits above the knob instead of either side of it.');
-    add(L.rampSwitch[1], 'SYNC', 'the rate becomes a division of the beat: eight bars down to a sixteenth.');
-    add(L.rampSwitch[2], 'HOLD', 'this source stops where it is and its knobs stay pushed there. CC 52 holds both.');
+    add(L.rampWave, 'SHAPE', 'Click to step the shape: triangle, square, sine, sawtooth, random, smooth random.');
+    add(L.rampRate, 'RATE', 'How slowly this source turns. With SYNC on it becomes a span of the beat.');
+    add(L.rampSwitch[0], 'UNI', 'The swing sits above the knob instead of either side of it.');
+    add(L.rampSwitch[1], 'SYNC', 'The rate becomes a division of the beat: eight bars down to a sixteenth.');
+    add(L.rampSwitch[2], 'HOLD', 'This source stops where it is and its knobs stay pushed there. CC 52 holds both.');
   }
-  add(grow(L.memory, 0, 2), 'MEMORY', 'in CAPTURE mode, MEMORY relates to how much of the input audio is captured all the way left for short loops and all the way right for loops of up to 30 seconds.');
-  add(L.gain, 'GAIN', 'the loop\'s own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.');
+  add(grow(L.memory, 0, 2), 'MEMORY', 'In CAPTURE mode, MEMORY relates to how much of the input audio is captured. All the way left for short loops, and all the way right for loops of up to 30 seconds.');
+  add(L.gain, 'GAIN', 'The loop\'s own level. Drag or scroll; hold Shift for fine. Double-click for 0 dB, right-click to normalise.');
   // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
-  add(L.clear, 'CLEAR', 'empties the take. undo brings it back.');
-  add(L.undo, 'UNDO', 'one step back: a clear, a new take, or the last overdub layer. press again to redo.');
-  add(L.loopView, 'THE WINDOW', 'drag start or end to trim the loop, double-click for the whole take.');
+  add(L.clear, 'CLEAR', 'Empties the take. UNDO brings it back.');
+  add(L.undo, 'UNDO', 'One step back: a clear, a new take, or the last overdub layer. Press again to redo.');
+  add(L.loopView, 'THE WINDOW', 'Drag START or END to trim the loop. Double-click for the whole take.');
   add(L.recMode, 'CAPTURE / RECORD', 'CAPTURE= a tap keeps what you just played. RECORD= tap to start, tap to play, or hold to overdub.');
-  if (record) add(L.recBars, 'BARS', 'free records until the next tap. a number records that many bars, then plays.');
-  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'left= just the loop. right= just the wet side. middle: both in full. drag up or down on it to add a MOD swing.');
+  if (record) add(L.recBars, 'BARS', 'Free records until the next tap. A number records that many bars, then plays.');
+  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'Left= just the loop. Right= just the wet side. Middle= both in full. Drag up or down on it to add modulation.');
   // The plug-in's LEVEL drives into old tape past the middle; this one only sets the level
   // (IN THE PLUG-IN says so).
-  add(L.hoodCell[0], 'LEVEL', 'how loud the input reaches Brood. the middle is as it comes in.');
-  add(L.wetMode, 'WET MODE', 'four ways of treating time: reverb, delay, slip, weave.');
-  add(L.routing, 'ROUTING', 'What the wet side hears, IN= the input. in + loop= input and loop. loop= just the loop.');
-  add(L.loopMode, 'LOOP MODE', 'three ways of holding a moment: envelope, tape, stretch.');
-  add(L.fsWet, 'WET', 'tap for the wet side, hold to freeze it where it stands. key A.');
-  add(L.fsLoop, 'LOOP', 'tap to catch the recent past, tap again to stop, hold to overdub. key L.');
-  add(L.overdub, 'OVERDUB', 'latches: layers into the playing loop until you switch it off. needs a loop playing.');
-  add(L.presetBar, 'PATCH', 'click the name to search, star and audition sounds. the arrows step through them. SAVE keeps what you hear.');
-  [['TONE', 'a hi-cut on the wet side. right is open, left is soft and far away.'],
-    ['FADE', 'how much of the old take an overdub erases. left keeps the pedal\'s slow erosion, right replaces it.'],
-    ['WIDTH', 'how far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.'],
-    ['NOISE', 'how much of the worn clock\'s hiss is let through. only heard with WEAR on WORN; left is silent.']]
+  add(L.hoodCell[0], 'LEVEL', 'How loud the input reaches Brood. The middle is as it comes in.');
+  add(L.wetMode, 'WET MODE', 'Four ways of treating time: reverb, delay, slip, weave.');
+  add(L.routing, 'ROUTING', 'What the wet side hears. IN= the input. IN + LOOP= input and loop. LOOP= just the loop.');
+  add(L.loopMode, 'LOOP MODE', 'Three ways of holding a moment: envelope, tape, stretch.');
+  add(L.fsWet, 'WET', 'Tap for the wet side, hold to freeze it where it stands. Key A.');
+  add(L.fsLoop, 'LOOP', 'Tap to catch the recent past, tap again to stop, hold to overdub. Key L.');
+  add(L.overdub, 'OVERDUB', 'Latches: layers into the playing loop until you switch it off. Needs a loop playing.');
+  add(L.presetBar, 'PATCH', 'Click the name to search, star and audition sounds. The arrows step through them. SAVE keeps what you hear.');
+  [['TONE', 'A high-cut on the wet side. Right is open, left is soft and far away.'],
+    ['FADE', 'How much of the old take an overdub erases. Left keeps the pedal\'s slow erosion, right replaces it.'],
+    ['WIDTH', 'How far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.'],
+    ['NOISE', 'How much of the worn clock\'s hiss is let through. Only heard with WEAR on WORN; left is silent.']]
     .forEach(([label, text], i) => add(L.hoodCell[i + 1], label, text));
-  add(L.wetDiv, 'WET DIV', 'the wet side runs on a divided clock, so the room and the echo stretch out.');
-  add(L.loopDiv, 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.');
+  add(L.wetDiv, 'WET DIV', 'The wet side runs on a divided clock, so the room and the echo stretch out.');
+  add(L.loopDiv, 'LOOP DIV', 'The loop runs on a divided clock: lower, longer, further from the other side.');
   // The source picker exists only in the browser.
-  add(L.src.picker, 'SOURCE', 'what Brood hears: a demo loop, an audio file of your own, or the microphone. use headphones with the microphone.');
-  add(L.src.demo, 'DEMO', 'loops, and on jackherz.com songs, to play Brood with. click to step to the next; a loop sets TEMPO to its own.');
-  add(L.src.song, 'SONG', 'where you are in the song. drag to jump; LOOP keeps what you just heard.');
-  add(L.src.load, 'LOAD FILE', 'choose an audio file from this computer. it loops into Brood; nothing is uploaded.');
-  add(L.src.tempo, 'TEMPO', 'the beat SYNC and RECORD\'s bars count in. a host sets it in the plug-in; here you do.');
-  add(L.src.tour, 'TOUR', 'a few steps through brood, one part of the panel at a time. the sound and every setting carry on as they are.');
-  add(L.src.plugin, 'IN THE PLUG-IN', 'what the plug-in does that this page does not.');
-  add(L.src.start, 'AUDIO', 'starts and stops the sound in this page. nothing plays until you press it.');
+  add(L.src.picker, 'SOURCE', 'What Brood hears: a demo loop, an audio file of your own, or the microphone. Use headphones with the microphone.');
+  add(L.src.demo, 'DEMO', 'Samples to play Brood with. Click to step to the next. A sample sets TEMPO to its own.');
+  add(L.src.song, 'SONG', 'Where you are in the song. Drag to jump; LOOP keeps what you just heard.');
+  add(L.src.load, 'LOAD FILE', 'Choose an audio file from this computer. It loops into Brood; nothing is uploaded.');
+  add(L.src.tempo, 'TEMPO', 'The beat SYNC and RECORD\'s bars count in. A host sets it in the plug-in; here you do.');
+  add(L.src.tour, 'TOUR', 'A few steps through Brood, one part of the panel at a time. The sound and every setting carry on as they are.');
+  add(L.src.plugin, 'IN THE PLUG-IN', 'What the plug-in does that this page does not.');
+  add(L.src.start, 'AUDIO', 'Starts and stops the sound on this page. Nothing plays until you press it.');
   // The knobs say what they do in the current mode. Last, so a switch beside a knob explains itself first.
   KNOB_IDS.forEach((_, i) => add(L.knob?.[i], knobName(i, p), `${WHISPER[i][KNOB_MODE[i] === 0 ? wm : KNOB_MODE[i] === 1 ? lm : 0]}.`));
   return out;
@@ -492,6 +492,36 @@ function Txt({ r, align = 'left', cls = 'nm', size, color, children, style, fit 
   }, [fit, text, r[2], size?.fontSize]);
   return <div ref={el} className={`abs txt ${cls} ${align}`} style={{ ...at(r), lineHeight: `${r[3]}px`, color, ...size, ...style }}>
     {fit ? <span className="fit" style={{ transformOrigin: align === 'center' ? '50% 50%' : align === 'right' ? '100% 50%' : '0 50%' }}>{children}</span> : children}
+  </div>;
+}
+
+// A line on the screen, never cut off: at its own size when it fits, then a little narrower
+// (to 0.85) and a little smaller, step by step, down to `min`. At the smallest a value wraps
+// onto the lines below; a title, with no room below, narrows further instead.
+function ScreenLine({ r, size, min, color, wrap = false, children }) {
+  const el = useRef(null);
+  const words = React.Children.toArray(children).map((c) => (typeof c === 'string' || typeof c === 'number' ? c : '')).join('');
+  useLayoutEffect(() => {
+    const fitNow = () => {
+      const box = el.current, span = box?.firstChild;
+      if (!span) return;
+      box.style.whiteSpace = 'nowrap'; box.style.lineHeight = `${r[3]}px`;
+      for (let n = size; n >= min; n -= 0.5) {
+        box.style.fontSize = sf(n).fontSize; span.style.transform = '';
+        const k = box.clientWidth / Math.max(1, span.scrollWidth);
+        if (k >= 1) return;
+        if (k >= 0.85) { span.style.transform = `scaleX(${k.toFixed(3)})`; return; }
+      }
+      if (wrap) { box.style.whiteSpace = 'normal'; box.style.lineHeight = '1.12'; return; }
+      span.style.transform = `scaleX(${Math.max(0.6, box.clientWidth / Math.max(1, span.scrollWidth)).toFixed(3)})`;
+    };
+    fitNow();
+    let live = true;
+    document.fonts?.ready.then(() => { if (live) fitNow(); });
+    return () => { live = false; };
+  }, [words, size, min, wrap, r[2], r[3]]);
+  return <div ref={el} className="abs txt sc screen-line" style={{ ...at(r), color, ...sf(size), lineHeight: `${r[3]}px` }}>
+    <span className="fit" style={{ transformOrigin: '0 50%' }}>{children}</span>
   </div>;
 }
 
@@ -1158,11 +1188,11 @@ function RouteList({ L, params, onChange, close, openMenu }) {
 
 // What the plug-in has that this page doesn't, in one place over the main sheet.
 const PLUGIN_ONLY = [
-  ['LEVEL', 'past the middle, the input is driven into old tape: rounder, duller, a little hiss. here LEVEL only sets how loud the input reaches Brood.'],
-  ['THE TAKE STRIP', 'with nothing caught, the input scrolls past, newest at the right, over the window a tap would keep, so you can see what a tap will catch. here the strip says what the looper is doing instead.'],
-  ['AT TAP', 'beside BARS in RECORD. off: a bar count starts on the next bar line while the host plays, so loops land on the grid. on: it starts the moment you tap. here there is no host, so a bar count always starts at the tap.'],
-  ['TEMPO', 'follows the host. here you set it under the panel.'],
-  ['THE BENCH', 'passes takes between Brood and Silt in a DAW: SEND the loop or a few bars of the output, TAKE one back as the loop.'],
+  ['LEVEL', 'Past the middle, the input is driven into old tape: rounder, duller, a little hiss. Here LEVEL only sets how loud the input reaches Brood.'],
+  ['THE TAKE STRIP', 'With nothing caught, the input scrolls past, newest at the right, over the window a tap would keep, so you can see what a tap will catch. Here the strip says what the looper is doing instead.'],
+  ['AT TAP', 'Beside BARS in RECORD. Off: a bar count starts on the next bar line while the host plays, so loops land on the grid. On: it starts the moment you tap. Here there is no host, so a bar count always starts at the tap.'],
+  ['TEMPO', 'Follows the host. Here you set it under the panel.'],
+  ['THE BENCH', 'Passes takes between Brood and Silt in a DAW: SEND the loop or a few bars of the output, TAKE one back as the loop.'],
 ];
 function PluginOnly({ L, close }) {
   const r = L.overlay;
@@ -1208,7 +1238,7 @@ function PresetBrowser({ L, patches, current, favourites, onChoose, onStar, onKe
         {!patch.factory ? <button type="button" className="remove sc" style={sf(17)} aria-label={`Delete ${patch.name}`} onClick={() => onDelete(patch.name)}>X</button> : <span/>}
       </li>)}
     </ul>
-    <Key r={[13, r[3] - 10 - 32, 94, 32]} onClick={() => onSave(PRESET_CATEGORIES.includes(view) ? view : 'USER')}>SAVE AS...</Key>
+    <Key r={[13, r[3] - 10 - 32, 94, 32]} onClick={() => onSave(PRESET_CATEGORIES.includes(view) ? view : 'USER')}>SAVE AS</Key>
     {!narrow && <Txt r={[113, r[3] - 10 - 32, r[2] - 113 - 196, 32]} align="center" cls="sc" size={sf(15)} color={MUTED}>CLICK TO HEAR   RETURN KEEPS   ESC GOES BACK</Txt>}
     <Key r={[r[2] - 10 - 180 + 3, r[3] - 10 - 32, 84, 32]} onClick={onCancel}>CANCEL</Key>
     <Key r={[r[2] - 10 - 90 + 3, r[3] - 10 - 32, 84, 32]} onClick={onKeep}>KEEP</Key>
@@ -1558,7 +1588,7 @@ function App() {
   useEffect(() => {
     const now = running ? state?.loop || 'off' : 'off';
     if (now !== lastLoop.current) {
-      const msg = { play: 'playing', rec: 'recording...', dub: 'overdubbing...' }[now];
+      const msg = { play: 'playing', rec: 'recording', dub: 'overdubbing' }[now];
       if (msg) showReadout('LOOP', msg);
       else if (lastLoop.current === 'play') showReadout('LOOP', 'stopped');
       lastLoop.current = now;
@@ -1626,7 +1656,7 @@ function App() {
     setDemoId(id); safeWrite('brood-demo-v1', id);
     setSource('demo'); setNotice('');
     if (demo) { update('bpm', demo.bpm); showReadout('DEMO', `${demo.name.toLowerCase()}: ${demo.detail}`); }
-    else showReadout('SONG', `${song.title.toLowerCase()}${song.album ? `, ${song.album.toLowerCase()}` : ''}`);
+    else showReadout('SONG', `${song.title.toLowerCase()}${song.album && song.album !== song.title ? `, ${song.album.toLowerCase()}` : ''}`);
     try {
       if (source === 'demo') await engineRef.current.chooseDemo(id);
       else { engineRef.current.demoId = id; await engineRef.current.connectSource('demo'); }
@@ -1915,7 +1945,7 @@ function App() {
         {L.character && <Stepper r={L.character} caption="WEAR" names={['CLEAN', 'PEDAL', 'WORN']} index={wear} onStep={(d) => {
           const next = (wear + d + 3) % 3;
           setParams((p) => ({ ...p, hiQ: next === 0 ? 1 : 0, classic: next === 2 ? 1 : 0 }));
-          showReadout('WEAR', next === 0 ? 'clean: fewer artifacts, wet a little later' : next === 2 ? 'worn: a noisy clock, a restless loop, a longer reverb' : 'the pedal as built');
+          showReadout('WEAR', next === 0 ? 'clean: fewer artefacts, wet a little later' : next === 2 ? 'worn: a noisy clock, a restless loop, a longer reverb' : 'the pedal as built');
         }}/>}
         {worn && L.wearPost && <ThreeWay r={L.wearPost} labels={['Pre loop', 'Post loop']} index={params.wearPost} label="Pre or post loop"
           onChange={(i) => { update('wearPost', i); showReadout('PRE / POST LOOP', describe('wearPost', params, i)); }}/>}
@@ -1949,14 +1979,14 @@ function App() {
 
         {/* the screen */}
         <div className="abs lcd" style={at(L.lcd)} aria-live="polite">
-          <Txt fit r={[10, 6, lcdW - 72, 16]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)">{helping ? hover.label : lcdLabel}</Txt>
+          <ScreenLine r={[10, 6, lcdW - 72, 16]} size={15} min={11} color="rgba(246,243,234,.75)">{helping ? hover.label : lcdLabel}</ScreenLine>
           <i className="chip-label sc" style={sf(15)}>{helping ? 'HELP' : 'LIVE'}</i>
           {helping
             ? <HelpText r={[10, 22, lcdW - 20, 84]} text={hover.text}/>
             : <>
               {/* The cursor is always there to be measured and only its ink blinks, so a long value
                   squeezed to fit doesn't change width, and shake, as it blinks. */}
-              <Txt fit r={[10, 22, lcdW - 20, 69]} cls="sc" size={sf(28)} color={PAPER}>{lcdValue}<span style={{ visibility: blink ? 'visible' : 'hidden' }}>_</span></Txt>
+              <ScreenLine r={[10, 22, lcdW - 20, 69]} size={28} min={16} wrap color={PAPER}>{lcdValue}<span style={{ visibility: blink ? 'visible' : 'hidden' }}>_</span></ScreenLine>
               <Txt r={[10, 91, lcdW - 20, 15]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)" style={{ whiteSpace: 'pre' }}>{meta}</Txt>
             </>}
         </div>

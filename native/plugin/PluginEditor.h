@@ -12,6 +12,8 @@ class BroodEditor final : public juce::AudioProcessorEditor, public juce::FileDr
 public:
     // For editor_snapshot: show this control's help on the screen as if the mouse rested on it.
     bool showHelpFor(const juce::String& label);
+    // For editor_snapshot: put this on the screen as if it were the last thing moved.
+    void showReadoutForTests(const juce::String& label, const juce::String& value) { showReadout(label, value); }
     // An audio file dropped anywhere on the window becomes the loop.
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void fileDragEnter(const juce::StringArray&, int, int) override;

@@ -35,11 +35,13 @@ int main(int argc, char** argv) {
     proc.prepareToPlay(48000, 256);
     float scale = 1.f;
     juce::String scene, help;   // help=LABEL (spaces as _): that control's help on the screen
+    juce::String readout;       // readout=LABEL|VALUE: that on the screen
     for (int i = 2; i < argc; ++i) {
         const juce::String arg(argv[i]);
         if (juce::StringArray{"loop", "listen", "record", "hold", "dub", "rerecord", "follow", "parked"}.contains(arg)) { scene = arg; continue; }
         if (!arg.containsChar('=')) { scale = arg.getFloatValue(); continue; }
         if (arg.startsWith("help=")) { help = arg.fromFirstOccurrenceOf("=", false, false).replaceCharacter('_', ' '); continue; }
+        if (arg.startsWith("readout=")) { readout = arg.fromFirstOccurrenceOf("=", false, false); continue; }
         if (auto* p = proc.apvts.getParameter(arg.upToFirstOccurrenceOf("=", false, false)))
             p->setValueNotifyingHost(arg.fromFirstOccurrenceOf("=", false, false).getFloatValue());
     }
@@ -65,6 +67,7 @@ int main(int argc, char** argv) {
     }
     std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
     editor->setSize(juce::roundToInt(editor->getWidth() * scale), juce::roundToInt(editor->getHeight() * scale));
+    if (readout.isNotEmpty()) static_cast<BroodEditor*>(editor.get())->showReadoutForTests(readout.upToFirstOccurrenceOf("|", false, false), readout.fromFirstOccurrenceOf("|", false, false));
     if (help.isNotEmpty() && !static_cast<BroodEditor*>(editor.get())->showHelpFor(help)) { std::fprintf(stderr, "no help called %s\n", help.toRawUTF8()); return 1; }
     const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 1.f);
     juce::File out = juce::File::getCurrentWorkingDirectory().getChildFile(argv[1]);

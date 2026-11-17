@@ -149,6 +149,7 @@ html.pointer-input :focus-visible { outline: none; }
 
 @media (prefers-reduced-motion: reduce) { .switch .pill i { transition: none; } }
 .fit { display: inline-block; white-space: nowrap; }
+.screen-line .fit { white-space: inherit; max-width: 100%; }
 .plugin-text { margin: 0; color: var(--muted); line-height: 1.4; }
 .plugin-list { margin: 0; overflow-y: auto; display: grid; grid-template-columns: 186px 1fr; gap: 18px 0; align-content: start; }
 .plugin-list dt { color: var(--ink); padding-top: 2px; }
