@@ -1,6 +1,6 @@
 // Scenario format shared by the JS and C++ renderers (see native/tests/render.cpp).
 //   rate <Hz> | seconds <s> | <block> param <name> <value> | <block> fs <wet|loop> <down|up>
-//   | <block> op <clear|undo> | <block> param songStart <block> (the song restarts from bar 1)
+//   | <block> op <clear|undo|redo|resample> | <block> param songStart <block> (the song restarts from bar 1)
 //   | <block> param inputGain <g> (the test input's level from there; 0 silences it)
 'use strict';
 const BLOCK = 128;

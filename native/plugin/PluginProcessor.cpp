@@ -21,9 +21,15 @@ const char kLegacyStateTag[] = { 0x4d, 0x4f, 0x4f, 0x44, 0 };
 juce::String pct(double x) { return juce::String(juce::roundToInt(x * 100)) + "%"; }
 // SLIP's RATE: how fast and which way the slices play, signed and with no unit ("+0.63").
 juce::String signedRate(double s) { return (s < 0 ? "-" : "+") + juce::String(std::fabs(s), 2); }
-// BALANCE in both words, LOOP first: how loud each side is (each is full in the middle).
-int balanceLoop(double v) { return juce::roundToInt(std::min(1.0, 2.0 * (1 - v)) * 100); }
-int balanceWet(double v) { return juce::roundToInt(std::min(1.0, 2.0 * v) * 100); }
+// WET MIX in both words: how loud the routed source is unprocessed, and WET (each full in the middle).
+int wetMixDry(double v) { return juce::roundToInt(std::min(1.0, 2.0 * (1 - v)) * 100); }
+int wetMixWet(double v) { return juce::roundToInt(std::min(1.0, 2.0 * v) * 100); }
+// A level fader as dB ("-6.0 dB", "+3.5 dB", "off"); topDb is the fader's top.
+juce::String levelText(double v, double topDb) {
+    if (v <= 0.0005) return "off";
+    const double db = -48.0 + v * (topDb + 48.0);
+    return (db > 0.04 ? "+" : "") + juce::String(db, 1) + " dB";
+}
 
 // Host value strings: a number and its unit, at most 8 characters, the way a controller's
 // display shows its own parameters (35%, -3.1 dB, 1708 Hz). The editor keeps the prose.
@@ -48,9 +54,8 @@ double inverseExp(double x, double a, double b) { return x <= a ? 0.0 : x >= b ?
 
 struct FloatDef { const char* id; const char* name; float def; };
 const FloatDef kKnobs[] = {
-    {"time", "Time", 0.55f}, {"mix", "Mix", 0.5f}, {"length", "Length", 0.72f},
+    {"time", "Time", 0.55f}, {"wetMix", "Wet Mix", 0.f}, {"length", "Length", 0.72f},
     {"modWet", "Modify / Wet", 0.58f}, {"clock", "Clock", 0.9f}, {"modLoop", "Modify / Loop", 0.66f},
-    {"balance", "Balance", 0.5f},
 };
 }  // namespace
 
@@ -67,7 +72,9 @@ BroodProcessor::BroodProcessor()
                       .withValueFromStringFunction([this, id](const juce::String& t) { return hostValueFromText(id, t); })));
           }
           layout.add(std::make_unique<APC>(juce::ParameterID("wetMode", 1), "Wet Mode", juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, 0));
-          layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In+Loop", "Loop"}, 1));
+          layout.add(std::make_unique<APC>(juce::ParameterID("routing", 1), "Routing", juce::StringArray{"In", "In+Loop", "Loop", "Off"}, 1));
+          // INPUT MONITOR: whether the live input is heard (see brood::Params::monitor).
+          layout.add(std::make_unique<APC>(juce::ParameterID("monitor", 1), "Monitor", juce::StringArray{"Auto", "On", "Off"}, 0));
           layout.add(std::make_unique<APC>(juce::ParameterID("loopMode", 1), "Loop Mode", juce::StringArray{"Env", "Tape", "Stretch"}, 1));
           layout.add(std::make_unique<APB>(juce::ParameterID("trails", 1), "Trails", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("smooth", 1), "Smooth", false));
@@ -81,10 +88,9 @@ BroodProcessor::BroodProcessor()
                       .withStringFromValueFunction([this, paramId](float v, int) { return hostValue(paramId, v); })
                       .withValueFromStringFunction([this, paramId](const juce::String& t) { return hostValueFromText(paramId, t); }));
           };
-          layout.add(std::make_unique<APF>(juce::ParameterID("loopDb", 1), "Loop Gain", juce::NormalisableRange<float>(-24.f, 12.f), 0.f,
-              juce::AudioParameterFloatAttributes()
-                  .withStringFromValueFunction([](float v, int) { return (v > 0.04f ? "+" : "") + juce::String(v, 1) + " dB"; })
-                  .withValueFromStringFunction([](const juce::String& t) { return static_cast<float>(juce::jlimit(-24.0, 12.0, leadingNumber(t))); })));
+          // The two levels, as faders (brood::levelGain): LOOP LEVEL 0 dB at 0.8, INPUT LEVEL at 2/3.
+          layout.add(loopParam("loopLevel", "Loop Level", 0.8f));
+          layout.add(loopParam("inputLevel", "Input Level", static_cast<float>(brood::inputLevelOfDb(0.0))));
           layout.add(loopParam("memory", "Memory", 0.f));
           layout.add(loopParam("loopEnd", "Loop End", 1.f));
           // 1 is the newest audio in every mode: a fresh TAPE loop plays the tail, as it always has.
@@ -113,7 +119,7 @@ BroodProcessor::BroodProcessor()
           // depth for each control it can move (0 is no route).
           for (int n = 1; n <= 2; ++n) {
               // Short enough for a controller's display: the names a host shows are these.
-              static const char* const shortTarget[brood::kModTargets] = {"Time", "Mix", "Length", "Mod Wet", "Clock", "Mod Loop", "Balance"};
+              static const char* const shortTarget[brood::kModTargets] = {"Time", "Wet Mix", "Length", "Mod Wet", "Clock", "Mod Loop", "Loop Lvl"};
               const juce::String m = "mod" + juce::String(n), name = "M" + juce::String(n) + " ";
               layout.add(std::make_unique<APB>(juce::ParameterID(m + "On", 1), name + "On", true));
               layout.add(loopParam(m + "Rate", name + "Rate", 0.45f));
@@ -130,11 +136,15 @@ BroodProcessor::BroodProcessor()
           }
           layout.add(std::make_unique<APB>(juce::ParameterID("envSync", 1), "Env Sync", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("envSoft", 1), "Env Soft", false));
-          layout.add(std::make_unique<APB>(juce::ParameterID("wetSwitch", 1), "Wet Switch", false));
+          // The FREEZE key, as a footswitch: hold freezes while held, a tap flips FREEZE.
+          layout.add(std::make_unique<APB>(juce::ParameterID("freezeKey", 1), "Freeze Key", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("loopSwitch", 1), "Loop Switch", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("overdub", 1), "Overdub", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("clear", 1), "Clear", false));
           layout.add(std::make_unique<APB>(juce::ParameterID("undo", 1), "Undo", false));
+          layout.add(std::make_unique<APB>(juce::ParameterID("redo", 1), "Redo", false));
+          // RESAMPLE: a press starts one (a loop playing), a press while it runs ends it there.
+          layout.add(std::make_unique<APB>(juce::ParameterID("resample", 1), "Resample", false));
           return layout;
       }()) {
     formats_.registerBasicFormats();
@@ -145,6 +155,46 @@ BroodProcessor::BroodProcessor()
     core_.prepare(48000.0);
     coreRight_.p = core_.p;
     coreRight_.prepare(48000.0);
+    coreRight_.setSide(1);   // RESAMPLE records each engine's own side of WET
+    history = std::make_unique<BroodHistory>(apvts,
+        juce::StringArray{"freezeKey", "loopSwitch", "overdub", "clear", "undo", "redo", "resample", "freeze"},
+        [this](int id) { sendCommand(0, id); }, [this](int id) { sendCommand(1, id); });
+    history->onChange = [this] { ui.undoDepth = history->undoDepth(); ui.redoDepth = history->redoDepth(); };
+}
+
+// What a control Brood moves by itself is called, and its value as the host has it (0..1).
+static const char* autoParamId(brood::AutoParam a) {
+    switch (a) {
+        case brood::AutoParam::Start: return "start"; case brood::AutoParam::LoopEnd: return "loopEnd";
+        case brood::AutoParam::Length: return "length"; case brood::AutoParam::LoopMode: return "loopMode";
+        case brood::AutoParam::ModLoop: return "modLoop"; case brood::AutoParam::LoopDiv: return "loopDiv";
+        case brood::AutoParam::LoopLevel: return "loopLevel"; case brood::AutoParam::Routing: return "routing";
+        case brood::AutoParam::Freeze: return "freeze"; case brood::AutoParam::Mod1On: return "mod1On";
+        default: return "mod2On";
+    }
+}
+static float autoParamNormalised(brood::AutoParam a, double v) {
+    if (a == brood::AutoParam::LoopMode) return static_cast<float>(v / 2.0);   // a choice of three
+    if (a == brood::AutoParam::Routing) return static_cast<float>(v / 3.0);    // a choice of four
+    return static_cast<float>(v);
+}
+static void applyAuto(brood::Params& p, brood::AutoParam a, double v) {
+    switch (a) {
+        case brood::AutoParam::Start: p.start = v; break; case brood::AutoParam::LoopEnd: p.loopEnd = v; break;
+        case brood::AutoParam::Length: p.length = v; break; case brood::AutoParam::LoopMode: p.loopMode = static_cast<int>(v); break;
+        case brood::AutoParam::ModLoop: p.modLoop = v; break; case brood::AutoParam::LoopDiv: p.loopDiv = v; break;
+        case brood::AutoParam::LoopLevel: p.loopLevel = v; break; case brood::AutoParam::Routing: p.routing = static_cast<int>(v); break;
+        case brood::AutoParam::Freeze: p.freezeLatch = v; break; case brood::AutoParam::Mod1On: p.mods[0].on = v > 0.5; break;
+        default: p.mods[1].on = v > 0.5; break;
+    }
+}
+void BroodProcessor::holdAuto(const brood::AutoChange& change) {
+    for (auto& o : overrides_) if (o.active && o.which == change.which) { o.value = change.value; o.samplesLeft = static_cast<int>(getSampleRate() * 0.5); return; }
+    for (auto& o : overrides_) if (!o.active) { o = Override{true, change.which, change.value, static_cast<int>(getSampleRate() * 0.5)}; return; }
+}
+void BroodProcessor::sendCommand(int type, int id) {
+    const auto scope = commandFifo_.write(1);
+    if (scope.blockSize1 > 0) commandQueue_[static_cast<size_t>(scope.startIndex1)] = Command{type, id};
 }
 
 juce::String BroodProcessor::describe(const juce::String& id, float v) const {
@@ -178,7 +228,10 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         }
         return "refresh " + fmtTime(brood::expMap(v, 0.05, 1.5) * div / c);
     }
-    if (id == "mix") return "dry " + pct(v > 0.995f ? 0.0 : std::min(1.0, 2.0 * (1 - v))) + " / brood " + pct(std::min(1.0, 2.0 * v));
+    if (id == "wetMix") return "dry " + juce::String(wetMixDry(v)) + " / wet " + juce::String(wetMixWet(v));
+    if (id == "loopLevel") return levelText(v, 12.0);
+    if (id == "inputLevel") { const double db = -48.0 + v * 72.0; return levelText(v, 24.0) + (v > 0.0005 && db > 0.04 ? ", into the tape" : ""); }
+    if (id == "monitor") { const int m = juce::roundToInt(v); return m == 1 ? "on" : m == 2 ? "off" : "auto"; }
     if (id == "length") {
         const double full = brood::kLoopSamples / hz;
         if (loopMode == 1) return "loop " + fmtTime(full * brood::expMap(v, 0.02, 1)) + " of " + fmtTime(full);
@@ -205,7 +258,6 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         if (loopMode == 1) return "tape " + fmtSpeed(brood::speedMap(v, 0.04));
         return "stretch " + fmtSpeed(brood::stretchMap(v)) + ", same pitch";
     }
-    if (id == "balance") return "loop " + juce::String(balanceLoop(v)) + " / wet " + juce::String(balanceWet(v));
     if (id == "wearPost") return v > 0.5f ? "post loop: heard worn, recorded clean" : "pre loop: recorded worn";
     if (id == "memory") {
         if (v <= 0.001f) return "pedal " + fmtTime(brood::kLoopSamples / hz);
@@ -276,8 +328,9 @@ juce::String BroodProcessor::hostValue(const juce::String& id, float v) const {
     if (id == "modWet") return wetMode == 2 ? signedRate(brood::slipSpeedMap(v)) : pct(v);
     if (id == "modLoop") return loopMode == 0 ? pct(v) : loopMode == 1 ? shortSpeed(brood::speedMap(v, 0.04)) : shortSpeed(brood::stretchMap(v));
     if (id == "clock") return juce::String(brood::clockHz(v, smooth) / 1000, 1) + " kHz";
-    if (id == "balance") return juce::String(balanceLoop(v)) + "/" + juce::String(balanceWet(v));   // LOOP / WET, as on the panel
-    if (id == "mix" || id == "loopEnd") return pct(v);
+    if (id == "wetMix" || id == "loopEnd") return pct(v);
+    if (id == "loopLevel") { const auto t = levelText(v, 12.0); return t == "off" ? juce::String("Off") : t; }
+    if (id == "inputLevel") { const auto t = levelText(v, 24.0); return t == "off" ? juce::String("Off") : t; }
     if (id == "memory") return v <= 0.001f ? juce::String("Pedal") : shortTime(brood::expMap(v, 1, 30));
     if (id == "start") return v <= 0.005f ? juce::String("Oldest") : v >= 0.995f ? juce::String("Newest") : pct(v);
     if (id == "tone") return v > 0.995f ? juce::String("Open") : "Cut " + pct(1 - v);
@@ -311,11 +364,11 @@ float BroodProcessor::hostValueFromText(const juce::String& id, const juce::Stri
     const auto* ck = apvts.getRawParameterValue("clock");
     const int wetMode = wm != nullptr ? juce::roundToInt(wm->load()) : 0, loopMode = lm != nullptr ? juce::roundToInt(lm->load()) : 1;
     const double c = brood::clockHz(ck != nullptr ? ck->load() : 0.9f, false) / brood::kCoreFs;
-    // BALANCE as the host shows it, LOOP / WET: whichever side is below full says where it is.
-    if (id == "balance" && t.containsChar('/')) {
-        const double loop = t.upToFirstOccurrenceOf("/", false, false).getDoubleValue();
-        const double wet = t.fromFirstOccurrenceOf("/", false, false).getDoubleValue();
-        return static_cast<float>(juce::jlimit(0.0, 1.0, wet < 100 ? wet / 200.0 : 1.0 - loop / 200.0));
+    // The levels, in dB (or "off").
+    if (id == "loopLevel" || id == "inputLevel") {
+        if (t.startsWith("off") || t.startsWith("-inf")) return 0.f;
+        if (t.endsWith("db") || t.containsAnyOf("0123456789"))
+            return static_cast<float>(id == "loopLevel" ? brood::loopLevelOfDb(x) : brood::inputLevelOfDb(x));
     }
     if (t.endsWith("%")) {
         if (id == "tone" || id == "fade") return static_cast<float>(juce::jlimit(0.0, 1.0, 1.0 - x / 100.0));
@@ -372,9 +425,6 @@ bool BroodProcessor::loadDemo(int index) {
 
 void BroodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     tape_.prepare(sampleRate);
-    // DAWs may re-prepare for a sample-rate or block-size change. Preserve the
-    // wet switch while resetting the DSP buffers, unless state is pending.
-    if (restoreWet_.load() < 0 && ui.wetOn.load()) restoreWet_ = 1;
     pullParams();
     core_.prepare(sampleRate);
     coreRight_.p = core_.p;
@@ -387,9 +437,9 @@ void BroodProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
 
 void BroodProcessor::pullParams() {
     auto& p = core_.p;
-    p.time = param("time"); p.mix = param("mix"); p.length = param("length");
+    p.time = param("time"); p.wetMix = param("wetMix"); p.length = param("length");
     p.modWet = param("modWet"); p.clock = param("clock"); p.modLoop = param("modLoop");
-    p.balance = param("balance");
+    p.monitor = juce::roundToInt(param("monitor"));
     p.wetMode = juce::roundToInt(param("wetMode"));
     p.routing = juce::roundToInt(param("routing"));
     p.loopMode = juce::roundToInt(param("loopMode"));
@@ -405,7 +455,7 @@ void BroodProcessor::pullParams() {
     p.wearNoise = param("wearNoise");
     p.wearPost = param("wearPost") > 0.5f;
     p.overdubLatch = param("overdub") > 0.5f;
-    p.loopDb = param("loopDb");
+    p.loopLevel = param("loopLevel");
     p.envSoft = param("envSoft") > 0.5f;
     p.freezeLatch = param("freeze") > 0.5f ? 1.0 : 0.0;
     for (int k = 0; k < 2; ++k) {
@@ -428,11 +478,12 @@ void BroodProcessor::pullParams() {
     // A new take fitted the window (START, END, and LENGTH in TAPE, to the whole take). Until
     // the message thread has moved those knobs, keep the cores on the fitted values, or the
     // old knob positions would trim the new take for a block or two.
-    if (fitPending_) {
-        const bool moved = p.start >= 0.999 && p.loopEnd >= 0.999 && (!fitLength_ || p.length >= 0.999);
-        // Half a second at most: automation holding a knob elsewhere wins after that.
-        if (moved || (fitSamples_ += getBlockSize()) > static_cast<int>(getSampleRate() * 0.5)) fitPending_ = false;
-        else { p.start = 1; p.loopEnd = 1; if (fitLength_) p.length = 1; }
+    // Half a second at most: automation holding a knob elsewhere wins after that.
+    for (auto& o : overrides_) {
+        if (!o.active) continue;
+        const float now = apvts.getParameter(autoParamId(o.which))->getValue();
+        if (std::fabs(now - autoParamNormalised(o.which, o.value)) < 1e-3f || (o.samplesLeft -= getBlockSize()) <= 0) o.active = false;
+        else applyAuto(p, o.which, o.value);
     }
     coreRight_.p = p;
 }
@@ -480,15 +531,36 @@ void BroodProcessor::handleAsyncUpdate() {
     off("clear", resetClear_);
     off("undo", resetUndo_);
     off("overdub", resetOverdub_);
+    if (flipFreeze_.exchange(false))
+        if (auto* prm = apvts.getParameter("freeze")) {
+            prm->beginChangeGesture(); prm->setValueNotifyingHost(prm->getValue() > 0.5f ? 0.f : 1.f); prm->endChangeGesture();
+        }
     // A new take: START and END around all of it, and LENGTH full in TAPE.
-    if (resetFit_.exchange(false)) {
-        juce::StringArray ids { "start", "loopEnd" };
-        if (fitLength_.load()) ids.add("length");
-        for (const auto& id : ids)
-            if (auto* prm = apvts.getParameter(id); prm != nullptr && prm->getValue() < 0.999f) {
-                prm->beginChangeGesture(); prm->setValueNotifyingHost(1.f); prm->endChangeGesture();
-            }
+    off("redo", resetRedo_);
+    off("resample", resetResample_);
+    // The UNDO history: the cores' versions (with the controls each action moved), MIDI moves,
+    // and the presses of UNDO and REDO, in that order.
+    {
+        const auto scope = versionFifo_.read(versionFifo_.getNumReady());
+        auto take = [&](int start, int count) {
+            for (int i = 0; i < count; ++i)
+                history->versionEvent(versionQueue_[static_cast<size_t>(start + i)], [](brood::AutoParam a) { return juce::String(autoParamId(a)); }, autoParamNormalised);
+        };
+        take(scope.startIndex1, scope.blockSize1); take(scope.startIndex2, scope.blockSize2);
     }
+    {
+        const auto scope = midiFifo_.read(midiFifo_.getNumReady());
+        auto params = getParameters();
+        auto take = [&](int start, int count) {
+            for (int i = 0; i < count; ++i) {
+                const auto& m = midiQueue_[static_cast<size_t>(start + i)];
+                if (auto* prm = dynamic_cast<juce::RangedAudioParameter*>(params[m.index])) history->midiMoved(m.cc, prm->getParameterID(), m.before, m.after);
+            }
+        };
+        take(scope.startIndex1, scope.blockSize1); take(scope.startIndex2, scope.blockSize2);
+    }
+    if (undoRequest_.exchange(false)) history->undo();
+    if (redoRequest_.exchange(false)) history->redo();
 }
 
 bool BroodProcessor::copyWave(std::array<float, kWaveBins>& out) const {
@@ -510,7 +582,8 @@ void BroodProcessor::applyPendingTakes() {
             ready = std::move(pendingTake_[i]);
             pendingTake_[i] = PendingTake{};
         }
-        (i == 0 ? core_ : coreRight_).restoreLoop(ready.pcm.data(), static_cast<int>(ready.pcm.size()), ready.play, ready.follows, ready.anchor);
+        auto& core = i == 0 ? core_ : coreRight_;
+        core.restoreLoop(ready.pcm.data(), static_cast<int>(ready.pcm.size()), ready.play, ready.follows, ready.anchor);
     }
 }
 
@@ -549,33 +622,57 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     // A useful subset of the pedal's CC map. Changes are applied at block
     // boundaries; hosts can also automate every front-panel parameter directly.
     int midiWet = -1, midiLoop = -1;
+    // What a controller moves, the history records (a burst of one controller is one action).
+    int ccNow = -1;
+    const auto setParam = [this, &ccNow](const char* pid, float v) {
+        auto* parameter = apvts.getParameter(pid);
+        if (parameter == nullptr) return;
+        const float before = parameter->getValue();
+        parameter->setValueNotifyingHost(v);
+        if (ccNow >= 0 && std::fabs(before - parameter->getValue()) > 1e-6f) {
+            const auto scope = midiFifo_.write(1);
+            if (scope.blockSize1 > 0) midiQueue_[static_cast<size_t>(scope.startIndex1)] = MidiMove{ccNow, parameter->getParameterIndex(), before, parameter->getValue()};
+        }
+    };
+    // A press on a momentary CC (anything above 0) acts once, like the panel's key.
+    const auto press = [&](const char* pid, int value) { if (value != 0) setParam(pid, 1.f); };
     for (const auto metadata : midi) {
         const auto message = metadata.getMessage();
         if (!message.isController()) continue;
         const int cc = message.getControllerNumber(), value = message.getControllerValue();
+        ccNow = cc;
         const char* id = nullptr;
         if (cc >= 14 && cc <= 19) {
-            static const char* const knobs[] = {"time", "mix", "length", "modWet", "clock", "modLoop"};
+            static const char* const knobs[] = {"time", "wetMix", "length", "modWet", "clock", "modLoop"};
             id = knobs[cc - 14];
-            if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value / 127.f);
+            setParam(id, value / 127.f);
         } else if (cc >= 21 && cc <= 23) {
             static const char* const modes[] = {"wetMode", "routing", "loopMode"};
             id = modes[cc - 21];
-            const float choice = value <= 1 ? 0.f : value == 2 ? 0.5f : 1.f;
-            if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(choice);
+            // The pedal's three-way values (0 or 1, 2, 3); ROUTING's fourth, OFF, is 4 and up.
+            const float choice = cc == 22 ? (value <= 1 ? 0.f : value == 2 ? 1.f / 3 : value == 3 ? 2.f / 3 : 1.f)
+                                          : (value <= 1 ? 0.f : value == 2 ? 0.5f : 1.f);
+            setParam(id, choice);
         } else {
             if (cc == 75) id = "trails"; else if (cc == 78) id = "smooth";   // SPREAD / DRY KILL / LATCH retired
             else if (cc == 102) midiLoop = value != 0;
             else if (cc == 103) midiWet = value != 0;
-            else if (cc == 20) { for (const char* m : {"mod1Rate", "mod2Rate"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value / 127.f); }
-            else if (cc == 53) { if (auto* parameter = apvts.getParameter("wetDiv")) parameter->setValueNotifyingHost(value / 127.f); }
-            else if (cc == 54) { if (auto* parameter = apvts.getParameter("loopDiv")) parameter->setValueNotifyingHost(value / 127.f); }
-            else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) if (auto* parameter = apvts.getParameter(m)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f); }
+            else if (cc == 20) { for (const char* m : {"mod1Rate", "mod2Rate"}) setParam(m, value / 127.f); }
+            else if (cc == 53) setParam("wetDiv", value / 127.f);
+            else if (cc == 54) setParam("loopDiv", value / 127.f);
+            else if (cc == 52) { for (const char* m : {"mod1Hold", "mod2Hold"}) setParam(m, value != 0 ? 1.f : 0.f); }
             // WEAR: 0 is the pedal as built, anything above it worn (the pedal's CLASSIC switch).
-            else if (cc == 71) { if (auto* parameter = apvts.getParameter("character")) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.5f); }
-            else if (cc == 28) { if (auto* parameter = apvts.getParameter("balance")) parameter->setValueNotifyingHost(value / 127.f); }   // the pedal's LEVEL BALANCE: 0 the loop alone, 127 the wet side alone
+            else if (cc == 71) setParam("character", value != 0 ? 1.f : 0.5f);
+            else if (cc == 28) setParam("loopLevel", value / 127.f);   // the pedal's LEVEL BALANCE, now LOOP LEVEL
+            else if (cc == 29) setParam("inputLevel", value / 127.f);
+            else if (cc == 31) setParam("monitor", value <= 1 ? 0.f : value == 2 ? 0.5f : 1.f);   // AUTO, ON, OFF
+            else if (cc == 106) setParam("overdub", value != 0 ? 1.f : 0.f);
+            else if (cc == 108) press("undo", value);
+            else if (cc == 110) press("clear", value);
+            else if (cc == 107) press("resample", value);
+            else if (cc == 109) press("redo", value);
             else if (cc == 105) id = "freeze";
-            if (id != nullptr) if (auto* parameter = apvts.getParameter(id)) parameter->setValueNotifyingHost(value != 0 ? 1.f : 0.f);
+            if (id != nullptr) setParam(id, value != 0 ? 1.f : 0.f);
         }
     }
     applyPendingTakes();
@@ -584,19 +681,43 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         core_.footswitch(which, true); coreRight_.footswitch(which, true);
         core_.footswitch(which, false); coreRight_.footswitch(which, false);
     };
-    const int restore = restoreWet_.exchange(-1);
-    if (restore >= 0 && core_.state().wetOn != (restore != 0)) tap(0);
-    if (midiWet >= 0 && core_.state().wetOn != (midiWet != 0)) tap(0);
+    // CC 103, the pedal's WET switch: ROUTING OFF, or back to the routing it had before.
+    if (midiWet >= 0) {
+        const int routingNow = juce::roundToInt(param("routing"));
+        if (midiWet == 0 && routingNow != 3) { lastRouting_ = routingNow; setParam("routing", 1.f); }
+        else if (midiWet != 0 && routingNow == 3) setParam("routing", static_cast<float>(lastRouting_) / 3.f);
+        pullParams();
+    }
     if (midiLoop >= 0 && (core_.state().loop != brood::LoopLed::Off) != (midiLoop != 0)) tap(1);
-    const bool wetSw = param("wetSwitch") > 0.5f, loopSw = param("loopSwitch") > 0.5f;
+    const bool wetSw = param("freezeKey") > 0.5f, loopSw = param("loopSwitch") > 0.5f;
     if (wetSw != lastWetSw_) { lastWetSw_ = wetSw; core_.footswitch(0, wetSw); coreRight_.footswitch(0, wetSw); }
     if (loopSw != lastLoopSw_) { lastLoopSw_ = loopSw; core_.footswitch(1, loopSw); coreRight_.footswitch(1, loopSw); }
-    const bool clearNow = param("clear") > 0.5f, undoNow = param("undo") > 0.5f;
+    // The history's swaps and releases, to both engines alike.
+    {
+        const auto scope = commandFifo_.read(commandFifo_.getNumReady());
+        auto run = [&](int start, int count) {
+            for (int i = 0; i < count; ++i) {
+                const auto& c = commandQueue_[static_cast<size_t>(start + i)];
+                if (c.type == 0) { core_.swapVersion(c.id); coreRight_.swapVersion(c.id); }
+                else { core_.releaseVersion(c.id); coreRight_.releaseVersion(c.id); }
+            }
+        };
+        run(scope.startIndex1, scope.blockSize1); run(scope.startIndex2, scope.blockSize2);
+    }
+    const bool clearNow = param("clear") > 0.5f, undoNow = param("undo") > 0.5f, redoNow = param("redo") > 0.5f, resampleNow = param("resample") > 0.5f;
     if (clearNow && !lastClear_) { core_.clearLoop(); coreRight_.clearLoop(); }
-    if (undoNow && !lastUndo_) { core_.undoLoop(); coreRight_.undoLoop(); }
-    lastClear_ = clearNow; lastUndo_ = undoNow;
+    // UNDO stands a RECORD take or a RESAMPLE down if one is under way; otherwise it's the history's.
+    if (undoNow && !lastUndo_) {
+        const bool left = core_.cancelActive(), right = coreRight_.cancelActive();
+        if (!left && !right) undoRequest_ = true;
+    }
+    if (redoNow && !lastRedo_) redoRequest_ = true;
+    if (resampleNow && !lastResample_) { core_.resampleKey(); coreRight_.resampleKey(); }
+    lastClear_ = clearNow; lastUndo_ = undoNow; lastRedo_ = redoNow; lastResample_ = resampleNow;
     if (clearNow) resetClear_ = true;
     if (undoNow) resetUndo_ = true;
+    if (redoNow) resetRedo_ = true;
+    if (resampleNow) resetResample_ = true;
 
     // A well-behaved host does not exceed its promised block size. Grow only if it does.
     const auto needed = static_cast<size_t>(n);
@@ -643,7 +764,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     }
 
     // The input level, and past 0 dB the tape: everything after it hears the driven sound.
-    const float gain = inputGain.load();
+    const float gain = static_cast<float>(brood::inputLevelGain(param("inputLevel")));
     if (gain != 1.f || inputGainNow_ != 1.f) {
         const float step = (gain - inputGainNow_) / static_cast<float>(n);
         for (int i = 0; i < n; ++i) {
@@ -674,7 +795,7 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     ui.envGate = core_.envGateOpen();
     for (int t = 0; t < brood::kModTargets; ++t) ui.effective[static_cast<size_t>(t)] = static_cast<float>(core_.effective(t));
     for (int k = 0; k < 2; ++k) ui.modValue[static_cast<size_t>(k)] = static_cast<float>(core_.rampValue(k));
-    ui.wetOn = st.wetOn; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop); ui.recArmed = st.recArmed;
+    ui.wetFed = st.wetFed; ui.inputHeard = st.inputHeard; ui.routingNow = st.routingNow; ui.freeze = st.freeze; ui.loopLed = static_cast<int>(st.loop); ui.recArmed = st.recArmed;
     ui.lsrc = st.lsrc; ui.winStart = st.winStart; ui.winLen = st.winLen; ui.winSpan = core_.loopSpan(); ui.pos = static_cast<float>(st.pos);
     for (size_t k = 0; k < 2; ++k) { ui.head[k] = static_cast<float>(st.head[k]); ui.headLevel[k] = st.headLevel[k]; }
     ui.clockHz = static_cast<float>(st.clockHz); ui.histCycles = st.histCycles;
@@ -703,16 +824,32 @@ void BroodProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     }
     publishLive();
     {
-        bool lengthLeft = false, lengthRight = false;
-        const bool fitLeft = core_.takeFitted(lengthLeft), fitRight = coreRight_.takeFitted(lengthRight);
-        if (fitLeft || fitRight) { fitLength_ = lengthLeft || lengthRight; fitPending_ = true; fitSamples_ = 0; resetFit_ = true; }
+        // The left engine's versions go to the history; the right one keeps step and says the same.
+        bool lengthToo = false;
+        core_.takeFitted(lengthToo); coreRight_.takeFitted(lengthToo);
+        brood::VersionEvent ev;
+        bool any = false;
+        while (core_.popVersionEvent(ev)) {
+            for (int i = 0; i < ev.nAuto; ++i) holdAuto(ev.autos[i]);
+            const auto scope = versionFifo_.write(1);
+            if (scope.blockSize1 > 0) versionQueue_[static_cast<size_t>(scope.startIndex1)] = ev;
+            any = true;
+        }
+        while (coreRight_.popVersionEvent(ev)) {}
+        if (any) triggerAsyncUpdate();
     }
-    ui.canOverdub = st.canOverdub; ui.dubLatched = st.dubLatched; ui.undoKind = st.undoKind; ui.undoRedo = st.undoRedo;
+    ui.canOverdub = st.canOverdub; ui.dubLatched = st.dubLatched;
+    ui.resampling = st.resampling; ui.canResample = st.canResample; ui.resampleLimitHit = st.resampleLimitHit;
+    ui.resampleSecs = static_cast<float>(st.resampleSecs); ui.resampleNeed = static_cast<float>(st.resampleNeed);
     ui.follows = st.follows; ui.parked = st.parked;
     // OVERDUB on as the core saw it, but not latched: no loop to layer into, or the loop
     // stopped. Set it back so a controller shows the truth.
     if (core_.p.overdubLatch && !core_.overdubLatched()) resetOverdub_ = true;
-    if (resetClear_.load() || resetUndo_.load() || resetOverdub_.load() || resetFit_.load()) triggerAsyncUpdate();
+    // A tap on the FREEZE key flips the FREEZE switch, on the message thread so the host hears it.
+    if (core_.takeFreezeTap()) flipFreeze_ = true;
+    coreRight_.takeFreezeTap();
+    if (resetClear_.load() || resetUndo_.load() || resetOverdub_.load() || flipFreeze_.load() || resetRedo_.load() || resetResample_.load()
+        || undoRequest_.load() || redoRequest_.load() || midiFifo_.getNumReady() > 0) triggerAsyncUpdate();
     const double secs = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
     ui.load = static_cast<float>(100.0 * secs / (n / getSampleRate()));
 }
@@ -785,7 +922,7 @@ bool BroodProcessor::copyMoment(juce::AudioBuffer<float>& out, double& sampleRat
     out.setSize(2, len);
     out.copyFrom(0, 0, left.data() + start, len);
     out.copyFrom(1, 0, right.data() + start, len);
-    out.applyGain(juce::Decibels::decibelsToGain(apvts.getRawParameterValue("loopDb")->load()));   // sent as you hear it
+    out.applyGain(static_cast<float>(brood::loopLevelGain(apvts.getRawParameterValue("loopLevel")->load())));   // sent as you hear it
     sampleRate = static_cast<double>(ui.clockHz.load());
     return true;
 }
@@ -793,7 +930,6 @@ bool BroodProcessor::copyMoment(juce::AudioBuffer<float>& out, double& sampleRat
 void BroodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = apvts.copyState();
     state.setProperty("source", source.load(), nullptr);
-    state.setProperty("inputGain", inputGain.load(), nullptr);
     state.setProperty("presetName", presetName, nullptr);
     state.setProperty("stateVersion", kStateVersion, nullptr);
     // A host may render offline in a fresh instance, and a reloaded set starts
@@ -808,9 +944,6 @@ void BroodProcessor::getStateInformation(juce::MemoryBlock& dest) {
     writeTake(takes, core_, "left");
     writeTake(takes, coreRight_, "right");
     if (takes.getNumChildren() > 0) state.appendChild(takes, nullptr);
-    // Hosts can re-save a restored state before processing the first block.
-    const int pendingWet = restoreWet_.load();
-    state.setProperty("wetEnabled", pendingWet >= 0 ? pendingWet == 1 : ui.wetOn.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 
@@ -822,9 +955,8 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
         xml->setTagName(apvts.state.getType().toString());
         auto state = juce::ValueTree::fromXml(*xml);
         if (state.hasProperty("source") && wrapperType == wrapperType_Standalone) { const int saved = static_cast<int>(state["source"]); source = saved == File ? Live : juce::jlimit(0, 1, saved); }
-        if (state.hasProperty("inputGain")) inputGain = static_cast<float>(state["inputGain"]);
         if (state.hasProperty("presetName")) presetName = state["presetName"].toString();
-        if (state.hasProperty("wetEnabled")) restoreWet_ = static_cast<bool>(state["wetEnabled"]) ? 1 : 0;
+        if (history != nullptr) history->clear();   // a reopened set has no undo
         // Unpack any take the state carries; the audio thread swaps it in at its
         // next block, so a render that starts from a saved state hears the loop.
         for (int c = 0; c < state.getNumChildren(); ++c) {
@@ -892,6 +1024,26 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
                 },
                 [&](const char* id) { if (auto c = param(id); c.isValid()) state.removeChild(c, nullptr); });
         }
+        // Sets from before version 5 had MIX, BALANCE, GAIN, the WET switch and LEVEL outside the
+        // parameters. Carried over as nearly as the new controls allow (see migrateLevels).
+        if (static_cast<int>(state.getProperty("stateVersion", 1)) < 5) {
+            auto param = [&state](const char* id) {
+                for (auto child : state) if (child.hasType("PARAM") && child["id"].toString() == id) return child;
+                return juce::ValueTree();
+            };
+            const bool wetWasOn = static_cast<bool>(state.getProperty("wetEnabled", true));   // no such property: leave ROUTING be
+            const double gainWas = static_cast<double>(state.getProperty("inputGain", 1.0));
+            migrateLevels(
+                [&](const char* id) { const auto c = param(id); return c.isValid() ? c["value"] : juce::var(); },
+                [&](const char* id, double v) {
+                    auto c = param(id);
+                    if (!c.isValid()) { c = juce::ValueTree("PARAM"); c.setProperty("id", juce::String(id), nullptr); state.appendChild(c, nullptr); }
+                    c.setProperty("value", v, nullptr);
+                },
+                [&](const char* id) { if (auto c = param(id); c.isValid()) state.removeChild(c, nullptr); },
+                true, wetWasOn, gainWas);
+            state.removeProperty("wetEnabled", nullptr); state.removeProperty("inputGain", nullptr);
+        }
         // The takes are ours, not parameters: keep them out of the parameter tree
         // (they were decoded above into the pending slots).
         for (auto takeTree = state.getChildWithName("TAKES"); takeTree.isValid(); takeTree = state.getChildWithName("TAKES"))
@@ -899,7 +1051,7 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
         apvts.replaceState(state);
         // Footswitches are momentary and OVERDUB, CLEAR and UNDO are gestures: never restore
         // one as on (a saved CLEAR would clear the take it was saved with).
-        for (auto* id : {"wetSwitch", "loopSwitch", "overdub", "clear", "undo"})
+        for (auto* id : {"freezeKey", "loopSwitch", "overdub", "clear", "undo", "redo", "resample"})
             if (auto* p = apvts.getParameter(id)) p->setValueNotifyingHost(0.f);
     }
 }
@@ -924,7 +1076,7 @@ void BroodProcessor::migrateRouting(const std::function<juce::var(const char*)>&
     // Off: the loop kept only the input, which only ROUTING LOOP does now.
     const juce::var pre = get("wetPre");
     const bool wasPre = !pre.isVoid() && static_cast<double>(pre) > 0.5;
-    set("routing", wasPre ? 0.0 : (raw ? 2.0 : 1.0));   // a choice of three: 2 raw, 1 as 0..1
+    set("routing", wasPre ? 0.0 : (raw ? 2.0 : 2.0 / 3.0));   // LOOP: 2 raw, 2/3 as 0..1 (a choice of four now)
     drop("wetPre");
     // WET/LOOP counted the loop; it counts the wet side now. Its middle stays put.
     if (const juce::var b = get("balance"); !b.isVoid()) set("balance", 1.0 - static_cast<double>(b));
@@ -933,6 +1085,31 @@ void BroodProcessor::migrateRouting(const std::function<juce::var(const char*)>&
         if (const juce::var d = get(id); !d.isVoid()) set(id, raw ? -static_cast<double>(d) : 1.0 - static_cast<double>(d));
 }
 
+void BroodProcessor::migrateLevels(const std::function<juce::var(const char*)>& get,
+                                   const std::function<void(const char*, double)>& set,
+                                   const std::function<void(const char*)>& drop, bool raw, bool wetWasOn, double inputGainWas) {
+    // MIX blended the dry sound against Brood; WET MIX blends a source against WET. The nearest
+    // reading: WET MIX takes BALANCE's wet share where it was set (that was the loop against WET),
+    // otherwise MIX's value; WET switched off becomes ROUTING OFF.
+    if (const juce::var b = get("balance"); !b.isVoid()) set("wetMix", static_cast<double>(b));
+    else if (const juce::var m = get("mix"); !m.isVoid()) set("wetMix", static_cast<double>(m));
+    drop("mix");
+    for (const char* m : {"mod1", "mod2"}) {
+        const juce::String id(m);
+        if (const juce::var d = get((id + "_mix").toRawUTF8()); !d.isVoid()) set((id + "_wetMix").toRawUTF8(), static_cast<double>(d));
+        drop((id + "_mix").toRawUTF8()); drop((id + "_balance").toRawUTF8());
+    }
+    drop("balance");
+    // GAIN was dB; LOOP LEVEL is a fader.
+    if (const juce::var g = get("loopDb"); !g.isVoid()) {
+        const double db = raw ? static_cast<double>(g) : -24.0 + 36.0 * static_cast<double>(g);   // a preset stores 0..1 of -24..+12
+        set("loopLevel", brood::loopLevelOfDb(db));
+    }
+    drop("loopDb");
+    if (raw && !wetWasOn) set("routing", 3.0);
+    if (raw) set("inputLevel", brood::inputLevelOfDb(juce::Decibels::gainToDecibels(inputGainWas, -48.0)));
+    drop("wetSwitch");
+}
 void BroodProcessor::migrateShapes(const std::function<juce::var(const char*)>& get,
                                    const std::function<void(const char*, double)>& set,
                                    const std::function<void(const char*)>& drop) {

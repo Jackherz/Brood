@@ -3,9 +3,9 @@
 # host's rate both ways (SMOOTH), and a loop is overdubbed at TAPE 0.5x, then at 1x.
 rate 48000
 seconds 14
-0 param mix 1
-0 param routing 2
-0 param balance 0
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param routing 3
+0 param wetMix 0
 0 param clock 0.9
 0 param smooth 1
 0 param loopMode 1

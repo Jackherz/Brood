@@ -2,9 +2,9 @@
 # ends it at 3 s. (MEMORY is CAPTURE's; RECORD's ceiling is the 32 s the buffer holds.)
 rate 48000
 seconds 8
-0 param mix 1
-0 param routing 2
-0 param balance 0
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param routing 3
+0 param wetMix 0
 0 param clock 1
 0 param memory 0.2038
 0 param recMode 1

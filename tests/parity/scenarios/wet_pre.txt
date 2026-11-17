@@ -3,17 +3,17 @@
 # playing, then ROUTING on LOOP (nothing wet recorded) and IN + LOOP.
 rate 48000
 seconds 12
+0 param routing 3   # the old WET switch started off: ROUTING OFF
 0 param wetMode 1
 0 param loopMode 1
-0 param routing 2
+0 param routing 3
 0 param clock 0.8
 0 param time 0.4
 0 param modWet 0.6
-0 param mix 0.7
+0 param wetMix 0.7
 0 param length 0.8
-0 param routing 0
-0 fs wet down
-3 fs wet up
+0 param routing 3
+0 param routing 0   # was a tap on WET
 300 fs loop down
 304 fs loop up
 700 fs loop down
@@ -25,5 +25,5 @@ seconds 12
 2604 fs loop up
 3000 param routing 2
 3600 param routing 1
-3800 param loopDb -6
-4100 param loopDb 6
+3800 param loopLevel 0.7
+4100 param loopLevel 0.9

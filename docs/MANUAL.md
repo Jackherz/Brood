@@ -60,13 +60,13 @@ pedal this follows has none. It reads in three tiers:
    the loop, because the rough conversion on the way in is what a loop records. In the
    browser version it is still the AFTER LOOP switch beside CLASSIC until the browser is
    rebuilt. (The host shows it as Wear Post: Pre or Post.)
-2. **The side column**: the readout, then two sections in the order you reach for them while
-   playing, each marked by a small coloured square instead of a number: **LOOP** (moss green:
-   MEMORY, BALANCE and CAPTURE / RECORD) and **MODULATION** (ink; its red and blue chips are its
-   colour). MODULATION shows only the two chips and ROUTES until you click a chip; then that
-   source's SHAPE, RATE and switches appear under them, and clicking the chip again hides
-   them. There is no INPUT section and no level meters: LEVEL is in the bottom strip, and in
-   a host the input is the track.
+2. **The side column**: the readout, then three sections in the order you reach for them while
+   playing, each marked by a small square instead of a number: **INPUT** (its square is a
+   lamp, lit while the input is heard: INPUT LEVEL and INPUT MONITOR), **LOOP** (moss green:
+   LOOP LEVEL, MEMORY and CAPTURE / RECORD) and
+   **MODULATION** (ink; its red and blue chips are its colour). MODULATION shows only the two
+   chips and ROUTES until you click a chip; then that source's SHAPE, RATE and switches
+   appear under them, and clicking the chip again hides them.
 
    **CAPTURE or RECORD** sets what the loop switch does with nothing playing. CAPTURE is
    the pedal's way: a tap keeps the recent past, up to MEMORY. RECORD is a regular
@@ -85,23 +85,30 @@ pedal this follows has none. It reads in three tiers:
 
    **OVERDUB**, beside the LOOP switch, latches: switched on, it layers into the playing
    loop until you switch it off, so a controller that can't hold a button (Push's knobs
-   and buttons, say) can overdub. It's greyed out unless a loop is playing, and it
-   switches itself off when the loop stops. A hold on LOOP still overdubs while OVERDUB is
+   and buttons, say) can overdub. It's greyed out unless a loop is playing, and while INPUT
+   MONITOR is OFF; it switches itself off when the loop stops, or when MONITOR goes to OFF
+   (the layer laid down so far is kept). A hold on LOOP still overdubs while OVERDUB is
    on, and letting go doesn't end the latched layer. FADE sets how much of the take
    survives each pass, as for a hold.
 
-   **CLEAR** and **UNDO** sit on the take strip's heading, beside GAIN. CLEAR empties the
-   take; a playing loop fades out first, so it doesn't click. UNDO steps back once: it
-   brings back a cleared take, goes back to the take before a new one (or to nothing, after
-   the first), or takes off the last overdub layer. Press it again to redo; it reads REDO
-   when that's what it will do. A take that UNDO brings back plays (fading in), since a
-   tap with the loop stopped would catch a new take instead; a transport take with the
-   host stopped waits for play. Undoing a layer keeps a playing loop playing (it dips for
-   a moment while the take is swapped) and a stopped one stopped. The undo step isn't saved with your project, so a reopened set
-   starts with nothing to undo, and a cleared take isn't saved at all.
-3. **The bottom strip**: five sliders along the bottom, always open and unlabelled as a
-   group: **LEVEL** (how hard the input hits the machine), **TONE**, **FADE**, **WIDTH** and
-   **NOISE**, which sets how much of the worn clock's hiss is let through and only does
+   **CLEAR**, **UNDO** and **REDO** sit on the take strip's heading. CLEAR empties the
+   take; a playing loop fades out first, so it doesn't click. UNDO steps back through the
+   last four things you did, in the order you did them, whatever they were: a knob turned
+   (one press-to-release is one step), a switch, a modulation depth, a preset loaded, a new
+   take, an overdub layer, a CLEAR or a RESAMPLE (with every control it moved). It reads
+   `UNDO 3` when it can go three steps back. REDO puts back what UNDO took away until you
+   do something new. A take that UNDO brings back plays (fading in), since a tap with the
+   loop stopped would catch a new take instead; a transport take with the host stopped
+   waits for play. Undoing a layer keeps a playing loop playing (it dips for a moment while
+   the take is swapped) and a stopped one stopped. While a RECORD take or a RESAMPLE is
+   under way, UNDO stands it down instead. Host automation, the host's own controls and
+   Push aren't steps (the host keeps its own undo for those); a burst of one MIDI controller
+   is one step. The steps aren't saved with your project, so a reopened set starts with
+   nothing to undo, and a cleared take isn't saved at all. Loop audio for the steps lives
+   in a fixed space, room for four of the longest takes: with every take near 32 s,
+   UNDO reaches three back, and the number says so.
+3. **The bottom strip**: four sliders along the bottom, always open and unlabelled as a
+   group: **TONE**, **FADE**, **WIDTH** and **NOISE**, which sets how much of the worn clock's hiss is let through and only does
    anything with WEAR on WORN. **WET DIV** and **LOOP DIV** are small steppers at the foot of
    their columns: WET DIV beside TRAILS, LOOP DIV mirroring it under the loop column.
 
@@ -135,11 +142,11 @@ locks it back to the song exactly. ENV has no running playhead, so there the tra
 only stops and starts it. The standalone app and the browser version have no transport,
 so their loops are always free.
 
-**A new take plays all of itself.** Whenever a take arrives, from CAPTURE or RECORD,
-or when UNDO or REDO brings back a different take, START and END open to the whole take
-and, in TAPE, LENGTH goes to full. So 15 s of MEMORY caught is 15 s heard, and 2 bars
-recorded is 2 bars heard. The knobs move to match, and from there you trim as usual.
-Undoing an overdub layer keeps the same take, so it leaves the window where it was. A
+**A new take plays all of itself.** Whenever a take arrives, from CAPTURE, RECORD or
+RESAMPLE, START and END open to the whole take and, in TAPE, LENGTH goes to full. So 15 s
+of MEMORY caught is 15 s heard, and 2 bars recorded is 2 bars heard. The knobs move to
+match, as part of that step of UNDO, so undoing the take puts the window back where it was
+too. Undoing an overdub layer keeps the same take, so it leaves the window where it was. A
 loop taken from the Bench or dropped in as a file keeps the window as it was.
 
 **START and END are markers on the waveform.** Grab one and drag it, all the way to
@@ -152,13 +159,13 @@ following the newest audio. Each marker is a
 full-height rule with a tab naming it — START's hangs from the top, END's from the
 bottom, so they stay readable even when the window is a sliver.
 
-**BALANCE shows its modulation.** Drop a source on it and its swing appears as a bar in
+**LOOP LEVEL shows its modulation.** Drop a source on it and its swing appears as a bar in
 the source's colour, a small tab moves to where the sound has it now, and its readout on the
-LOOP heading (`LOOP 100 / WET 60`) follows it.
+LOOP heading (`LEVEL -6.0 DB`) follows it.
 
 **Values sit where you are looking.** Resting on or turning a knob shows the exact
 value under it, in ink; the modulation rate prints its period (or,
-synced, its span of the beat) at the end of its row; MEMORY, BALANCE and the hood
+synced, its span of the beat) at the end of its row; the two levels, MEMORY and the hood
 sliders carry their figures already. The knobs have no ring: five marks are the
 scale, and they turn to ink on hover. Each tempo **SYNC** switch sits directly
 under the knob it governs, and only in the modes that can use it.
@@ -198,6 +205,63 @@ stopped). Silt keeps the first 30 seconds of anything longer.
 Sets saved under the old product name still open: the plug-in IDs did not change,
 and the old state tag is read as the new one.
 
+## Input, loop and WET
+
+Three controls set what you hear, and none of them hides what it does:
+
+- **INPUT LEVEL** is the input before everything: what you hear of it, what WET hears of
+  it and what a take keeps. Past 0 dB it's driven into old tape (in the plug-in). Off at
+  the bottom, then -48 to +24 dB.
+- **LOOP LEVEL** is the loop's level, and how loud it reaches WET. Off at the bottom, then
+  -48 to +12 dB. SEND sends the loop at this level.
+- **WET MIX** blends what ROUTING sends to WET against WET itself: left is that sound
+  alone, right is WET alone, the middle both in full. It starts at 0, so a fresh Brood
+  is clean until you bring WET in. WET keeps running underneath at 0, so turning WET MIX up
+  reveals a reverb already going rather than starting one.
+
+**ROUTING** says what WET hears: **IN** the input, **IN + LOOP** the input and the loop,
+**LOOP** just the loop, **OFF** nothing (a tail already ringing carries on if TRAILS is on).
+With IN, the loop is heard as it is beside WET; with LOOP, the input is heard as it is.
+There is no WET switch: ROUTING OFF is WET off, and the big key where WET was is
+**FREEZE**: tap to hold WET where it stands, tap again to let it go, or hold it to freeze
+only while held (key A; CC 105 is the same switch).
+
+**INPUT MONITOR** says whether you hear the live input: **ON** always, **OFF** never (not
+through WET either; Brood still listens, so a tap still catches), **AUTO** heard until a
+loop plays, then the loop replaces it, and heard again while you overdub or record. The
+INPUT lamp and heading say which is true now (`AUTO: LOOP REPLACES IT`). With MONITOR OFF,
+OVERDUB is unavailable; RESAMPLE still works.
+
+What a take or a layer keeps is what you hear of the input: with WET hearing the input
+alone, the input with WET at WET MIX's share; otherwise the plain input. So with ROUTING IN
+an overdub can lay the input down with WET on it. With **IN + LOOP**, while a layer is laid
+down WET hears only the input (ROUTING lights IN in ochre, with IN + LOOP outlined), so the
+loop is never fed back into itself through WET. A tail of the loop already ringing in WET
+when the layer starts goes in with its first moments; that's accepted rather than cutting
+the tail off.
+
+**RESAMPLE**, beside OVERDUB, plays one pass of the loop as you hear it (its window, speed, slices and
+modulation, and WET at WET MIX's share while WET hears the loop alone) into a new take that
+replaces it. Live input never goes in: with IN + LOOP, WET hears only the loop while it
+runs (LOOP lit in ochre), and the input's way into WET closes within 5 ms, so only a tail
+already ringing can reach the take. With ROUTING IN, WET stays on the input and only the
+loop's own playback is recorded.
+
+- **Length**: always one pass of the window as it is when you press, so START, END and
+  LENGTH set it. It's counted in the take itself, so a pass at 2x takes half the time, a
+  speed change part way changes the time left, reverse counts too, STRETCH counts its scan
+  and ENV its playhead. Press RESAMPLE again to stop early and keep what it has. The
+  screen's foot shows how long it has run and how long it needs.
+- **The 30 s limit**, in host time. When a pass won't fit at the speed now, the screen
+  says how long it needs (`of 41.0 s (30 s max)`); at the limit it stops, keeps the take,
+  and says so. Nothing is squeezed to fit.
+- **After it**: START and END open to the whole take, LOOP MODE goes to TAPE at 1x, LOOP DIV
+  to 1x and LOOP LEVEL to 0 dB, so the performance isn't played twice. If it recorded the
+  loop's WET, ROUTING LOOP becomes OFF and IN + LOOP becomes IN, a latched FREEZE lets go,
+  and the old tail rings out. A modulation source that moves only the loop's playback
+  (LENGTH, SPEED, LOOP LEVEL) pauses, since its moves are in the take; one that moves
+  anything else keeps running. It is all one step of UNDO.
+
 ## MIDI
 
 The native plugin accepts MIDI CC on any channel when the host routes MIDI to
@@ -205,16 +269,21 @@ the effect. Changes are applied at audio-block boundaries:
 
 | CC | Control |
 | --- | --- |
-| 14–19 | Time, Mix, Length, wet Modify, Clock, loop Modify |
+| 14–19 | Time, Wet Mix, Length, wet Modify, Clock, loop Modify |
 | 20 | Rate of both modulation sources |
 | 52 | Hold both modulation sources (`0` running, `1–127` held) |
 | 53, 54 | Wet and loop clock division |
 | 71 | WEAR: pedal (`0`) or worn (`1–127`) |
-| 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third) |
-| 28 | BALANCE (the pedal's LEVEL BALANCE): `0` the loop alone, `127` the wet side alone |
+| 21–23 | Wet mode, routing, loop mode (`0–1` first, `2` second, `3–127` third; routing: `3` LOOP, `4–127` OFF) |
+| 28 | LOOP LEVEL (where the pedal had LEVEL BALANCE) |
+| 29 | INPUT LEVEL |
+| 31 | INPUT MONITOR (`0–1` AUTO, `2` ON, `3–127` OFF) |
 | 75, 78 | Trails, Smooth (`0` off, `1–127` on) |
-| 102, 103 | Loop and wet on/off (`0` off, `1–127` on) |
-| 105 | Wet freeze, the same as the FREEZE switch (`0` off, `1–127` on) |
+| 102 | Loop on/off (`0` off, `1–127` on) |
+| 103 | WET: `0` ROUTING OFF, `1–127` the routing it had before |
+| 105 | FREEZE (`0` off, `1–127` on) |
+| 106 | OVERDUB (`0` off, `1–127` on) |
+| 107, 108, 109, 110 | RESAMPLE, UNDO, REDO, CLEAR (each press, `1–127`, acts once) |
 
 CC 21 keeps the pedal's three-mode mapping exactly, so a hardware controller set up for the pedal
 never reaches the fourth mode by accident: **WEAVE** is selected in the editor or
@@ -228,14 +297,14 @@ Tempo sync has no CC in the pedal's map; automate the `sync` parameter, or switc
 it on in the editor. TAPE, CAPTURE / RECORD, BARS and AT TAP have none either: the
 pedal's map has nothing for them, and a spare number could clash with a controller set
 up for the pedal. Automate `tapeDelay`, `recMode`, `recBars` and `recAtTap` instead.
-OVERDUB, CLEAR and UNDO have no CC for the same reason; they're host parameters
-(`overdub`, `clear`, `undo`), so Push and other controllers that map plug-in parameters
-reach them. CLEAR and UNDO act when switched on and set themselves back to off.
+OVERDUB, RESAMPLE, CLEAR, UNDO and REDO are host parameters too (`overdub`, `resample`,
+`clear`, `undo`, `redo`), so Push and other controllers that map plug-in parameters reach
+them. RESAMPLE, CLEAR, UNDO and REDO act when switched on and set themselves back to off.
 
 The two MODIFY knobs are **Modify / Wet** and **Modify / Loop** in the host (the panel
 names them per mode: SMEAR, FEEDBACK, RATE or STITCH; SENSITIVITY, SPEED or STRETCH), and
-WET/LOOP is **Balance**. In a modulation route's name they shorten to `M1>Mod Wet`,
-`M1>Mod Loop` and `M1>Balance`. SLIP's RATE shows as a signed rate with no unit (`+0.63`,
+the levels are **Loop Level** and **Input Level**. In a modulation route's name they shorten
+to `M1>Mod Wet`, `M1>Mod Loop` and `M1>Loop Lvl`. SLIP's RATE shows as a signed rate with no unit (`+0.63`,
 `-1.12`): minus plays the slices backwards.
 
 What a host or controller shows for each value is kept to 8 characters, a number and its
@@ -256,15 +325,15 @@ current mode's set.
 | --- | --- | --- | --- | --- |
 | TIME | how long the room keeps breathing | how far back the echo remembers | how wide a slice of time is borrowed | how far back the threads reach |
 | MODIFY (SMEAR / FEEDBACK / RATE / STITCH) | how much the surface smears | how much the echo wants to stay | which way, and how fast, time slides | long cloth, or short clipped stitches |
-| MIX | your dry sound against the room and the loop | your dry sound against the echoes and the loop | your dry sound against the slipped slices and the loop | your dry sound against the threads and the loop |
+| WET MIX | what ROUTING sends, against the room | what ROUTING sends, against the echoes | what ROUTING sends, against the slipped slices | what ROUTING sends, against the threads |
 
 | Knob | Env | Tape | Stretch |
 | --- | --- | --- | --- |
 | LENGTH | how much of the moment gets caught | the size of the window that repeats | how wide each grain is stretched |
 | MODIFY (SENSITIVITY / SPEED / STRETCH) | how softly it must speak to be caught | which way the tape runs, and how fast | how far the grains drift from now |
 
-Each MIX sentence ends the same way: left is dry alone, right is Brood alone, the middle is
-both in full. Shared: **CLOCK** — *the
+Each WET MIX sentence ends the same way: left is the sound alone, right is WET alone, the
+middle is both in full. Shared: **CLOCK** — *the
 heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what the loop keeps*.
 
 ## Sound model
@@ -370,21 +439,16 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   stutter; off is the sharp cut the pedal makes. Both cores agree
   (`tests/parity/scenarios/env_soft.txt`).
 - **ROUTING** is the one control for where the wet side sits, as on the pedal:
-  - **IN**: the wet side hears the input, and the loop keeps the input with the wet side
-    on it. Catches and overdubs keep the wet sound, and the Bench's SEND carries it.
-  - **IN + LOOP**: the wet side hears the input and the loop, and the loop keeps the
-    input with the wet side on it. An overdub here resamples the loop through the wet side:
-    the old layer comes back in through it, so the new layer replaces the old one by as much
-    of the wet side as BALANCE lets you hear (with the wet side off it layers as usual). GAIN
-    sets the loop's level for the wet side too, so turning it down quietens both and the
-    overdub keeps it down. A pass can never bring the loop back louder than it went in: a
-    GAIN boost is heard but re-recorded at 0 dB, and a wet mode that builds on itself (a delay near full FEEDBACK) is held at that
-    ceiling. Both cores agree (`tests/parity/scenarios/dub_runaway.txt`).
-  - **LOOP**: the wet side hears only the loop, and the loop keeps only the input, so a
-    loop is never fed back to itself through the wet side. With MIX at all FX, no live
-    input reaches the output at all; with no loop caught, the wet side has nothing to hear.
+  - **IN**: the wet side hears the input, and catches and overdubs keep it at WET MIX's
+    share. The Bench's SEND carries it.
+  - **IN + LOOP**: the wet side hears the input and the loop. While a layer is laid down it
+    hears only the input, so the loop never comes back into itself through the wet side and
+    a delay near full FEEDBACK can't grow it pass after pass
+    (`tests/parity/scenarios/dub_isolation.txt`, `dub_runaway.txt`).
+  - **LOOP**: the wet side hears only the loop, and the loop keeps only the input.
+  - **OFF**: the wet side hears nothing.
 
-  The loop itself always plays at full level; BALANCE blends it with the wet side. There
+  See "Input, loop and WET" for how WET MIX blends each one. There
   used to be a separate PRE-LOOP / POST-LOOP switch. Sets and presets saved with it load
   as they were meant: PRE-LOOP on becomes IN, off becomes LOOP
   (`tests/parity/scenarios/wet_pre.txt`).
@@ -403,10 +467,10 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   than the engine runs, so what's laid down is filtered first, just under that rate.
   Without it, the top of anything overdubbed folded back as aliasing and stayed in the
   take (`tests/parity/scenarios/alias_clock.txt`).
-- **GAIN**, in the LOOP panel's heading, is the loop's own level, -24 to +12 dB: drag up or down, Shift
-  for fine, double-click for 0 dB. The waveform grows and shrinks with it, and SEND sends the loop at this level.
+- **LOOP LEVEL**, in the LOOP section, is the loop's own level, off to +12 dB. The waveform
+  grows and shrinks with it, and SEND sends the loop at this level.
 - **MODULATION** is two sources, each with its own rate, shape (TRI, SQR, SIN, SAW, RND, SMTH)
-  and UNI, SYNC and HOLD. Drag a source onto any knob or BALANCE to route it. Around a knob, the rings are
+  and UNI, SYNC and HOLD. Drag a source onto any knob or LOOP LEVEL to route it. Around a knob, the rings are
   handles: drag up or down to set that source's depth (negative inverts), and
   where there's no ring yet it makes one for the selected source. Alt-drag does the same, double-click a ring to remove that source, Delete on a clicked knob removes both,
   right-click for the list,
@@ -415,18 +479,12 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
 - **ENV** slices when it hears the input: LENGTH and SENSITIVITY act on those slices, so with
   the loop playing and nothing coming in above SENSITIVITY's threshold, they have nothing to
   move. The knob says so while you touch it.
-- **BALANCE** (WET/LOOP until November 2026) is the loop against the wet side: LOOP is printed
-  at its left end and WET at its right. Hard left is the loop alone, hard right the wet side
-  alone, and in the middle both in full. Its readout gives both, loop first:
-  `LOOP 100 / WET 60`; the host shows `100/60`. (It used to run the other way, with 0 meaning all wet; saved sets and presets
-  are turned round as they load, so they sound as they did. MIDI CC 28 follows the new
-  direction: 0 is the loop alone, 127 the wet side alone.) It used to duck the direct loop against the
-  wet level, which meant the middle of the travel was the wet side only — and in
-  SLIP and WEAVE, which hand back little of the loop, the loop vanished until the
-  knob was nearly at LOOP. The duck is gone; both cores agree bit for bit
-  (`tests/parity/scenarios/balance.txt`) and the level is pinned by tests in both
-  implementations.
-- **The switches** sit with what they act on: FREEZE and TRAILS under the wet column,
+- **WET MIX** (MIX and BALANCE until November 2026, when the WET switch went too) blends the
+  routed sound against WET, both full in the middle; the readout gives both, `DRY 100 /
+  WET 60`. Sets and presets from before carry over as nearly as they can: WET MIX takes
+  BALANCE's wet share where it was set, otherwise MIX's value; GAIN becomes LOOP LEVEL; a
+  set saved with WET off opens with ROUTING OFF.
+- **The switches** sit with what they act on: TRAILS under the wet column (FREEZE is the big key),
   SMOOTH under CLOCK, WEAR between the footswitches. The bottom strip is sliders only. SYNC left the panel in round 16 to sit with the knob it governs,
   so it can disappear in the modes that have no use for the beat. LATCH went
   because the FREEZE switch does the same job without having to hold anything (the
@@ -435,7 +493,7 @@ heartbeat everything obeys*; **ROUTING** — *what the wet side hears, and what 
   went because MIX at the top of its travel already removes the dry, and SPREAD
   went into WIDTH.
 - **The bottom strip** is the row along the bottom of the editor (browser: the
-  block at the foot of the side panel): LEVEL, then the options the pedal keeps behind both
+  block at the foot of the side panel): the options the pedal keeps behind both
   footswitches. (It was UNDER THE HOOD; WET DIV and LOOP DIV moved into their columns.) **TONE** blends the wet bus towards a 2.6 kHz hi-cut — fully right is
   bit-transparent, so it can stay open. **FADE** sets how much of the old loop
   survives each overdub pass: 0 is the pedal's slow erosion (about 3 % a pass), 1

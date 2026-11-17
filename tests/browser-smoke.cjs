@@ -36,7 +36,7 @@ let browser;
      await ctx.audioWorklet.addModule('/src/brood-worklet.js');
      const node = new AudioWorkletNode(ctx, 'brood-processor', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2], channelCount:2, channelCountMode:'explicit' });
      let wetSeen = false;
-     node.port.onmessage = e => { if (e.data.type === 'state' && e.data.st.wetOn) wetSeen = true; };
+     node.port.onmessage = e => { if (e.data.type === 'state' && e.data.st.wetFed) wetSeen = true; };
      const b = ctx.createBuffer(2, fs*2, fs), left=b.getChannelData(0);
      for(let i=0;i<left.length;i++) left[i]=0.3*Math.sin(2*Math.PI*440*i/fs);
      const s=ctx.createBufferSource();s.buffer=b;s.connect(node);node.connect(ctx.destination);s.start();
@@ -45,8 +45,8 @@ let browser;
      const paused = ctx.suspend(0.05), rendering = ctx.startRendering();
      await paused;
      if (wet) {
-       for (const [name,value] of Object.entries({wetMode:1, time:0.5, mix:1, clock:1, modWet:0.4})) node.port.postMessage({type:'param', name, value});
-       node.port.postMessage({type:'fs', which:'wet', action:'down'}); node.port.postMessage({type:'fs', which:'wet', action:'up'});
+       // WET is fed whenever ROUTING isn't OFF; WET MIX at the top hears it alone.
+       for (const [name,value] of Object.entries({wetMode:1, time:0.5, wetMix:1, clock:1, modWet:0.4})) node.port.postMessage({type:'param', name, value});
      }
      await new Promise(resolve => setTimeout(resolve, 50));
      await ctx.resume();
@@ -91,19 +91,30 @@ let browser;
  console.log('tour steps, veil, jump and end passed');
  await page.getByRole('button',{name:'START AUDIO'}).click();
  await page.getByRole('button',{name:'STOP AUDIO'}).waitFor();
- const wet = page.getByRole('button',{name:/^WET: tap or hold/});
+ const wet = page.getByRole('button',{name:/^FREEZE: tap or hold/});
  const loop = page.getByRole('button',{name:/^LOOP: tap or hold/});
- await wet.click(); await page.waitForFunction(()=>document.querySelector('.footswitch').getAttribute('aria-pressed')==='true');
- // Held, the wet side freezes, and its light blinks.
+ const frozen = (on) => page.waitForFunction((v)=>document.querySelector('.footswitch').getAttribute('aria-pressed')===v, on ? 'true' : 'false');
+ // A tap latches FREEZE, another lets it go; held, it freezes only while held.
+ await wet.click(); await frozen(true);
+ await wet.click(); await frozen(false);
  await wet.hover(); await page.mouse.down(); await page.waitForTimeout(700);
- await page.waitForFunction(()=>new Promise((resolve)=>{ const seen=new Set(); const t=setInterval(()=>{ seen.add(document.querySelector('.footswitch').getAttribute('aria-pressed')); if(seen.size===2){clearInterval(t);resolve(true);} },20); setTimeout(()=>{clearInterval(t);resolve(false);},800); }));
- await page.mouse.up();
+ await frozen(true);
+ await page.mouse.up(); await frozen(false);
  await page.waitForTimeout(1500);   // a little history for LOOP to catch
  await loop.click(); await readout(/PLAYING/);
  await loop.hover(); await page.mouse.down(); await page.waitForTimeout(700);
  await readout(/OVERDUBBING/);
  await page.mouse.up(); await readout(/PLAYING/);
- console.log('wet freeze and loop overdub gestures passed');
+ console.log('freeze key and loop overdub gestures passed');
+ // UNDO counts the take and the layer; RESAMPLE adds a third; UNDO goes back and REDO can return.
+ const undoKey = () => page.evaluate(()=>[...document.querySelectorAll('.strip-key')].map((b)=>b.textContent + (b.disabled ? '-' : '')).join(' '));
+ await page.waitForFunction(()=>[...document.querySelectorAll('.strip-key')].some((b)=>b.textContent==='UNDO 2'));
+ await page.getByRole('switch',{name:'RESAMPLE',exact:true}).click();
+ await page.waitForFunction(()=>[...document.querySelectorAll('.strip-key')].some((b)=>b.textContent==='UNDO 3'), null, {timeout: 40000});
+ await page.getByRole('button',{name:'UNDO 3',exact:true}).click();
+ await page.waitForFunction(()=>[...document.querySelectorAll('.strip-key')].some((b)=>b.textContent==='UNDO 2'));
+ assert(/REDO(?!-)/.test(await undoKey()), await undoKey());
+ console.log('undo, resample and redo passed');
  await page.locator('input[type=file]').setInputFiles(stereoPath);
  await readout(/LOADED, AND LOOPING INTO BROOD/);
  assert(await page.getByText('BROOD-STEREO-FIXTURE.WAV', { exact: true }).isVisible());

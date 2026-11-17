@@ -1,0 +1,29 @@
+# Four-step UNDO over takes, a layer and a CLEAR: a take, a second take, a layer, a CLEAR;
+# four undos walk back to the first take and an empty one, redo walks forward, a new layer drops
+# the redo side. In TAPE. 375 blocks = 1 s at 48 kHz.
+rate 48000
+seconds 16
+0 param routing 2
+0 param wetMix 0.3
+0 param memory 0.35
+0 param loopMode 1
+0 param monitor 1
+200 fs loop down
+204 fs loop up
+700 fs loop down
+704 fs loop up
+705 fs loop down
+709 fs loop up
+1000 param overdubLatch 1
+1400 param overdubLatch 0
+1700 op clear
+1900 op undo
+2200 op undo
+2500 op undo
+2800 op undo
+3100 op redo
+3400 op redo
+3700 param overdubLatch 1
+4000 param overdubLatch 0
+4300 op redo
+4500 op undo

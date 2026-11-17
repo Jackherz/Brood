@@ -3,10 +3,10 @@
 # overdub laid down while the window moves.
 rate 48000
 seconds 14
+0 param routing 3   # the old WET switch started off: ROUTING OFF
 0 param wetMode 0
-0 param mix 1
-0 param routing 2
-0 param balance 0
+0 param routing 3
+0 param wetMix 0
 0 param clock 1
 0 param memory 0.6
 0 param loopMode 1

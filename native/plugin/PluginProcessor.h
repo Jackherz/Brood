@@ -5,6 +5,7 @@
 #include "dsp/brood.h"
 #include "kit/Bench.h"
 #include "kit/TapeInput.h"
+#include "BroodHistory.h"
 
 // The pedal as an AudioProcessor. Every control (knobs, toggles, dips, and both
 // footswitches as momentary switches) is a host parameter, so a DAW can automate
@@ -42,7 +43,9 @@ public:
     // 3: ROUTING alone decides what the wet side hears and what the loop keeps (PRE-LOOP
     // gone), and WET/LOOP counts the wet side (0 the loop alone, 1 the wet side alone).
     // 4: six shapes (SAW added after SIN) and no SWEEP or BOUNCE switches.
-    static constexpr int kStateVersion = 4;
+    // 5: WET MIX, LOOP LEVEL, INPUT LEVEL and INPUT MONITOR; ROUTING OFF in place of the WET
+    // switch; MIX, BALANCE and GAIN gone.
+    static constexpr int kStateVersion = 5;
     // A set or preset from before version 3, in place: PRE-LOOP on becomes ROUTING IN, off
     // becomes ROUTING LOOP; WET/LOOP and any modulation of it turn round. `raw` says whether
     // the values are the parameters' own (a set) or 0..1 (a preset).
@@ -52,6 +55,11 @@ public:
     // A set or preset from before version 4, in place: SWEEP becomes SAW, SWEEP with BOUNCE
     // becomes TRI at half the rate, BOUNCE goes, and the shape moves to its place in the row
     // of six. Raw and 0..1 values are the same for these parameters.
+    // A set or preset from before version 5, in place (see the .cpp). `wetWasOn` and
+    // `inputGainWas` are the old state's own properties (sets only).
+    static void migrateLevels(const std::function<juce::var(const char*)>& get,
+                              const std::function<void(const char*, double)>& set,
+                              const std::function<void(const char*)>& drop, bool raw, bool wetWasOn, double inputGainWas);
     static void migrateShapes(const std::function<juce::var(const char*)>& get,
                               const std::function<void(const char*, double)>& set,
                               const std::function<void(const char*)>& drop);
@@ -83,7 +91,6 @@ public:
         {"nylon-tines.flac", "Nylon tines", 70.f},
     };
     bool loadDemo(int index);
-    std::atomic<float> inputGain { 1.f };   // up to +24 dB; past 0 dB it drives the tape
     bool loadFile(const juce::File& f);           // message thread
     bool canReadAudio(const juce::File& f) const { return formats_.findFormatForFileExtension(f.getFileExtension()) != nullptr; }
     // The sound the patch box shows; kept with the project.
@@ -105,7 +112,17 @@ public:
 
     // ---- UI snapshot (written by the audio thread, read by the editor) ----
     struct Ui {
-        std::atomic<bool> wetOn { false }, freeze { false }, envGate { false };
+        std::atomic<bool> wetFed { false }, freeze { false }, envGate { false };
+        // INPUT MONITOR as it stands: the input heard now, and the routing WET has now (IN + LOOP
+        // hears only the input while overdubbing).
+        std::atomic<bool> inputHeard { true };
+        // RESAMPLE: under way, possible now, stopped at its limit last time; how long it has run
+        // and how long it needs at the speed now (seconds; 1e9 not moving).
+        std::atomic<bool> resampling { false }, canResample { false }, resampleLimitHit { false };
+        std::atomic<float> resampleSecs { 0 }, resampleNeed { 0 };
+        // How far UNDO and REDO go.
+        std::atomic<int> undoDepth { 0 }, redoDepth { 0 };
+        std::atomic<int> routingNow { 1 };
         std::array<std::atomic<float>, brood::kModTargets> effective {};   // each control as the sound has it now
         std::array<std::atomic<float>, 2> modValue {};                     // each source now, 0..1
         std::atomic<int> loopLed { 0 }, lsrc { 0 }, winStart { 0 }, winLen { 0 }, winSpan { 0 };
@@ -123,8 +140,7 @@ public:
         // OVERDUB, CLEAR and UNDO: whether OVERDUB can be switched on (a loop is playing), whether
         // it's latched, and what UNDO would step back over (0 nothing, 1 a take, 2 a clear,
         // 3 a layer), and whether that step is already undone (so UNDO redoes).
-        std::atomic<bool> canOverdub { false }, dubLatched { false }, undoRedo { false };
-        std::atomic<int> undoKind { 0 };
+        std::atomic<bool> canOverdub { false }, dubLatched { false };
         // The take follows the host's transport, and is parked (the host stopped it).
         std::atomic<bool> follows { false }, parked { false };
     } ui;
@@ -135,6 +151,8 @@ public:
     static constexpr int kWaveBins = 400;
     // copy of the loop's peak envelope; returns false if the audio thread holds the lock
     bool copyWave(std::array<float, kWaveBins>& out) const;
+    // UNDO and REDO over the last four actions (see BroodHistory). Message thread.
+    std::unique_ptr<BroodHistory> history;
     // Runs any pending reset of CLEAR, UNDO or OVERDUB now, on the calling (message) thread.
     void settleControls() { handleUpdateNowIfNeeded(); }
 
@@ -149,7 +167,8 @@ private:
     // The host's transport at the start of this block (audio thread only), for RECORD's bar line.
     bool hostPlaying_ = false; double hostPpq_ = 0, hostBarStart_ = 0;
     kit::bench::OutputRecorder outputRecorder_;
-    std::atomic<int> restoreWet_ { -1 };
+    int lastRouting_ = 1;   // CC 103: the routing to go back to after OFF
+    std::atomic<bool> flipFreeze_ { false };
     // CLEAR and UNDO act when their parameter goes on; the message thread then sets it back to
     // off, so a controller's button lights for a moment. OVERDUB is set back to off when it
     // couldn't latch (no loop playing) or the loop stopped under it.
@@ -157,9 +176,24 @@ private:
     std::atomic<bool> resetClear_ { false }, resetUndo_ { false }, resetOverdub_ { false };
     // A new take fits the window; the message thread moves START, END (and LENGTH in TAPE)
     // to match, and until then pullParams keeps the cores on the fitted values.
-    std::atomic<bool> resetFit_ { false }, fitLength_ { false };
-    bool fitPending_ = false;
-    int fitSamples_ = 0;
+    // Controls Brood moved by itself (a new take fits the window; RESAMPLE resets the player):
+    // until the host's parameter shows the value (or half a second), the cores keep it.
+    struct Override { bool active = false; brood::AutoParam which = brood::AutoParam::Start; double value = 0; int samplesLeft = 0; };
+    std::array<Override, 12> overrides_ {};
+    void holdAuto(const brood::AutoChange& change);
+    // The UNDO history's traffic between the threads, each one way: the cores' versions to the
+    // message thread, its swaps and releases back, and MIDI moves to be recorded.
+    juce::AbstractFifo versionFifo_ { 64 };
+    std::array<brood::VersionEvent, 64> versionQueue_ {};
+    struct Command { int type = 0, id = 0; };   // 0 swap, 1 release
+    juce::AbstractFifo commandFifo_ { 64 };
+    std::array<Command, 64> commandQueue_ {};
+    void sendCommand(int type, int id);
+    struct MidiMove { int cc = 0, index = 0; float before = 0, after = 0; };
+    juce::AbstractFifo midiFifo_ { 128 };
+    std::array<MidiMove, 128> midiQueue_ {};
+    std::atomic<bool> undoRequest_ { false }, redoRequest_ { false }, resetRedo_ { false }, resetResample_ { false };
+    bool lastRedo_ = false, lastResample_ = false;
     void handleAsyncUpdate() override;
     // A take restored from the state, waiting to be swapped in by the audio thread.
     // (A host that renders offline may be a fresh instance with nothing captured.)

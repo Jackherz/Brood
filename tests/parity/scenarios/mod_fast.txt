@@ -3,7 +3,8 @@
 # LENGTH, ENV's LENGTH, REVERB's TIME) stay mirrored between the two engines.
 rate 48000
 seconds 12
-0 param mix 0.5
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param wetMix 0.5
 0 param clock 0.9
 0 param memory 0.3
 0 param mod1Rate 1
@@ -16,8 +17,7 @@ seconds 12
 0 param mod2_modLoop 0.5
 0 param wetMode 0
 0 param loopMode 2
-10 fs wet down
-14 fs wet up
+10 param routing 0   # was a tap on WET
 300 fs loop down
 304 fs loop up
 1100 param loopMode 0

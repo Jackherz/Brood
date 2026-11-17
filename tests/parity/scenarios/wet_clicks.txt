@@ -2,13 +2,13 @@
 # MODIFY moving, so the glides, stitch placement and write seams have to agree. 375 blocks = 1 s.
 rate 48000
 seconds 16
+0 param routing 3   # the old WET switch started off: ROUTING OFF
 0 param clock 1
-0 param mix 1
+0 param wetMix 1
 0 param time 0.5
 0 param modWet 0.5
 0 param wetMode 3
-20 fs wet down
-21 fs wet up
+20 param routing 0   # was a tap on WET
 300 param modWet 0.9
 500 param time 0.8
 700 param freeze 1

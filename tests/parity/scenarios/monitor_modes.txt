@@ -1,0 +1,29 @@
+# INPUT MONITOR: AUTO hands over to the loop and opens again for a layer; ON keeps the input;
+# OFF mutes it, ends a layer under way (keeping it) and refuses a new one. ROUTING OFF with and
+# without TRAILS, and the FREEZE key held. 375 blocks = 1 s at 48 kHz.
+rate 48000
+seconds 11
+0 param routing 1
+0 param wetMix 0.5
+0 param loopMode 1
+0 param clock 0.9
+0 param memory 0.3
+100 fs loop down
+104 fs loop up
+600 param monitor 1
+900 param monitor 0
+1100 param overdubLatch 1
+1500 param monitor 2
+1700 param overdubLatch 0
+1800 param overdubLatch 1
+1900 param overdubLatch 0
+2000 param monitor 0
+2100 param routing 3
+2400 param routing 2
+2600 param trails 1
+2700 param routing 3
+3000 param routing 0
+3100 fs wet down
+3400 fs wet up
+3600 param loopLevel 0.5
+3800 param wetMix 1

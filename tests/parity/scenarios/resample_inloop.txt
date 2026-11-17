@@ -1,0 +1,18 @@
+# RESAMPLE in IN + LOOP with the monitor ON: WET hears only the loop while it runs (the input
+# is heard, not recorded), then ROUTING becomes IN. STRETCH at a slow speed, one pass of a window
+# whose END was moved in; the delay on, FREEZE latched part way (released after).
+rate 48000
+seconds 16
+0 param routing 1
+0 param wetMode 1
+0 param wetMix 0.5
+0 param monitor 1
+0 param loopMode 2
+0 param modLoop 0.85
+0 param memory 0.4
+100 fs loop down
+104 fs loop up
+110 param loopEnd 0.6
+400 op resample
+700 param freeze 1
+3500 param freeze 0

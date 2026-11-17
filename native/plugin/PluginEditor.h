@@ -134,6 +134,7 @@ public:
         bool flip;
         juce::ParameterAttachment attach;
         int index = 0;
+        int effective = -1;   // a cell the sound has for now (ROUTING while overdubbing or resampling), lit ochre
         std::function<void()> changed, clicked;
     };
     // A short list as a click-cycling cell: the arrows either side step through it, so
@@ -225,21 +226,26 @@ private:
     std::unique_ptr<ThreeWay> wetMode, routing, loopMode;
     std::unique_ptr<Footswitch> fsWet, fsLoop;
     LoopView loopView;
-    std::unique_ptr<GainBox> gainBox;
-    juce::Rectangle<int> gainDesign;
 
-    juce::Slider inputGain;   // LEVEL, first in the bottom strip
+    juce::Slider inputLevel;   // INPUT LEVEL, in the INPUT section
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> inputLevelAtt;
+    std::unique_ptr<ThreeWay> monitor;   // INPUT MONITOR: AUTO, ON, OFF
+    juce::Rectangle<int> inputArea, monitorDesign;
+    // RESAMPLE: its key beside OVERDUB. It records one pass of the loop's window.
+    juce::ToggleButton resampleKey { "RESAMPLE" };
+    juce::Rectangle<int> resampleDesign;
+    bool limitShown = false, lastHeard = true;
     std::unique_ptr<Stepper> wetDivStep, loopDivStep;   // WET DIV and LOOP DIV at the foot of their columns
     juce::Rectangle<int> wetDivDesign, loopDivDesign;
     bool modOpen = false;   // a source's controls show only after its chip is clicked
-    ModSlider balance;
+    ModSlider loopLevel;   // LOOP LEVEL
     // Loop edit: the capture ceiling. START and END are the markers on the waveform.
     juce::Slider memory;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> memoryAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> balanceAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> loopLevelAtt;
     // The switches panel: TRAILS, SMOOTH, FREEZE and CLASSIC in one row.
     struct Dip { std::unique_ptr<juce::ToggleButton> button; std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> att; };
-    std::array<Dip, 3> dips;
+    std::array<Dip, 2> dips;   // TRAILS, SMOOTH
     std::unique_ptr<Stepper> character;
     // WORN after the loop: shown under WEAR, in the caption's place, only while WEAR is WORN.
     std::unique_ptr<ThreeWay> wearPost;   // PRE LOOP / POST LOOP, shown on WORN
@@ -276,9 +282,9 @@ private:
     // OVERDUB beside the LOOP switch: latching, greyed out with no loop playing. CLEAR and UNDO
     // on the take strip's heading: each press is a pulse of its host parameter.
     juce::ToggleButton overdub { "OVERDUB" };
-    StripKey clearTake { "CLEAR" }, undoTake { "UNDO" };
+    StripKey clearTake { "CLEAR" }, undoTake { "UNDO" }, redoTake { "REDO" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> overdubAtt;
-    juce::Rectangle<int> overdubDesign, clearDesign, undoDesign;
+    juce::Rectangle<int> overdubDesign, clearDesign, undoDesign, redoDesign;
     void pulse(const char* id);
     void updateTakeControls();
     juce::Rectangle<int> recModeDesign, recBarsDesign, recAtTapDesign;
@@ -301,7 +307,7 @@ private:
     // into the real window. Paint and layout both work in that space.
     juce::Rectangle<int> mastheadArea, pedalArea, lcdArea, loopArea;
     juce::Rectangle<int> knobDesign[6], wetModeDesign, routingDesign, loopModeDesign;
-    juce::Rectangle<int> inputGainDesign, balanceDesign;
+    juce::Rectangle<int> inputLevelDesign, loopLevelDesign;
     juce::Rectangle<int> fsWetDesign, fsLoopDesign, memoryDesign, loopViewDesign;
     // Under each knob: its value, in ink while it's touched.
     juce::Rectangle<int> valueRect(int knob) const;
@@ -309,7 +315,7 @@ private:
     juce::String activeKnobText;
     std::array<juce::String, 6> knobValues;
     void updateKnobValues();
-    juce::Rectangle<int> hoodArea, hoodCellDesign[5], dipCellDesign[5];
+    juce::Rectangle<int> hoodArea, hoodCellDesign[4], dipCellDesign[2];
 
     // Hover help. The readout at the top of the side column used to hold whatever
     // you last touched; now anything without an explanation of its own explains

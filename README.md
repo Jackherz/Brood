@@ -19,17 +19,18 @@ calibrated against the hardware. It is not affiliated with or endorsed by Chase 
   the recent past. In RECORD, tap to record what you play and tap again to loop it, or
   record a set number of bars (up to 32 s) that lands on the host's bar lines. A new take
   plays all of itself; trim it with START and END markers on the waveform.
-- **Overdub, clear and undo.** Hold to overdub, or latch OVERDUB on (a controller that
-  can't hold a button can still overdub). CLEAR empties the take, and UNDO steps back
-  once: a clear, a new take or the last layer. Press it again to redo.
+- **Overdub, resample, clear and undo.** Hold to overdub, or latch OVERDUB on (a controller
+  that can't hold a button can still overdub). RESAMPLE plays the loop, as you hear it, into
+  a new take, for one pass, a number of bars or as long as you like (up to 30 s). UNDO and
+  REDO step through the last four things you did, knobs and takes alike.
 - **See what's coming in.** Before there's a take, and while a new one records, the
   waveform scrolls the input live, including anything ahead of the looper.
 - **Loops that follow the host.** A loop made while the host (Live, say) plays stops when
   playback stops and comes back locked to the song, like a clip. One made with the host
   stopped loops freely.
-- **Routing:** one control for what the wet side hears (the input, the loop, or both) and
-  whether the loop keeps the wet sound. BALANCE weighs the loop against the wet side, from the loop alone
-  to the wet side alone. FREEZE holds the wet side ringing on its own.
+- **Input, loop and WET:** INPUT LEVEL, LOOP LEVEL and WET MIX, and INPUT MONITOR (AUTO lets
+  the loop replace the input while it plays, and opens again to overdub). ROUTING says what
+  WET hears: the input, the loop, both, or nothing. FREEZE holds WET ringing on its own.
 - **Two modulation sources** with their own rate and shape, routed by dragging onto any
   knob.
 - **Tempo sync** for the wet side, ENV and the modulation rate.

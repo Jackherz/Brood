@@ -80,6 +80,17 @@ public:
                 false);
             values = m;
         }
+        // Before version 5: MIX, BALANCE and GAIN become WET MIX and LOOP LEVEL.
+        if (values != nullptr && xml.getIntAttribute("version", 1) < 5) {
+            if (migrated == nullptr) migrated = std::make_unique<juce::XmlElement>(*values);
+            auto* m = migrated.get();
+            BroodProcessor::migrateLevels(
+                [m](const char* id) { return m->hasAttribute(id) ? juce::var(m->getDoubleAttribute(id)) : juce::var(); },
+                [m](const char* id, double v) { m->setAttribute(id, v); },
+                [m](const char* id) { m->removeAttribute(id); },
+                false, true, 1.0);
+            values = m;
+        }
         // Before version 4: five shapes, SWEEP and BOUNCE.
         if (values != nullptr && xml.getIntAttribute("version", 1) < 4) {
             if (migrated == nullptr) migrated = std::make_unique<juce::XmlElement>(*values);
@@ -101,6 +112,8 @@ public:
                 values = migrated.get();
             }
         }
+        // One action for UNDO, however many controls it moves.
+        if (proc.history != nullptr) proc.history->beginGroup("PRESET");
         for (auto* prm : proc.getParameters())
             if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(prm))
                 if (isSound(*ranged)) {
@@ -110,6 +123,7 @@ public:
                     ranged->setValueNotifyingHost(v);
                     ranged->endChangeGesture();
                 }
+        if (proc.history != nullptr) proc.history->endGroup();
         proc.presetName = name;
     }
     void applyQuietly(const juce::XmlElement& xml, const juce::String& name) override { apply(xml, name); }
@@ -122,42 +136,43 @@ private:
     static const std::vector<Factory>& factories() {
         static const std::vector<Factory> list {
             {"A Little Daydream", "SPACES", {}},
-            {"Soft Focus", "SPACES", {{"time", .73f}, {"mix", .56f}, {"modWet", .83f}, {"length", .65f}, {"clock", .80f}, {"loopMode", 2}, {"modLoop", .62f}}},
-            {"Glass Echo", "ECHOES", {{"time", .46f}, {"mix", .48f}, {"modWet", .70f}, {"wetMode", 1}, {"routing", 0}}},
-            {"Little Ghost", "ECHOES", {{"time", .45f}, {"mix", .54f}, {"modWet", .83f}, {"wetMode", 2}, {"clock", .80f}}},
-            {"Melt Away", "LOOPS", {{"time", .67f}, {"mix", .58f}, {"length", .35f}, {"modWet", .75f}, {"clock", .70f}, {"modLoop", .57f}, {"routing", 2}, {"loopMode", 2}}},
-            {"Cathedral at Dusk", "SPACES", {{"time", .92f}, {"mix", .62f}, {"modWet", .35f}, {"clock", .90f}, {"tone", .55f}, {"trails", 1}}},
-            {"Wet Paper", "SPACES", {{"time", .55f}, {"mix", .5f}, {"modWet", .95f}, {"clock", .62f}, {"tone", .4f}}},
-            {"Small Hours", "SPACES", {{"time", .3f}, {"mix", .42f}, {"modWet", .2f}, {"clock", .85f}, {"tone", .7f}}},
-            {"Under the Floor", "SPACES", {{"time", .8f}, {"mix", .6f}, {"modWet", .7f}, {"clock", .32f}, {"tone", .3f}, {"smooth", 1}}},
-            {"Endless Room", "SPACES", {{"time", .995f}, {"mix", .7f}, {"modWet", .55f}, {"clock", .8f}, {"tone", .6f}, {"trails", 1}}},
-            {"Bent Halo", "SPACES", {{"time", .75f}, {"mix", .58f}, {"modWet", .8f}, {"clock", .78f}, {"smooth", 1}, {"character", 1}}},
-            {"Letter Home", "ECHOES", {{"time", .55f}, {"mix", .46f}, {"modWet", .62f}, {"wetMode", 1}, {"clock", .7f}, {"tone", .55f}}},
-            {"Tape Stairs", "ECHOES", {{"time", .38f}, {"mix", .5f}, {"modWet", .78f}, {"wetMode", 1}, {"clock", .55f}, {"tone", .45f}, {"character", 1}}},
-            {"Runaway Echo", "ECHOES", {{"time", .5f}, {"mix", .55f}, {"modWet", .96f}, {"wetMode", 1}, {"clock", .8f}, {"tone", .5f}, {"trails", 1}}},
-            {"Skipping Stone", "ECHOES", {{"time", .28f}, {"mix", .48f}, {"modWet", .68f}, {"wetMode", 2}, {"clock", .85f}}},
-            {"Octave Ghost", "ECHOES", {{"time", .55f}, {"mix", .52f}, {"modWet", 1.f}, {"wetMode", 2}, {"clock", .9f}, {"tone", .6f}}},
-            {"Backwards Glance", "ECHOES", {{"time", .5f}, {"mix", .5f}, {"modWet", .2f}, {"wetMode", 2}, {"clock", .8f}, {"tone", .65f}}},
-            {"Long Cloth", "STITCHES", {{"time", .75f}, {"mix", .6f}, {"modWet", .12f}, {"wetMode", 3}, {"clock", .85f}, {"tone", .7f}}},
-            {"Loose Thread", "STITCHES", {{"time", .5f}, {"mix", .55f}, {"modWet", .45f}, {"wetMode", 3}, {"clock", .8f}}},
-            {"Sewing Machine", "STITCHES", {{"time", .3f}, {"mix", .55f}, {"modWet", .92f}, {"wetMode", 3}, {"clock", .75f}, {"tone", .6f}}},
-            {"Moth Holes", "STITCHES", {{"time", .9f}, {"mix", .6f}, {"modWet", .7f}, {"wetMode", 3}, {"clock", .5f}, {"tone", .45f}, {"character", 1}}},
-            {"Tape Reel", "LOOPS", {{"length", .8f}, {"modLoop", .66f}, {"mix", .7f}, {"balance", .3f}, {"clock", .9f}}},
-            {"Half Speed Sunday", "LOOPS", {{"length", .75f}, {"modLoop", .32f}, {"mix", .75f}, {"balance", .3f}, {"clock", .85f}, {"tone", .6f}}},
-            {"Stuck Moment", "LOOPS", {{"length", .2f}, {"modLoop", .55f}, {"mix", .8f}, {"balance", .2f}, {"loopMode", 2}, {"clock", .9f}}},
-            {"Slow Glass", "LOOPS", {{"length", .6f}, {"modLoop", .3f}, {"mix", .7f}, {"balance", .35f}, {"loopMode", 2}, {"time", .75f}, {"routing", 1}}},
-            {"Fading Photograph", "LOOPS", {{"length", .85f}, {"fade", .35f}, {"mix", .65f}, {"balance", .4f}, {"clock", .5f}, {"tone", .4f}, {"routing", 2}, {"time", .7f}}},
-            {"Wax Cylinder", "WORN", {{"clock", .18f}, {"mix", .6f}, {"length", .7f}, {"time", .4f}, {"tone", .35f}, {"character", 1}}},
-            {"Dying Battery", "WORN", {{"clock", .08f}, {"smooth", 1}, {"mix", .65f}, {"time", .55f}, {"modWet", .7f}, {"character", 1}}},
-            {"Pawn Shop Pedal", "WORN", {{"clock", .35f}, {"mix", .55f}, {"time", .6f}, {"modWet", .75f}, {"wetMode", 1}, {"character", 1}}},
-            {"Clean Glass", "SPACES", {{"time", .7f}, {"mix", .5f}, {"modWet", .25f}, {"clock", 1.f}, {"character", 0.f}}},
+            {"Soft Focus", "SPACES", {{"time", .73f}, {"wetMix", .56f}, {"modWet", .83f}, {"length", .65f}, {"clock", .80f}, {"loopMode", 2}, {"modLoop", .62f}}},
+            {"Glass Echo", "ECHOES", {{"time", .46f}, {"wetMix", .48f}, {"modWet", .70f}, {"wetMode", 1}, {"routing", 0}}},
+            {"Little Ghost", "ECHOES", {{"time", .45f}, {"wetMix", .54f}, {"modWet", .83f}, {"wetMode", 2}, {"clock", .80f}}},
+            {"Melt Away", "LOOPS", {{"time", .67f}, {"wetMix", .58f}, {"length", .35f}, {"modWet", .75f}, {"clock", .70f}, {"modLoop", .57f}, {"routing", 2}, {"loopMode", 2}}},
+            {"Cathedral at Dusk", "SPACES", {{"time", .92f}, {"wetMix", .62f}, {"modWet", .35f}, {"clock", .90f}, {"tone", .55f}, {"trails", 1}}},
+            {"Wet Paper", "SPACES", {{"time", .55f}, {"wetMix", .5f}, {"modWet", .95f}, {"clock", .62f}, {"tone", .4f}}},
+            {"Small Hours", "SPACES", {{"time", .3f}, {"wetMix", .42f}, {"modWet", .2f}, {"clock", .85f}, {"tone", .7f}}},
+            {"Under the Floor", "SPACES", {{"time", .8f}, {"wetMix", .6f}, {"modWet", .7f}, {"clock", .32f}, {"tone", .3f}, {"smooth", 1}}},
+            {"Endless Room", "SPACES", {{"time", .995f}, {"wetMix", .7f}, {"modWet", .55f}, {"clock", .8f}, {"tone", .6f}, {"trails", 1}}},
+            {"Bent Halo", "SPACES", {{"time", .75f}, {"wetMix", .58f}, {"modWet", .8f}, {"clock", .78f}, {"smooth", 1}, {"character", 1}}},
+            {"Letter Home", "ECHOES", {{"time", .55f}, {"wetMix", .46f}, {"modWet", .62f}, {"wetMode", 1}, {"clock", .7f}, {"tone", .55f}}},
+            {"Tape Stairs", "ECHOES", {{"time", .38f}, {"wetMix", .5f}, {"modWet", .78f}, {"wetMode", 1}, {"clock", .55f}, {"tone", .45f}, {"character", 1}}},
+            {"Runaway Echo", "ECHOES", {{"time", .5f}, {"wetMix", .55f}, {"modWet", .96f}, {"wetMode", 1}, {"clock", .8f}, {"tone", .5f}, {"trails", 1}}},
+            {"Skipping Stone", "ECHOES", {{"time", .28f}, {"wetMix", .48f}, {"modWet", .68f}, {"wetMode", 2}, {"clock", .85f}}},
+            {"Octave Ghost", "ECHOES", {{"time", .55f}, {"wetMix", .52f}, {"modWet", 1.f}, {"wetMode", 2}, {"clock", .9f}, {"tone", .6f}}},
+            {"Backwards Glance", "ECHOES", {{"time", .5f}, {"wetMix", .5f}, {"modWet", .2f}, {"wetMode", 2}, {"clock", .8f}, {"tone", .65f}}},
+            {"Long Cloth", "STITCHES", {{"time", .75f}, {"wetMix", .6f}, {"modWet", .12f}, {"wetMode", 3}, {"clock", .85f}, {"tone", .7f}}},
+            {"Loose Thread", "STITCHES", {{"time", .5f}, {"wetMix", .55f}, {"modWet", .45f}, {"wetMode", 3}, {"clock", .8f}}},
+            {"Sewing Machine", "STITCHES", {{"time", .3f}, {"wetMix", .55f}, {"modWet", .92f}, {"wetMode", 3}, {"clock", .75f}, {"tone", .6f}}},
+            {"Moth Holes", "STITCHES", {{"time", .9f}, {"wetMix", .6f}, {"modWet", .7f}, {"wetMode", 3}, {"clock", .5f}, {"tone", .45f}, {"character", 1}}},
+            {"Tape Reel", "LOOPS", {{"length", .8f}, {"modLoop", .66f}, {"wetMix", .3f}, {"clock", .9f}}},
+            {"Half Speed Sunday", "LOOPS", {{"length", .75f}, {"modLoop", .32f}, {"wetMix", .3f}, {"clock", .85f}, {"tone", .6f}}},
+            {"Stuck Moment", "LOOPS", {{"length", .2f}, {"modLoop", .55f}, {"wetMix", .2f}, {"loopMode", 2}, {"clock", .9f}}},
+            {"Slow Glass", "LOOPS", {{"length", .6f}, {"modLoop", .3f}, {"wetMix", .35f}, {"loopMode", 2}, {"time", .75f}, {"routing", 1}}},
+            {"Fading Photograph", "LOOPS", {{"length", .85f}, {"fade", .35f}, {"wetMix", .4f}, {"clock", .5f}, {"tone", .4f}, {"routing", 2}, {"time", .7f}}},
+            {"Wax Cylinder", "WORN", {{"clock", .18f}, {"wetMix", .6f}, {"length", .7f}, {"time", .4f}, {"tone", .35f}, {"character", 1}}},
+            {"Dying Battery", "WORN", {{"clock", .08f}, {"smooth", 1}, {"wetMix", .65f}, {"time", .55f}, {"modWet", .7f}, {"character", 1}}},
+            {"Pawn Shop Pedal", "WORN", {{"clock", .35f}, {"wetMix", .55f}, {"time", .6f}, {"modWet", .75f}, {"wetMode", 1}, {"character", 1}}},
+            {"Clean Glass", "SPACES", {{"time", .7f}, {"wetMix", .5f}, {"modWet", .25f}, {"clock", 1.f}, {"character", 0.f}}},
         };
         return list;
     }
 
     // Gestures, not settings: the footswitches, OVERDUB, CLEAR and UNDO never travel in a preset.
+    // Nor do INPUT LEVEL and INPUT MONITOR: they belong to how you play in, not to the sound.
     static bool isSound(const juce::RangedAudioParameter& p) {
-        for (const auto* id : {"wetSwitch", "loopSwitch", "overdub", "clear", "undo"})
+        for (const auto* id : {"freezeKey", "loopSwitch", "overdub", "clear", "undo", "redo", "resample", "inputLevel", "monitor"})
             if (p.getParameterID() == id) return false;
         return true;
     }

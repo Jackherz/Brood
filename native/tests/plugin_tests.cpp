@@ -44,21 +44,29 @@ int main() {
     CHECK(std::fabs(b.getSample(0, 64) - 1.2f) < 1e-5f, "bypass left channel");
     CHECK(std::fabs(b.getSample(1, 64) + 0.25f) < 1e-5f, "bypass right channel");
 
-    // Control a knob and enable wet with the pedal's CC assignments.
+    // Control a knob and switch WET off (ROUTING OFF) with the pedal's CC assignments.
     m.addEvent(juce::MidiMessage::controllerEvent(1, 15, 100), 0);
-    m.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
+    m.addEvent(juce::MidiMessage::controllerEvent(1, 103, 0), 0);
     m.addEvent(juce::MidiMessage::controllerEvent(1, 75, 1), 0);
     m.addEvent(juce::MidiMessage::controllerEvent(1, 52, 127), 0);
     b.clear(); process(p, b, m);
     CHECK(p.apvts.getRawParameterValue("mod1Hold")->load() == 1.f && p.apvts.getRawParameterValue("mod2Hold")->load() == 1.f, "MIDI CC 52 holds both sources");
-    CHECK(std::fabs(p.apvts.getRawParameterValue("mix")->load() - 100.f / 127.f) < 0.001f, "MIDI CC 15 controls MIX");
-    CHECK(p.ui.wetOn.load(), "MIDI CC 103 engages wet at value 1");
+    CHECK(std::fabs(p.apvts.getRawParameterValue("wetMix")->load() - 100.f / 127.f) < 0.001f, "MIDI CC 15 controls WET MIX");
+    CHECK(juce::roundToInt(p.apvts.getRawParameterValue("routing")->load()) == 3 && !p.ui.wetFed.load(), "MIDI CC 103 at 0 is ROUTING OFF");
     CHECK(p.apvts.getRawParameterValue("trails")->load() == 1.f, "MIDI switches accept value 1");
     p.prepareToPlay(rate, size);
     b.clear(); process(p, b, m);
-    CHECK(p.ui.wetOn.load(), "wet state survives DAW re-prepare");
+    CHECK(!p.ui.wetFed.load(), "ROUTING OFF survives DAW re-prepare");
+    {   // CC 103 at 1 brings back the routing it had
+        juce::MidiBuffer on; on.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
+        BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
+        juce::MidiBuffer off; off.addEvent(juce::MidiMessage::controllerEvent(1, 103, 0), 0);
+        juce::AudioBuffer<float> qb(2, size); qb.clear();
+        process(q, qb, off); process(q, qb, on);
+        CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 1, "MIDI CC 103 at 1 brings IN + LOOP back");
+    }
 
-    // The wet-engaged state and parameter settings survive a DAW project reload.
+    // ROUTING and parameter settings survive a DAW project reload.
     juce::MemoryBlock saved; p.getStateInformation(saved);
     BroodProcessor restored;
     restored.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
@@ -68,12 +76,12 @@ int main() {
     immediateReload.setPlayConfigDetails(2, 2, rate, size);
     immediateReload.prepareToPlay(rate, size);
     b.clear(); process(immediateReload, b, m);
-    CHECK(immediateReload.ui.wetOn.load(), "wet state survives immediate re-save before audio");
+    CHECK(!immediateReload.ui.wetFed.load(), "ROUTING OFF survives immediate re-save before audio");
     restored.setPlayConfigDetails(2, 2, rate, size);
     restored.prepareToPlay(rate, size);
     b.clear(); process(restored, b, m);
-    CHECK(restored.ui.wetOn.load(), "wet state restored");
-    CHECK(std::fabs(restored.apvts.getRawParameterValue("mix")->load() - 100.f / 127.f) < 0.001f, "parameter restored");
+    CHECK(!restored.ui.wetFed.load(), "ROUTING OFF restored");
+    CHECK(std::fabs(restored.apvts.getRawParameterValue("wetMix")->load() - 100.f / 127.f) < 0.001f, "parameter restored");
 
     // Looper is always listening and can be captured via MIDI CC 102.
     for (int block = 0; block < 200; ++block) {
@@ -104,7 +112,7 @@ int main() {
         wide.setPlayConfigDetails(2, 2, rate, size);
         wide.prepareToPlay(rate, size);
         if (auto* w = wide.apvts.getParameter("width")) w->setValueNotifyingHost(1.f);
-        if (auto* mx = wide.apvts.getParameter("mix")) mx->setValueNotifyingHost(1.f);
+        if (auto* mx = wide.apvts.getParameter("wetMix")) mx->setValueNotifyingHost(1.f);
         juce::MidiBuffer on; on.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
         double diff = 0, energy = 0;
         for (int block = 0; block < 400; ++block) {
@@ -132,12 +140,12 @@ int main() {
         if (xml) {
             const char legacy[] = { 0x4d, 0x4f, 0x4f, 0x44, 0 };
             xml->setTagName(legacy);
-            if (auto* mx = xml->getChildByAttribute("id", "mix")) mx->setAttribute("value", 0.25);
+            if (auto* mx = xml->getChildByAttribute("id", "wetMix")) mx->setAttribute("value", 0.25);
             juce::MemoryBlock old;
             juce::AudioProcessor::copyXmlToBinary(*xml, old);
             BroodProcessor reopened;
             reopened.setStateInformation(old.getData(), static_cast<int>(old.getSize()));
-            CHECK(std::fabs(reopened.apvts.getRawParameterValue("mix")->load() - 0.25f) < 1e-4f, "legacy state loads");
+            CHECK(std::fabs(reopened.apvts.getRawParameterValue("wetMix")->load() - 0.25f) < 1e-4f, "legacy state loads");
         }
     }
     // Presets: a factory sound, a saved one, a category, a favourite, and the old
@@ -146,7 +154,7 @@ int main() {
         juce::TemporaryFile folderFile;
         const auto folder = folderFile.getFile();
         const auto slots = folder.getSiblingFile(folder.getFileName() + "-slots.xml");
-        slots.replaceWithText("<BROOD_PATCHES><PATCH slot=\"2\"><P id=\"mix\" v=\"0.125\"/></PATCH></BROOD_PATCHES>");
+        slots.replaceWithText("<BROOD_PATCHES><PATCH slot=\"2\"><P id=\"time\" v=\"0.125\"/></PATCH></BROOD_PATCHES>");
         BroodProcessor sound;
         BroodPresets presets(sound, folder, slots);
         CHECK(!slots.existsAsFile() && slots.withFileExtension("old").existsAsFile(), "the old slots are set aside");
@@ -159,7 +167,7 @@ int main() {
         CHECK(migrated.has_value() && migrated->category == "USER", "a slot becomes a USER preset");
         if (migrated) {
             presets.load(*migrated);
-            CHECK(std::fabs(sound.apvts.getParameter("mix")->getValue() - 0.125f) < 1e-4f, "with its values");
+            CHECK(std::fabs(sound.apvts.getParameter("time")->getValue() - 0.125f) < 1e-4f, "with its values");
         }
         const auto echo = find("Glass Echo");
         CHECK(echo.has_value() && echo->factory && echo->category == "ECHOES", "the factory set is listed");
@@ -287,8 +295,8 @@ int main() {
             length->setValueNotifyingHost(length->getDefaultValue());
             mode->setValueNotifyingHost(mode->getDefaultValue());
 
-            // A source dropped on WET/LOOP moves what the panel reads, around the slider's own value.
-            auto* route = catcher.apvts.getParameter("mod1_balance");
+            // A source dropped on LOOP LEVEL moves what the panel reads, around the slider's own value.
+            auto* route = catcher.apvts.getParameter("mod1_loopLevel");
             auto* on = catcher.apvts.getParameter("mod1On");
             auto* rateP = catcher.apvts.getParameter("mod1Rate");
             on->setValueNotifyingHost(1.f);
@@ -300,7 +308,7 @@ int main() {
                 low = std::min(low, catcher.ui.effective[6].load());
                 high = std::max(high, catcher.ui.effective[6].load());
             }
-            CHECK(high - low > 0.3f, "WET/LOOP's live value moves with its source");
+            CHECK(high - low > 0.3f, "LOOP LEVEL's live value moves with its source");
             route->setValueNotifyingHost(route->convertTo0to1(0.f));
             on->setValueNotifyingHost(on->getDefaultValue());
             rateP->setValueNotifyingHost(rateP->getDefaultValue());
@@ -341,7 +349,7 @@ int main() {
         BroodProcessor driven;
         driven.setPlayConfigDetails(2, 2, rate, size);
         driven.prepareToPlay(rate, size);
-        driven.inputGain = 15.85f;
+        driven.apvts.getParameter("inputLevel")->setValueNotifyingHost(1.f);   // +24 dB
         juce::AudioBuffer<float> io(2, size);
         juce::MidiBuffer none;
         float most = 0.f;
@@ -471,7 +479,7 @@ int main() {
         CHECK(longest <= 8, "every host value is 8 characters or fewer");
         // Typed back in, the plain ones land where they were.
         set("wetMode", 1.f); set("sync", 0.f);
-        for (const char* id : {"time", "mix", "loopEnd", "balance", "memory", "mod1_time"}) {
+        for (const char* id : {"time", "wetMix", "loopEnd", "loopLevel", "memory", "mod1_time"}) {
             auto* q = dynamic_cast<juce::RangedAudioParameter*>(h.apvts.getParameter(id));
             for (float v : {0.2f, 0.6f}) {
                 const float back = q->getValueForText(q->getText(v, 64));
@@ -504,7 +512,7 @@ int main() {
         CHECK(value("overdub") < 0.5f, "OVERDUB is set back to off when the loop stops");
         set("clear", 1.f); run(100); q.settleControls();
         CHECK(value("clear") < 0.5f, "CLEAR sets itself back to off");
-        CHECK(q.ui.lsrc.load() == 0 && q.ui.undoKind.load() == 2, "CLEAR empties the take");
+        CHECK(q.ui.lsrc.load() == 0 && q.ui.undoDepth.load() > 0, "CLEAR empties the take, and UNDO can bring it back");
         {
             juce::MemoryBlock saved; q.getStateInformation(saved);
             BroodProcessor r; r.setPlayConfigDetails(2, 2, rate, size); r.prepareToPlay(rate, size);
@@ -512,9 +520,9 @@ int main() {
             juce::AudioBuffer<float> rb(2, size); rb.clear(); r.processBlock(rb, m);
             CHECK(r.ui.lsrc.load() == 0, "a cleared take isn't saved");
         }
-        set("undo", 1.f); run(5); q.settleControls();
+        set("undo", 1.f); run(5); q.settleControls(); run(5);
         CHECK(value("undo") < 0.5f, "UNDO sets itself back to off");
-        CHECK(q.ui.lsrc.load() > 64 && q.ui.undoRedo.load(), "UNDO brings the cleared take back");
+        CHECK(q.ui.lsrc.load() > 64 && q.ui.redoDepth.load() == 1, "UNDO brings the cleared take back, and REDO could clear it again");
         {   // a set saved in the moment CLEAR was on mustn't clear its own take when it opens
             set("clear", 1.f);
             juce::MemoryBlock saved; q.getStateInformation(saved);
@@ -583,11 +591,13 @@ int main() {
     {   // Sets and presets from before version 3: PRE-LOOP becomes ROUTING, WET/LOOP turns round
         auto oldSet = [&](bool pre) {
             BroodProcessor src; src.setPlayConfigDetails(2, 2, rate, size); src.prepareToPlay(rate, size);
-            src.apvts.getParameter("routing")->setValueNotifyingHost(0.5f);          // IN + LOOP
-            src.apvts.getParameter("balance")->setValueNotifyingHost(0.3f);          // old: 30% towards the loop
-            src.apvts.getParameter("mod1_balance")->setValueNotifyingHost(0.7f);     // +40%
+            src.apvts.getParameter("routing")->setValueNotifyingHost(1.f / 3);       // IN + LOOP
             auto state = src.apvts.copyState();
             state.setProperty("stateVersion", 2, nullptr);
+            // The old parameters, as an old set stored them.
+            for (const auto& [id, v] : {std::pair<const char*, double>{"balance", 0.3}, {"mod1_balance", 0.4}}) {   // 30% towards the loop; +40%
+                juce::ValueTree c("PARAM"); c.setProperty("id", id, nullptr); c.setProperty("value", v, nullptr); state.appendChild(c, nullptr);
+            }
             juce::ValueTree preParam("PARAM"); preParam.setProperty("id", "wetPre", nullptr); preParam.setProperty("value", pre ? 1.0 : 0.0, nullptr);
             state.appendChild(preParam, nullptr);
             juce::MemoryBlock block;
@@ -595,15 +605,16 @@ int main() {
             BroodProcessor dst; dst.setPlayConfigDetails(2, 2, rate, size); dst.prepareToPlay(rate, size);
             dst.setStateInformation(block.getData(), static_cast<int>(block.getSize()));
             const int routing = juce::roundToInt(dst.apvts.getRawParameterValue("routing")->load());
-            const float bal = dst.apvts.getRawParameterValue("balance")->load(), dep = dst.apvts.getRawParameterValue("mod1_balance")->load();
+            // ...and then version 5: WET MIX takes WET/LOOP's wet share; its modulation goes.
+            const float bal = dst.apvts.getRawParameterValue("wetMix")->load(), dep = dst.apvts.getParameter("mod1_balance") == nullptr ? 0.f : 1.f;
             return std::tuple<int, float, float>{routing, bal, dep};
         };
         const auto [rPre, bPre, dPre] = oldSet(true);
         const auto [rPost, bPost, dPost] = oldSet(false);
         CHECK(rPre == 0, "an old set with PRE-LOOP on loads on ROUTING IN");
         CHECK(rPost == 2, "an old set with PRE-LOOP off loads on ROUTING LOOP");
-        CHECK(std::fabs(bPre - 0.7f) < 1e-4f && std::fabs(bPost - 0.7f) < 1e-4f, "its WET/LOOP turns round (0.3 to 0.7)");
-        CHECK(std::fabs(dPre + 0.4f) < 1e-4f, "and so does a modulation of it (+40%% to -40%%)");
+        CHECK(std::fabs(bPre - 0.7f) < 1e-4f && std::fabs(bPost - 0.7f) < 1e-4f, "its WET/LOOP turns round (0.3 to 0.7) and becomes WET MIX");
+        CHECK(dPre == 0.f, "there is no BALANCE to modulate now");
         // A user preset from before version 3 (values 0..1).
         BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
         BroodPresets presets(q);
@@ -613,16 +624,15 @@ int main() {
         values->setAttribute("wetPre", 1.0); values->setAttribute("balance", 0.25); values->setAttribute("mod2_balance", 0.25);
         presets.apply(preset, "Old");
         CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 0, "an old preset with PRE-LOOP on loads on ROUTING IN");
-        CHECK(std::fabs(q.apvts.getRawParameterValue("balance")->load() - 0.75f) < 1e-4f, "its WET/LOOP turns round");
-        CHECK(std::fabs(q.apvts.getRawParameterValue("mod2_balance")->load() - 0.5f) < 1e-4f, "and its modulation of it (-50%% to +50%%)");
+        CHECK(std::fabs(q.apvts.getRawParameterValue("wetMix")->load() - 0.75f) < 1e-4f, "its WET/LOOP turns round, as WET MIX");
         values->setAttribute("wetPre", 0.0);
         presets.apply(preset, "Old");
         CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 2, "an old preset with PRE-LOOP off loads on ROUTING LOOP");
         // Today's presets aren't touched.
         preset.setAttribute("version", BroodProcessor::kStateVersion);
-        values->setAttribute("balance", 0.25);
+        values->setAttribute("wetMix", 0.25);
         presets.apply(preset, "New");
-        CHECK(std::fabs(q.apvts.getRawParameterValue("balance")->load() - 0.25f) < 1e-4f, "a preset of today keeps its WET/LOOP");
+        CHECK(std::fabs(q.apvts.getRawParameterValue("wetMix")->load() - 0.25f) < 1e-4f, "a preset of today keeps its WET MIX");
     }
     {   // Sets and presets from before version 4: SWEEP becomes SAW, SWEEP + BOUNCE becomes TRI at
         // half the rate, and the old shapes keep their names in the row of six
@@ -655,6 +665,84 @@ int main() {
         values->setAttribute("mod1Wave", 0.5); values->setAttribute("mod2Wave", 1.0);
         presets.apply(preset, "Old");
         CHECK(shape(q, "mod1Wave") == "SIN" && shape(q, "mod2Wave") == "SMTH", "an old preset keeps SIN and SMTH");
+    }
+    {   // Four-step UNDO, in the order things happened: a take, then three knob gestures; four
+        // UNDOs take the knobs back first, then the take. REDO puts the take back.
+        BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
+        juce::AudioBuffer<float> io(2, size); juce::MidiBuffer none;
+        long t = 0;
+        auto run = [&](int blocks) {
+            for (int k = 0; k < blocks; ++k) {
+                for (int i = 0; i < size; ++i, ++t) { const auto x = static_cast<float>(0.3 * std::sin(0.02 * t)); io.setSample(0, i, x); io.setSample(1, i, x); }
+                q.processBlock(io, none);
+            }
+            q.settleControls();
+        };
+        auto set = [&](const char* id, float v) { q.apvts.getParameter(id)->setValueNotifyingHost(v); };
+        auto gesture = [&](const char* id, float v) { auto* prm = q.apvts.getParameter(id); prm->beginChangeGesture(); prm->setValueNotifyingHost(v); prm->endChangeGesture(); };
+        auto press = [&](const char* id) { set(id, 1.f); run(3); run(3); };
+        run(400);
+        set("loopSwitch", 1.f); run(2); set("loopSwitch", 0.f); run(20);
+        CHECK(q.ui.lsrc.load() > 64 && q.ui.undoDepth.load() == 1, "a take is one step");
+        const float time0 = q.apvts.getParameter("time")->getValue();
+        gesture("time", 0.1f); juce::Thread::sleep(450); gesture("modWet", 0.2f); juce::Thread::sleep(450); gesture("time", 0.9f);
+        CHECK(q.ui.undoDepth.load() == 4, "three knob gestures are three more");
+        set("time", 0.4f);   // host automation: not a step
+        CHECK(q.ui.undoDepth.load() == 4, "automation isn't recorded");
+        press("undo");
+        CHECK(std::fabs(q.apvts.getParameter("time")->getValue() - 0.1f) < 1e-4f, "UNDO 1: TIME back to before the last gesture");
+        press("undo");
+        CHECK(std::fabs(q.apvts.getParameter("modWet")->getValue() - q.apvts.getParameter("modWet")->getDefaultValue()) < 1e-4f, "UNDO 2: MODIFY back");
+        press("undo");
+        CHECK(std::fabs(q.apvts.getParameter("time")->getValue() - time0) < 1e-4f, "UNDO 3: TIME as it was");
+        CHECK(q.ui.lsrc.load() > 64, "the take still there");
+        press("undo"); run(40);
+        CHECK(q.ui.lsrc.load() == 0 && q.ui.undoDepth.load() == 0 && q.ui.redoDepth.load() == 4, "UNDO 4: the take is gone, and all four can be redone");
+        press("redo"); run(40);
+        CHECK(q.ui.lsrc.load() > 64 && q.ui.redoDepth.load() == 3, "REDO: the take is back");
+        gesture("time", 0.66f);
+        CHECK(q.ui.redoDepth.load() == 0, "a new action drops the redo side");
+    }
+    {   // INPUT MONITOR OFF: OVERDUB can't switch on, from the panel or from automation
+        BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
+        juce::AudioBuffer<float> io(2, size); juce::MidiBuffer none;
+        auto run = [&](int blocks) { for (int k = 0; k < blocks; ++k) { for (int i = 0; i < size; ++i) { io.setSample(0, i, 0.2f * std::sin(0.03f * static_cast<float>(k * size + i))); io.setSample(1, i, io.getSample(0, i)); } q.processBlock(io, none); } q.settleControls(); };
+        auto set = [&](const char* id, float v) { q.apvts.getParameter(id)->setValueNotifyingHost(v); };
+        run(300);
+        set("loopSwitch", 1.f); run(2); set("loopSwitch", 0.f); run(10);
+        set("monitor", 1.f);   // OFF
+        run(4);
+        CHECK(!q.ui.canOverdub.load() && !q.ui.inputHeard.load(), "OFF: no overdub, input not heard");
+        set("overdub", 1.f); run(4);
+        CHECK(q.apvts.getRawParameterValue("overdub")->load() < 0.5f && !q.ui.dubLatched.load(), "OVERDUB is set back to off");
+        set("monitor", 0.f); run(4);   // AUTO
+        CHECK(q.ui.canOverdub.load() && !q.ui.inputHeard.load(), "AUTO with a loop playing: overdub possible, input not heard");
+        set("overdub", 1.f); run(4);
+        CHECK(q.ui.dubLatched.load() && q.ui.inputHeard.load(), "AUTO opens for the overdub");
+        set("monitor", 1.f); run(4);
+        CHECK(!q.ui.dubLatched.load() && q.apvts.getRawParameterValue("overdub")->load() < 0.5f, "switching to OFF ends the overdub");
+    }
+    {   // RESAMPLE through the host: one pass, ROUTING LOOP to OFF, one undoable action
+        BroodProcessor q; q.setPlayConfigDetails(2, 2, rate, size); q.prepareToPlay(rate, size);
+        juce::AudioBuffer<float> io(2, size); juce::MidiBuffer none;
+        long t = 0;
+        auto run = [&](int blocks) {
+            for (int k = 0; k < blocks; ++k) { for (int i = 0; i < size; ++i, ++t) { const auto x = static_cast<float>(0.3 * std::sin(0.02 * t)); io.setSample(0, i, x); io.setSample(1, i, x); } q.processBlock(io, none); }
+            q.settleControls();
+        };
+        auto set = [&](const char* id, float v) { q.apvts.getParameter(id)->setValueNotifyingHost(v); };
+        set("routing", 2.f / 3); set("wetMix", 0.5f); set("memory", 0.2f);
+        run(400);
+        set("loopSwitch", 1.f); run(2); set("loopSwitch", 0.f); run(10);
+        set("resample", 1.f); run(3);
+        CHECK(q.ui.resampling.load(), "RESAMPLE starts");
+        for (int k = 0; k < 2000 && q.ui.resampling.load(); ++k) run(10);
+        run(10);
+        CHECK(!q.ui.resampling.load(), "and finishes");
+        CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 3, "ROUTING LOOP becomes OFF");
+        CHECK(q.ui.undoDepth.load() == 2, "a take and a RESAMPLE: two steps");
+        set("undo", 1.f); run(3); run(40);
+        CHECK(juce::roundToInt(q.apvts.getRawParameterValue("routing")->load()) == 2, "UNDO puts ROUTING back with the old take");
     }
     return failures ? 1 : 0;
 }

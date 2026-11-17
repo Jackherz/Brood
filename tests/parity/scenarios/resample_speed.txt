@@ -1,0 +1,21 @@
+# RESAMPLE's length follows the speed: TAPE at 2x then reversed part way, one pass of a window
+# with its START moved in; ROUTING IN, so only the loop's own playback is recorded and ROUTING is left alone.
+# Modulation of SPEED only pauses afterwards. Then one stopped early by hand, and a CLEAR during one.
+rate 48000
+seconds 18
+0 param routing 0
+0 param wetMix 0.4
+0 param loopMode 1
+0 param modLoop 0.95
+0 param memory 0.5
+0 param mod1_modLoop 0.3
+100 fs loop down
+104 fs loop up
+120 param start 0.3
+300 op resample
+420 param modLoop 0.05
+1600 op resample
+2400 op resample
+2800 op resample
+3000 op clear
+3200 op undo

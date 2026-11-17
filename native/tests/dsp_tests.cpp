@@ -5,6 +5,7 @@
 #include <string>
 #include <cstdio>
 #include <functional>
+#include <map>
 #include <vector>
 #include "dsp/brood.h"
 
@@ -52,6 +53,33 @@ static double crossings(const std::vector<float>& a, double s, double e) {
     return n / 2.0 / (e - s);
 }
 static void tap(brood::Core& c, int which) { c.footswitch(which, true); c.footswitch(which, false); }
+// The host's UNDO history, as small as it can be (as in render.cpp): the versions each core
+// announces, newest last, at most four. undo() swaps the newest back, redo() swaps it again.
+struct History { std::vector<int> undo, redo; };
+static std::map<const brood::Core*, History> histories;
+static void drainHistory(brood::Core& c) {
+    History& h = histories[&c];
+    brood::VersionEvent ev;
+    while (c.popVersionEvent(ev)) {
+        auto drop = [](std::vector<int>& v, int id) { v.erase(std::remove(v.begin(), v.end(), id), v.end()); };
+        if (ev.type == brood::VersionEvent::Added) { h.undo.push_back(ev.id); h.redo.clear(); }
+        else if (ev.type == brood::VersionEvent::Released) { drop(h.undo, ev.id); drop(h.redo, ev.id); }
+        else if (ev.type == brood::VersionEvent::Evicted) { h.undo.erase(std::remove_if(h.undo.begin(), h.undo.end(), [&](int i) { return i <= ev.id; }), h.undo.end()); drop(h.redo, ev.id); }
+        else { h.undo.clear(); h.redo.clear(); }
+    }
+    while (h.undo.size() > 4) { c.releaseVersion(h.undo.front()); h.undo.erase(h.undo.begin()); }
+}
+static void historyStep(brood::Core& c, bool back) {
+    drainHistory(c);
+    History& h = histories[&c];
+    if (back && c.cancelActive()) return;
+    auto& from = back ? h.undo : h.redo; auto& to = back ? h.redo : h.undo;
+    if (from.empty()) return;
+    const int id = from.back(); from.pop_back();
+    c.swapVersion(id); to.push_back(id);
+}
+static void undo(brood::Core& c) { historyStep(c, true); }
+static void redo(brood::Core& c) { historyStep(c, false); }
 
 int main() {
     {   // bypass is transparent
@@ -63,7 +91,7 @@ int main() {
         CHECK(worst < 1e-6, "bypass error %g", worst);
     }
     {   // delay echo lands at TIME (0.2 s at the default knob)
-        brood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.3; c.prepare(FS);
+        brood::Core c; c.p.wetMode = 1; c.p.wetMix = 1; c.p.modWet = 0.3; c.prepare(FS);
         tap(c, 0);
         // start in delay mode: let the reverb→delay mode crossfade finish before the click
         auto o = render(c, 1.4, [](double t) { return t > 0.5 && t < 0.502 ? 0.8 : 0.0; });
@@ -103,7 +131,7 @@ int main() {
     }
     {   // WEAVE: audible, repeatable at a fixed knob position, and it answers the knobs
         auto weaveRun = [](double time, double modify) {
-            brood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.time = time; c.p.modWet = modify;
+            brood::Core c; c.p.wetMode = 3; c.p.wetMix = 1; c.p.time = time; c.p.modWet = modify;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 3, [](double t) {
                 const double ph = std::fmod(t, 1.0);
@@ -119,7 +147,7 @@ int main() {
         CHECK(std::fabs(texture - deep) > 1e-4, "weave ignores TIME");
     }
     {   // WEAVE stays bounded with the nastiest settings
-        brood::Core c; c.p.wetMode = 3; c.p.mix = 1; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.0; c.p.width = 1;
+        brood::Core c; c.p.wetMode = 3; c.p.wetMix = 1; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.0; c.p.width = 1;
         c.prepare(FS); tap(c, 0);
         auto o = render(c, 2, tone(196, 5));
         bool bounded = true; for (float v : o.L) if (std::fabs(v) > 1.0f) bounded = false;
@@ -167,7 +195,7 @@ int main() {
     }
     {   // tempo sync puts the echo on the divisiuon, independent of the clock
         auto echoAt = [](double time, double bpm, double clock) {
-            brood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5;
+            brood::Core c; c.p.wetMode = 1; c.p.wetMix = 1; c.p.modWet = 0.5;
             c.p.sync = true; c.p.bpm = bpm; c.p.time = time; c.p.clock = clock;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 3, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
@@ -215,7 +243,7 @@ int main() {
     }
     {   // ENV has its own switch: the wet side's SYNC does not reach the slice
         auto hold = [&](bool envSync, bool sync) {
-            brood::Core c; c.p.loopMode = 0; c.p.wetMode = 0; c.p.mix = 1; c.p.modWet = 0.65;
+            brood::Core c; c.p.loopMode = 0; c.p.wetMode = 0; c.p.wetMix = 1; c.p.modWet = 0.65;
             c.p.length = 0.5; c.p.envSync = envSync; c.p.sync = sync; c.p.bpm = 120;
             c.p.memory = 0; c.p.clock = 1; c.p.routing = 1;
             c.prepare(FS); tap(c, 0);
@@ -234,7 +262,7 @@ int main() {
 
     {   // balance fully to LOOP always returns the loop, whatever the routing
         for (int r = 0; r < 3; ++r) {
-            brood::Core c; c.p.routing = r; c.p.balance = 0; c.p.mix = 1; c.p.loopMode = 1;
+            brood::Core c; c.p.routing = r; c.p.wetMix = 0; c.p.loopMode = 1;
             c.prepare(FS); tap(c, 0);
             render(c, 1.2, tone(220, 5), [&](brood::Core& cc, long b) { if (b == blk(1.0)) tap(cc, 1); });
             auto o = render(c, 1, [](double) { return 0.0; });
@@ -251,7 +279,7 @@ int main() {
     }
     {   // TONE is a hi-cut on the wet bus
         auto hf = [](double value) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.7; c.p.tone = value;
+            brood::Core c; c.p.wetMode = 0; c.p.wetMix = 1; c.p.time = 0.7; c.p.tone = value;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 3, [](double t) { return 0.4 * std::sin(2 * brood::kPi * 220 * t) + 0.2 * std::sin(2 * brood::kPi * 7000 * t); });
             return hfEnergy(o.L, 1.5, 3);
@@ -261,7 +289,7 @@ int main() {
     }
     {   // STEREO WIDTH: 0 mono, 0.5 the built image, 1 wider
         auto image = [](double width) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.7; c.p.width = width;
+            brood::Core c; c.p.wetMode = 0; c.p.wetMix = 1; c.p.time = 0.7; c.p.width = width;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 2.5, [](double t) { return 0.3 * std::sin(2 * brood::kPi * 220 * t) + 0.1 * std::sin(2 * brood::kPi * 3100 * t); });
             return sideEnergy(o.L, o.R);
@@ -273,7 +301,7 @@ int main() {
     }
     {   // WET CLOCK DIVISION stretches the wet side only
         auto gap = [](double wetDiv) {
-            brood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.3;
+            brood::Core c; c.p.wetMode = 1; c.p.wetMix = 1; c.p.modWet = 0.3;
             c.p.time = 0.3; c.p.wetDiv = wetDiv;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 6, [](double t) { return t > 1.0 && t < 1.002 ? 0.8 : 0.0; });
@@ -288,7 +316,7 @@ int main() {
     }
     {   // The input is read at each core tick's own time, so a captured loop is smooth.
         // Handing every tick the latest host sample repeated one in four at 48 kHz.
-        brood::Core c; c.p.loopMode = 1; c.p.mix = 1; c.p.loopDiv = 1; c.p.clock = 1; c.p.modLoop = 0.75;
+        brood::Core c; c.p.loopMode = 1; c.p.wetMix = 1; c.p.loopDiv = 1; c.p.clock = 1; c.p.modLoop = 0.75;
         c.prepare(FS);
         auto o = render(c, 3, [](double t) { return 0.35 * std::sin(2 * brood::kPi * 220 * t); },
                         [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(0.6)) cc.footswitch(1, false); });
@@ -306,7 +334,7 @@ int main() {
     }
     {   // LOOP CLOCK DIVISION drops the loop pitch
         auto pitch = [](double loopDiv) {
-            brood::Core c; c.p.loopMode = 0; c.p.mix = 1; c.p.loopDiv = loopDiv; c.p.clock = 1; c.p.time = 0.5;
+            brood::Core c; c.p.loopMode = 0; c.p.wetMix = 1; c.p.loopDiv = loopDiv; c.p.clock = 1; c.p.time = 0.5;
             c.prepare(FS);
             auto o = render(c, 6, [](double t) { return 0.35 * std::sin(2 * brood::kPi * 220 * t); },
                             [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(0.3)) cc.footswitch(1, false); });
@@ -319,7 +347,7 @@ int main() {
     }
     {   // FADE: a silent overdub can replace the old loop
         auto level = [](double fade) {
-            brood::Core c; c.p.loopMode = 1; c.p.mix = 0.6; c.p.clock = 1; c.p.fade = fade;
+            brood::Core c; c.p.loopMode = 1; c.p.wetMix = 0.6; c.p.clock = 1; c.p.fade = fade;
             c.prepare(FS);
             render(c, 0.4, tone(200, 5), [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(0.3)) cc.footswitch(1, false); });
             render(c, 4.5, [](double) { return 0.0; }, [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); });
@@ -330,32 +358,38 @@ int main() {
         CHECK(keep > 0.005, "fade 0 keeps the loop (%.4f)", keep);
         CHECK(gone < keep * 0.05, "fade 1 wipes it (%.5f vs %.4f)", gone, keep);
     }
-    {   // IN + LOOP: a silent overdub resamples the loop through the wet side and never grows it,
-        // even with GAIN up or a delay near full FEEDBACK; with the wet side off it layers as before
-        // The loop is measured on its own (WET/LOOP all loop) either side, so the wet side's own
-        // ringing doesn't count.
-        auto growth = [](int wetMode, double modWet, double loopDb, bool wetOn) {
+    {   // IN + LOOP: while a layer is laid down WET hears only the input, so the loop can't feed
+        // itself back through WET pass after pass. A tail of the loop already ringing in WET when
+        // the layer starts goes in (the accepted tradeoff), and then it's done: the level settles.
+        // The loop is measured on its own (WET MIX 0) either side.
+        auto levels = [](int wetMode, double modWet, double loopDb, double wetMix) {
             brood::Core c; c.p.routing = 1; c.p.wetMode = wetMode; c.p.modWet = modWet; c.p.time = 0.62; c.p.wetDiv = 1;
-            c.p.mix = 1; c.p.clock = 1; c.p.balance = 0; c.p.loopDb = loopDb; c.p.loopMode = 1;
+            c.p.clock = 1; c.p.wetMix = 0; c.p.loopLevel = brood::loopLevelOfDb(loopDb); c.p.loopMode = 1; c.p.modLoop = 0.66;
             c.prepare(FS);
-            if (wetOn) tap(c, 0);
             render(c, 1.2, tone(200, 3), [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(1.1)) cc.footswitch(1, false); });
             const auto silent = [](double) { return 0.0; };
+            c.p.wetMix = wetMix;
+            render(c, 4, silent);   // WET hears the loop, and its tail builds
+            c.p.wetMix = 0;
             const double before = rms(render(c, 2, silent).L, 1, 2);
-            c.p.balance = 0.5; c.p.overdubLatch = true;
-            render(c, 12, silent);
-            c.p.overdubLatch = false; c.p.balance = 0;
-            return rms(render(c, 2, silent).L, 1, 2) / before;
+            double after[2] = {0, 0};
+            for (int half = 0; half < 2; ++half) {
+                c.p.wetMix = wetMix; c.p.overdubLatch = true;
+                render(c, 12, silent);
+                c.p.overdubLatch = false; c.p.wetMix = 0;
+                after[half] = rms(render(c, 2, silent).L, 1, 2) / before;
+            }
+            return std::pair<double, double>{after[0], after[1]};
         };
-        const double slip = growth(2, 0.9, 4, true), dly = growth(1, 0.95, 0, true), dry = growth(2, 0.9, 4, false);
-        CHECK(slip < 1.1, "IN + LOOP overdub through SLIP with GAIN +4 dB holds its level (x%.2f)", slip);
-        CHECK(dly < 1.2, "IN + LOOP overdub through a delay at high FEEDBACK holds its level (x%.2f)", dly);
-        CHECK(dry > 0.5 && dry < 1.05, "IN + LOOP overdub with the wet side off layers as before (x%.2f)", dry);
+        const auto slip = levels(2, 0.9, 4, 0.5), dly = levels(1, 0.95, 0, 0.5), dry = levels(2, 0.9, 4, 0.0);
+        CHECK(slip.second < slip.first * 1.1, "IN + LOOP overdub through SLIP with LOOP LEVEL +4 dB settles (x%.2f then x%.2f)", slip.first, slip.second);
+        CHECK(dly.second < dly.first * 1.15, "IN + LOOP overdub through a delay at high FEEDBACK settles (x%.2f then x%.2f)", dly.first, dly.second);
+        CHECK(dry.first > 0.5 && dry.first < 1.05, "IN + LOOP overdub with WET MIX 0 layers as before (x%.2f)", dry.first);
     }
     {   // IN + LOOP: GAIN turns the loop down for the wet side too, so all-wet BALANCE follows it
         auto wetLevel = [](double loopDb) {
             brood::Core c; c.p.routing = 1; c.p.wetMode = 2; c.p.modWet = 0.9; c.p.time = 0.5;
-            c.p.mix = 1; c.p.clock = 1; c.p.balance = 1; c.p.loopDb = loopDb; c.p.loopMode = 1;
+            c.p.clock = 1; c.p.wetMix = 1; c.p.loopLevel = brood::loopLevelOfDb(loopDb); c.p.loopMode = 1;
             c.prepare(FS);
             tap(c, 0);
             render(c, 1.2, tone(200, 3), [](brood::Core& cc, long b) { if (b == blk(0.1)) cc.footswitch(1, true); else if (b == blk(1.1)) cc.footswitch(1, false); });
@@ -366,7 +400,7 @@ int main() {
     }
     {   // CLASSIC: the slow clock is noisy
         auto noise = [](bool classic, double level = 1) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic; c.p.wearNoise = level;
+            brood::Core c; c.p.wetMode = 0; c.p.wetMix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = classic; c.p.wearNoise = level;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 2, [](double) { return 0.0; });
             return rms(o.L, 1, 2);
@@ -380,10 +414,11 @@ int main() {
     }
     {   // WORN after the loop: the take is free of the worn hiss, even with ROUTING on IN (the wet side recorded)
         auto kept = [](bool post) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = true; c.p.wearPost = post;
-            c.p.routing = 0; c.p.balance = 0; c.p.loopMode = 1; c.prepare(FS); tap(c, 0); tap(c, 1);
+            brood::Core c; c.p.wetMode = 0; c.p.wetMix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = true; c.p.wearPost = post;
+            // WET (and its hiss) is recorded at WET MIX's share; then only the loop is left to hear.
+            c.p.routing = 0; c.p.wetMix = 0.5; c.p.loopMode = 1; c.prepare(FS); tap(c, 1);
             render(c, 3, [](double) { return 0.0; }, [&](brood::Core& cc, long b) { if (b == blk(2.0)) tap(cc, 1); });
-            c.p.classic = false; tap(c, 0);   // wear off and wet off: only the loop is left to hear
+            c.p.classic = false; c.p.wetMix = 0; c.p.routing = 3;   // wear off and WET off
             auto o = render(c, 3, [](double) { return 0.0; });
             return rms(o.L, 1, 3);
         };
@@ -391,7 +426,7 @@ int main() {
         CHECK(inLoop > 1e-5, "worn in the loop records its hiss (%.6f)", inLoop);
         CHECK(after < inLoop * 0.05, "worn after the loop keeps the take clean (%.6f of %.6f)", after, inLoop);
         // And while it's on, it's still heard as worn: the hiss is in the output.
-        brood::Core c; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = true; c.p.wearPost = true; c.p.routing = 0;
+        brood::Core c; c.p.wetMode = 0; c.p.wetMix = 1; c.p.time = 0.6; c.p.clock = 0; c.p.classic = true; c.p.wearPost = true; c.p.routing = 0;
         c.prepare(FS); tap(c, 0);
         auto o = render(c, 2, [](double) { return 0.0; });
         CHECK(rms(o.L, 1, 2) > 1e-4, "worn after the loop is still heard (%.5f)", rms(o.L, 1, 2));
@@ -400,7 +435,7 @@ int main() {
     {   // The wet side doesn't click: a steady two-note drone through every mode, knobs moving and FREEZE
         // going on and off. A click is a jump far over what's around it.
         const auto clicks = [](int mode, double time, double modify, const std::function<void(brood::Core&, long)>& move) {
-            brood::Core c; c.p.wetMode = mode; c.p.time = time; c.p.modWet = modify; c.p.mix = 1; c.p.clock = 1;
+            brood::Core c; c.p.wetMode = mode; c.p.time = time; c.p.modWet = modify; c.p.wetMix = 1; c.p.clock = 1;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 8, [](double t) { return 0.2 * std::sin(2 * brood::kPi * 196 * t) + 0.15 * std::sin(2 * brood::kPi * 247 * t); }, move);
             const int n = static_cast<int>(o.L.size());
@@ -434,7 +469,7 @@ int main() {
         CHECK(held == 0, "delay: high feedback at the limiter makes %d clicks", held);
     }
     {   // SLIP keeps sounding while frozen, instead of running out of audio and going quiet
-        brood::Core c; c.p.wetMode = 2; c.p.time = 0.5; c.p.modWet = 0.5; c.p.mix = 1; c.p.clock = 1;
+        brood::Core c; c.p.wetMode = 2; c.p.time = 0.5; c.p.modWet = 0.5; c.p.wetMix = 1; c.p.clock = 1;
         c.prepare(FS); tap(c, 0);
         render(c, 2, tone(220, 10));
         c.p.freezeLatch = 1;
@@ -447,7 +482,7 @@ int main() {
     // ─────────────────────────── the ramp engine ───────────────────────────
     {   // with every ramp off, the audio is exactly what it was before the engine
         auto run = [](bool withRamps) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = 0.8; c.p.time = 0.5;
+            brood::Core c; c.p.wetMode = 0; c.p.wetMix = 0.8; c.p.time = 0.5;
             if (withRamps) { c.p.mods[0].rate = 1; c.p.mods[1].rate = 1; }
             c.prepare(FS); tap(c, 0);
             return render(c, 1, tone(220, 1));
@@ -459,7 +494,7 @@ int main() {
     }
     {   // a TIME ramp moves the echo
         auto echoPair = [] {
-            brood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.55;
+            brood::Core c; c.p.wetMode = 1; c.p.wetMix = 1; c.p.modWet = 0.55;
             c.p.time = 0.4; c.p.mods[0].depth[0] = 0.5; c.p.mods[0].rate = 0.35;
             c.prepare(FS); tap(c, 0);
             auto o = render(c, 5, [](double t) { return std::fabs(t - 1.0) < 1e-5 ? 0.8 : 0.0; });
@@ -585,7 +620,7 @@ int main() {
     {   // Re-taking a loop many times must not splice a click into it
         const double slope = 0.4 * 2 * brood::kPi * 100 / FS;
         for (int taps : {1, 2, 4, 8}) {
-            brood::Core c; c.p.clock = 1; c.p.memory = 0.5; c.p.loopMode = 1; c.p.mix = 1;
+            brood::Core c; c.p.clock = 1; c.p.memory = 0.5; c.p.loopMode = 1; c.p.wetMix = 1;
             c.p.wetMode = 0; c.p.modLoop = 0.5; c.p.length = 0.8; c.prepare(FS);
             long t = 0;
             auto play = [&](double secs) {
@@ -615,7 +650,7 @@ int main() {
     }
     {   // The MEMORY window must be whole samples: a fractional one poisoned the loop with NaN
         for (double memory : {0.15, 0.4, 0.5, 0.85}) {
-            brood::Core c; c.p.loopMode = 2; c.p.memory = memory; c.p.mix = 0.7; c.p.modWet = 0.6; c.prepare(FS);
+            brood::Core c; c.p.loopMode = 2; c.p.memory = memory; c.p.wetMix = 0.7; c.p.modWet = 0.6; c.prepare(FS);
             render(c, 9, tone(120, 99));
             c.footswitch(1, true); c.footswitch(1, false);
             const Out o = render(c, 1, [](double) { return 0.0; });
@@ -626,7 +661,7 @@ int main() {
     }
     {   // FREEZE holds the wet tail without a held footswitch, and lets go again
         auto ring = [&](bool freezeSwitch) {
-            brood::Core c; c.p.wetMode = 0; c.p.time = 0.7; c.p.mix = 1; c.p.modWet = 0.8; c.p.clock = 0.9; c.prepare(FS);
+            brood::Core c; c.p.wetMode = 0; c.p.time = 0.7; c.p.wetMix = 1; c.p.modWet = 0.8; c.p.clock = 0.9; c.prepare(FS);
             c.footswitch(0, true); c.footswitch(0, false);
             render(c, 3, tone(300, 99));
             c.p.freezeLatch = freezeSwitch ? 1.0 : 0.0;
@@ -635,9 +670,9 @@ int main() {
         };
         const auto off = ring(false), on = ring(true);
         CHECK(on.first > 20 * off.first, "FREEZE keeps ringing (%.4f vs %.4f)", on.first, off.first);
-        CHECK(on.second.freeze && on.second.wetOn, "the switch alone says the wet side is held");
+        CHECK(on.second.freeze && on.second.wetFed, "the switch alone says the wet side is held");
         CHECK(!off.second.freeze, "and it is not held when the switch is up");
-        brood::Core c; c.p.wetMode = 0; c.p.time = 0.7; c.p.mix = 1; c.p.modWet = 0.8; c.p.clock = 0.9; c.prepare(FS);
+        brood::Core c; c.p.wetMode = 0; c.p.time = 0.7; c.p.wetMix = 1; c.p.modWet = 0.8; c.p.clock = 0.9; c.prepare(FS);
         c.footswitch(0, true); c.footswitch(0, false);
         render(c, 3, tone(300, 99));
         c.p.freezeLatch = 1;
@@ -653,13 +688,14 @@ int main() {
                          + std::sin(2 * brood::kPi * 517 * t) + std::sin(2 * brood::kPi * 733 * t));
         };
         auto level = [&](int wetMode, double balance) {
-            brood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.p.memory = 0; c.p.mix = 0.6;
-            c.p.wetMode = wetMode; c.p.routing = 1; c.p.modWet = 0.5; c.p.time = 0.5; c.p.balance = balance;
+            // Caught dry (WET MIX 0 keeps WET out of the take), then WET MIX set for listening.
+            brood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.p.memory = 0; c.p.wetMix = 0;
+            c.p.wetMode = wetMode; c.p.routing = 1; c.p.modWet = 0.5; c.p.time = 0.5;
             c.prepare(FS);
             render(c, 2, broad);
             c.footswitch(1, true); c.footswitch(1, false);
+            c.p.wetMix = balance;
             render(c, 0.4, [](double) { return 0.0; });
-            if (balance > 0) { c.footswitch(0, true); c.footswitch(0, false); }   // 0 is the loop alone
             render(c, 1.2, [](double) { return 0.0; });
             const Out o = render(c, 1, [](double) { return 0.0; });
             return rms(o.L, 0.2, 0.9);
@@ -674,7 +710,7 @@ int main() {
     }
     {   // Holding LOOP overdubs, and FADE decides what the old take keeps
         auto take = [&](double fade, double& before, double& after, brood::LoopLed& during) {
-            brood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.p.memory = 0; c.p.mix = 0.5; c.p.fade = fade;
+            brood::Core c; c.p.loopMode = 0; c.p.clock = 0.6; c.p.memory = 0; c.p.wetMix = 0.5; c.p.fade = fade;
             c.prepare(FS);
             render(c, 2, tone(220, 9));
             c.footswitch(1, true); c.footswitch(1, false);
@@ -699,7 +735,7 @@ int main() {
     }
     {   // WIDTH does what SPREAD used to: 0 is mono and the top opens the sides
         auto runWidth = [&](double width) {
-            brood::Core c; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.6; c.p.time = 0.35; c.p.clock = 1; c.p.width = width;
+            brood::Core c; c.p.wetMode = 1; c.p.wetMix = 1; c.p.modWet = 0.6; c.p.time = 0.35; c.p.clock = 1; c.p.width = width;
             c.prepare(FS); c.footswitch(0, true); c.footswitch(0, false);
             const Out o = render(c, 1.5, tone(440, 9));
             double side = 0, mid = 0;
@@ -717,7 +753,7 @@ int main() {
     }
     {   // MIX alone takes the dry away, so DRY KILL is not needed
         auto dryLeft = [&](double mix) {
-            brood::Core c; c.p.wetMode = 0; c.p.mix = mix; c.p.modWet = 0.5; c.p.time = 0.5;
+            brood::Core c; c.p.wetMode = 0; c.p.wetMix = mix; c.p.modWet = 0.5; c.p.time = 0.5;
             c.prepare(FS); c.footswitch(0, true); c.footswitch(0, false);
             render(c, 0.5, [](double) { return 0.0; });
             const Out o = render(c, 0.4, [](double) { return 0.5; });
@@ -727,7 +763,7 @@ int main() {
         CHECK(std::fabs(dryLeft(1)) < 0.05, "fully wet the dry is gone (%.3f)", dryLeft(1));
     }
     {   // There is no LATCH any more: a held foot is momentary, the switch latches
-        brood::Core c; c.p.wetMode = 0; c.p.time = 0.8; c.p.modWet = 0.9; c.p.mix = 1;
+        brood::Core c; c.p.wetMode = 0; c.p.time = 0.8; c.p.modWet = 0.9; c.p.wetMix = 1;
         c.prepare(FS);
         c.footswitch(0, true); c.footswitch(0, false);
         render(c, 1, tone(300, 9));
@@ -815,10 +851,10 @@ int main() {
             CHECK(c.state().winStart == 0, "a full-length window cannot move");
         }
         // A jump in the read head would be a click; the crossfade must hide it.
-        brood::Core c; c.p.loopMode = 2; c.p.length = 0.5; c.p.loopEnd = 0.4; c.p.mix = 1; c.prepare(FS);
+        brood::Core c; c.p.loopMode = 2; c.p.length = 0.5; c.p.loopEnd = 0.4; c.p.wetMix = 1; c.prepare(FS);
         render(c, 3, [](double t) { return 0.35 * std::sin(2 * brood::kPi * 140 * t) + 0.2 * std::sin(2 * brood::kPi * 523 * t); });
         tap(c, 1);
-        c.p.balance = 0;
+        c.p.wetMix = 0;
         auto step = [](const std::vector<float>& a, double from, double to) {
             double m = 0;
             for (long i = std::lround(from * FS) + 1; i < std::lround(to * FS); ++i) m = std::max(m, (double) std::fabs(a[(size_t) i] - a[(size_t) (i - 1)]));
@@ -887,7 +923,7 @@ int main() {
     {   // TAPE: deep, fast LENGTH modulation keeps the playhead moving through the window. The
         // playhead keeps its share of the window, and the window follows LENGTH at a capped
         // speed, so it neither jumps back (as it did, every cycle) nor zips through the take.
-        brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.5; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.p.modLoop = 0.66;
+        brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.5; c.p.wetMix = 0; c.p.routing = 2; c.p.modLoop = 0.66;
         c.prepare(FS);
         render(c, 4, [](double t) { return 0.4 * std::sin(2 * brood::kPi * 220 * t); });
         tap(c, 1);
@@ -909,7 +945,7 @@ int main() {
     }
     {   // START means the same in every loop mode: the window starts at the same place in the take
         brood::Core c; c.p.loopMode = 0; c.p.clock = 1; c.p.memory = 0.6;
-        c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.prepare(FS);
+        c.p.wetMix = 0; c.p.routing = 2; c.prepare(FS);
         render(c, 4, tone(220, 10));
         tap(c, 1);
         c.p.length = 0.5; c.p.loopEnd = 0.5; c.p.start = 0.3;   // trimmed once caught
@@ -921,7 +957,7 @@ int main() {
     {   // Switching loop mode keeps the playhead where it is in the take
         auto speedOne = [] { double lo = 0.5, hi = 1; for (int i = 0; i < 60; ++i) { const double mid = (lo + hi) / 2; (brood::speedMap(mid, 0.04) < 1 ? lo : hi) = mid; } return lo; };
         brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.6; c.p.length = 0.6; c.p.loopEnd = 0.6; c.p.start = 0.2; c.p.modLoop = speedOne();
-        c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.prepare(FS);
+        c.p.wetMix = 0; c.p.routing = 2; c.prepare(FS);
         render(c, 4, tone(220, 10));
         tap(c, 1);
         render(c, 1.3, [](double) { return 0.0; });
@@ -946,7 +982,7 @@ int main() {
         CHECK(brood::migrateTapeStart(0, 0.5, len) == 1.0 && brood::migrateTapeStart(1, 0.5, len) == 0.0, "the newest becomes 1, the oldest 0");
     }
     {   // RECORD: the loop switch records what's played after it
-        auto fresh = [] { brood::Core c; c.p.recMode = 1; c.p.clock = 1; c.p.memory = 1; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.prepare(FS); return c; };
+        auto fresh = [] { brood::Core c; c.p.recMode = 1; c.p.clock = 1; c.p.memory = 1; c.p.wetMix = 0; c.p.routing = 2; c.prepare(FS); return c; };
         const auto seconds = [](const brood::Core& c) { return c.state().lsrc / c.state().clockHz; };
         {   // tap, play, tap
             brood::Core c = fresh();
@@ -1053,7 +1089,7 @@ int main() {
         }
         {   // ROUTING on IN records the wet side, so it shows; on LOOP it isn't recorded, so it doesn't
             auto tail = [&](bool pre) {
-                brood::Core c; c.p.clock = 1; c.p.routing = pre ? 0 : 2; c.p.wetMode = 0; c.p.mix = 1; c.p.time = 0.8; c.prepare(FS);
+                brood::Core c; c.p.clock = 1; c.p.routing = pre ? 0 : 2; c.p.wetMode = 0; c.p.wetMix = 1; c.p.time = 0.8; c.prepare(FS);
                 tap(c, 0);
                 render(c, 0.3, sine);
                 render(c, 0.6, silence);
@@ -1109,7 +1145,7 @@ int main() {
     {   // OVERDUB latched, CLEAR and UNDO
         const auto sine = [](double t) { return 0.4 * std::sin(2 * brood::kPi * 440 * t); };
         const auto other = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 660 * t); };
-        auto fresh = [] { brood::Core c; c.p.clock = 1; c.p.memory = 0.3; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.prepare(FS); return c; };
+        auto fresh = [] { brood::Core c; c.p.clock = 1; c.p.memory = 0.3; c.p.wetMix = 0; c.p.routing = 2; c.prepare(FS); return c; };
         auto take = [](const brood::Core& c) { std::vector<float> v(static_cast<size_t>(c.capturedLength())); c.capturedLoop(v.data(), static_cast<int>(v.size())); return v; };
         auto caught = [&](brood::Core& c, const std::function<double(double)>& src) { render(c, 2, src); tap(c, 1); render(c, 0.3, [](double) { return 0.0; }); };
         {   // latched: layers while on, stops when off
@@ -1146,22 +1182,21 @@ int main() {
             // The take's own slope is about 0.023 a sample; a cut would jump by up to 0.4.
             CHECK(step < 0.05, "CLEAR: it fades out, no click (largest step %.4f)", step);
             CHECK(rms(o.L, 0.3, 0.5) < 1e-4, "CLEAR: and then it's silent (%.6f)", rms(o.L, 0.3, 0.5));
-            CHECK(c.state().undoKind == 2 && !c.state().undoRedo, "CLEAR: UNDO would bring it back");
-            c.undoLoop();
+            undo(c);
             // It plays: with the loop stopped, a tap would catch a new take instead of playing this one.
             CHECK(take(c) == kept && c.state().loop == brood::LoopLed::Play, "UNDO: the cleared take is back, sample for sample, and plays");
-            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });   // playing: it fades out first
-            CHECK(c.capturedLength() == 0 && !c.state().undoRedo, "UNDO again: cleared again");
+            redo(c); render(c, 0.3, [](double) { return 0.0; });   // playing: it fades out first
+            CHECK(c.capturedLength() == 0, "REDO: cleared again");
         }
         {   // a new take: UNDO goes back to the one before; after a first take, to empty
             brood::Core c = fresh(); caught(c, sine);
             const auto first = take(c);
             tap(c, 1); render(c, 0.3, other); caught(c, other);
             CHECK(take(c) != first, "UNDO: a second take differs");
-            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            undo(c); render(c, 0.3, [](double) { return 0.0; });
             CHECK(take(c) == first && c.state().loop == brood::LoopLed::Play, "UNDO: back to the first take, playing");
             brood::Core d = fresh(); caught(d, sine);
-            d.undoLoop(); render(d, 0.3, [](double) { return 0.0; });
+            undo(d); render(d, 0.3, [](double) { return 0.0; });
             CHECK(d.capturedLength() == 0, "UNDO: after a first take, the loop is empty (%d)", d.capturedLength());
         }
         {   // a layer: UNDO takes it off and keeps playing; again puts it back
@@ -1169,15 +1204,15 @@ int main() {
             const auto before = take(c);
             c.p.overdubLatch = true; render(c, 0.6, other); c.p.overdubLatch = false; render(c, 0.1, other);
             const auto layered = take(c);
-            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            undo(c); render(c, 0.3, [](double) { return 0.0; });
             CHECK(take(c) == before && c.state().loop == brood::LoopLed::Play, "UNDO: the layer comes off and the loop plays on");
-            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
-            CHECK(take(c) == layered, "UNDO again: the layer is back");
+            redo(c); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(take(c) == layered, "REDO: the layer is back");
         }
         {   // nothing to undo: nothing happens
             brood::Core c = fresh(); render(c, 0.5, sine);
-            c.undoLoop(); render(c, 0.2, sine);
-            CHECK(c.capturedLength() == 0 && c.state().undoKind == 0, "UNDO: with nothing to undo, nothing happens");
+            undo(c); render(c, 0.2, sine);
+            CHECK(c.capturedLength() == 0, "UNDO: with nothing to undo, nothing happens");
         }
     }
     {   // A new take plays all of itself: START and END around it, and LENGTH full in TAPE
@@ -1203,17 +1238,17 @@ int main() {
             const double plays = c.state().winLen / c.state().clockHz;
             CHECK(std::fabs(plays - 4.0) < 0.02, "RECORD: 2 bars plays 2 bars (%.3f s)", plays);
         }
-        {   // UNDO to another take fits it; undoing a layer leaves the window alone
-            brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.3; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.prepare(FS);
+        {   // UNDO to another take leaves the window alone (the history puts the knobs back); so does a layer
+            brood::Core c; c.p.loopMode = 1; c.p.clock = 1; c.p.memory = 0.3; c.p.wetMix = 0; c.p.routing = 2; c.prepare(FS);
             bool lengthToo = false;
             render(c, 2, sine); tap(c, 1); render(c, 0.2, sine); tap(c, 1); render(c, 0.2, sine); tap(c, 1);   // two takes
             c.takeFitted(lengthToo);
             c.p.length = 0.5; c.p.loopEnd = 0.5;
-            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
-            CHECK(c.takeFitted(lengthToo) && c.p.loopEnd == 1 && c.p.length == 1, "UNDO to the take before fits it");
+            undo(c); render(c, 0.3, [](double) { return 0.0; });
+            CHECK(!c.takeFitted(lengthToo) && c.p.loopEnd == 0.5, "UNDO to the take before leaves the window to the host's history");
             c.p.loopEnd = 0.5;   // the undone take plays: trim it, then lay a layer on it
             c.p.overdubLatch = true; render(c, 0.4, sine); c.p.overdubLatch = false; render(c, 0.1, sine);
-            c.undoLoop(); render(c, 0.3, [](double) { return 0.0; });
+            undo(c); render(c, 0.3, [](double) { return 0.0; });
             CHECK(!c.takeFitted(lengthToo) && c.p.loopEnd == 0.5, "UNDO of a layer keeps the window");
         }
     }
@@ -1230,7 +1265,7 @@ int main() {
         };
         // TAPE at exactly 1x (MODIFY's 1x step), so seconds into the take are seconds of song.
         const double one = 0.66;
-        auto fresh = [one] { brood::Core c; c.p.clock = 1; c.p.loopMode = 1; c.p.modLoop = one; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.p.bpm = 120; c.prepare(FS); return c; };
+        auto fresh = [one] { brood::Core c; c.p.clock = 1; c.p.loopMode = 1; c.p.modLoop = one; c.p.wetMix = 0; c.p.routing = 2; c.p.bpm = 120; c.prepare(FS); return c; };
         auto at = [](const brood::Core& c) { return c.state().pos / c.state().clockHz; };   // seconds into the window
         // How far `got` is from `want` around a 4 s loop.
         auto off = [](double got, double want) { double d = std::fmod(got - want + 6.0, 4.0) - 2.0; return std::fabs(d); };
@@ -1276,13 +1311,13 @@ int main() {
             c.p.hostPlaying = false; run(c, g, 0.3, silence);
             tap(c, 1); run(c, g, 0.2, sine);
             CHECK(!c.state().follows && c.state().loop == brood::LoopLed::Play && !c.state().parked, "transport: a tap while parked catches a new, free take");
-            c.undoLoop(); run(c, g, 0.3, silence);
+            undo(c); run(c, g, 0.3, silence);
             CHECK(c.state().follows && c.state().parked, "transport: UNDO brings the transport take back, waiting for play");
         }
     }
     {   // ENV synced with the host playing: slices land on the host's grid, LENGTH moves included
         brood::Core c; c.p.clock = 1; c.p.loopMode = 0; c.p.envSync = true; c.p.modLoop = 1; c.p.memory = 0.3;
-        c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true; c.p.length = 0.5;
+        c.p.wetMix = 0; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true; c.p.length = 0.5;
         c.prepare(FS);
         const double S1 = brood::syncSecondsRaw(120, 0.5), S2 = brood::syncSecondsRaw(120, 0.3);
         const double gateAt = 2.537, changeAt = 4.013;   // the input opens the envelope off the grid; LENGTH moves off it too
@@ -1318,7 +1353,7 @@ int main() {
     {   // ENV synced, 1/1 over a 1-bar loop: the slice is the loop, however mid-bar the envelope opens
         auto play = [&](bool openGate) {
             brood::Core c; c.p.clock = 1; c.p.loopMode = 0; c.p.envSync = true; c.p.modLoop = 1; c.p.length = 1.0;
-            c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true;
+            c.p.wetMix = 0; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true;
             c.p.recMode = 1; c.p.recBars = 1; c.prepare(FS);
             return render(c, 10, [&](double t) {
                 if (t < 4.2) return 0.3 * std::sin(2 * brood::kPi * (300 + 200 * std::fmod(t, 2.0)) * t);   // a sweep, so any shift shows
@@ -1341,7 +1376,7 @@ int main() {
         for (int soft = 0; soft < 2; ++soft)
             for (double rate : {0.3, 2.0}) {
                 brood::Core c; c.p.clock = 1; c.p.loopMode = 0; c.p.modLoop = 1; c.p.memory = 0.3;
-                c.p.mix = 1; c.p.balance = 0; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true;
+                c.p.wetMix = 0; c.p.routing = 2; c.p.bpm = 120; c.p.hostPlaying = true;
                 c.p.envSync = true; c.p.envSoft = soft == 1; c.p.length = 0.5;
                 c.prepare(FS);
                 const Out o = render(c, 14, [](double t) {
@@ -1399,7 +1434,7 @@ int main() {
         // a TIME that grows under a slice, end the slice early rather than leaving seconds of silence
         for (int move = 0; move < 2; ++move) {
             brood::Core c; c.p.wetMode = 2; c.p.modWet = 1; c.p.time = 1; c.p.clock = 0.7; c.p.smooth = true;
-            c.p.wetDiv = 1; c.p.routing = 0; c.p.balance = 1; c.p.mix = 1;
+            c.p.wetDiv = 1; c.p.routing = 0; c.p.wetMix = 1; 
             c.p.mods[0].on = c.p.mods[1].on = false;
             c.prepare(FS);
             tap(c, 0);
@@ -1438,7 +1473,7 @@ int main() {
         // An 18 kHz tone, caught and played back at CLOCK 64 kHz on a 48 kHz host: squeezed down with
         // the four-point curve it came back with a 2 kHz alias 20 dB under it (WORN: louder than it).
         for (int worn = 0; worn < 3; ++worn) {
-            brood::Core c; c.p.loopMode = 1; c.p.routing = 2; c.p.balance = 0; c.p.mix = 1; c.p.memory = 0.3; c.p.clock = 1; c.p.modLoop = 0.66;
+            brood::Core c; c.p.loopMode = 1; c.p.routing = 2; c.p.wetMix = 0; c.p.memory = 0.3; c.p.clock = 1; c.p.modLoop = 0.66;
             c.p.classic = worn > 0; c.p.wearPost = worn == 2; c.p.wearNoise = 0;
             c.p.mods[0].on = c.p.mods[1].on = false;
             c.prepare(FS);
@@ -1451,7 +1486,7 @@ int main() {
         // An 18 kHz overdub at TAPE 0.5x: recording at half the rate, it folded back to 14 kHz louder
         // than the tone itself.
         {
-            brood::Core c; c.p.loopMode = 1; c.p.routing = 2; c.p.balance = 0; c.p.mix = 1; c.p.memory = 0.3; c.p.clock = 1;
+            brood::Core c; c.p.loopMode = 1; c.p.routing = 2; c.p.wetMix = 0; c.p.memory = 0.3; c.p.clock = 1;
             c.p.modLoop = 0.5; c.p.fade = 1;
             c.p.mods[0].on = c.p.mods[1].on = false;
             c.prepare(FS);
@@ -1467,7 +1502,7 @@ int main() {
     }
     {   // A transport loop at TAPE 0.5x under the host's loop brace: each time the brace jumps the song
         // back two bars, the playhead moves back two bars' worth of take at 0.5x, not at 1x
-        brood::Core c; c.p.clock = 1; c.p.loopMode = 1; c.p.modLoop = 0.5; c.p.memory = 0.8; c.p.mix = 1; c.p.balance = 0; c.p.routing = 2;
+        brood::Core c; c.p.clock = 1; c.p.loopMode = 1; c.p.modLoop = 0.5; c.p.memory = 0.8; c.p.wetMix = 0; c.p.routing = 2;
         c.p.bpm = 120; c.p.hostPlaying = true; c.prepare(FS);
         double ppq = 0, before = -1;
         int checked = 0, wrong = 0;
@@ -1500,7 +1535,7 @@ int main() {
         CHECK(checked >= 5 && wrong == 0, "transport loop at 0.5x: the loop brace moves the playhead by its own rate (%d of %d off, worst %.3f s)", wrong, checked, worst);
     }
     {   // TAPE ECHO
-        auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.mix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
+        auto echo = [](bool tape) { brood::Core c; c.p.tapeDelay = tape; c.p.wetMode = 1; c.p.wetMix = 1; c.p.modWet = 0.5; c.p.time = 0.3; c.p.clock = 1; c.p.routing = 0; c.prepare(FS); tap(c, 0); return c; };
         const auto tone1k = [](double t) { return 0.3 * std::sin(2 * brood::kPi * 1000 * t); };
         auto maxStep = [](const std::vector<float>& a, double s) { double m = 0; for (size_t i = static_cast<size_t>(s * FS) + 1; i < a.size(); ++i) m = std::max(m, static_cast<double>(std::fabs(a[i] - a[i - 1]))); return m; };
         {   // sweeping TIME bends the echo's pitch, without a step

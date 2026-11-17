@@ -1,0 +1,15 @@
+# RESAMPLE, one pass of the window, ROUTING LOOP with WET MIX at 0.6: the take is the loop and
+# its reverb as heard, ROUTING goes OFF and the old tail rings out. Then UNDO, REDO.
+rate 48000
+seconds 12
+0 param routing 2
+0 param wetMix 0.6
+0 param time 0.6
+0 param loopMode 1
+0 param memory 0.3
+0 param clock 0.9
+100 fs loop down
+104 fs loop up
+700 op resample
+1900 op undo
+2300 op redo

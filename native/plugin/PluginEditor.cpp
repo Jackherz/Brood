@@ -75,9 +75,8 @@ juce::Font capFont() { return kit::label(14); }   // the take strip: the screen 
 juce::Font labelFont() { return nameFont(16); }
 juce::Font textFont() { return font(18); }
 constexpr int kSp1 = 4, kSp2 = 8;
-constexpr int kBalanceEnd = 32;
-const juce::Colour kMoss(0xff5d7046);   // LOOP's section mark; ochre stays for "on"   // room for LOOP at BALANCE's left end
-constexpr int balanceRouteBits = (1 << 6) | (1 << (brood::kModTargets + 6));   // in routeMask(): either source to BALANCE
+const juce::Colour kMoss(0xff5d7046);   // LOOP's section mark; ochre stays for "on"
+constexpr int loopLevelRouteBits = (1 << 6) | (1 << (brood::kModTargets + 6));   // in routeMask(): either source to LOOP LEVEL
 
 constexpr int W = 1200, H = 820;
 
@@ -87,10 +86,10 @@ constexpr int W = 1200, H = 820;
 const char* kWhisper[6][4] = {
     {"How long the room keeps breathing", "How far back the echo remembers",
      "How wide a slice of time is borrowed", "How far back the threads reach"},
-    {"Your dry sound against Brood: the loop and the room. Left is dry alone, right is Brood alone, the middle both in full",
-     "Your dry sound against Brood: the loop and the echoes. Left is dry alone, right is Brood alone, the middle both in full",
-     "Your dry sound against Brood: the loop and the slipped slices. Left is dry alone, right is Brood alone, the middle both in full",
-     "Your dry sound against Brood: the loop and the threads. Left is dry alone, right is Brood alone, the middle both in full"},
+    {"What ROUTING sends, against the room. Left is the sound alone, right is the room alone, the middle both in full",
+     "What ROUTING sends, against the echoes. Left is the sound alone, right is the echoes alone, the middle both in full",
+     "What ROUTING sends, against the slipped slices. Left is the sound alone, right is the slices alone, the middle both in full",
+     "What ROUTING sends, against the threads. Left is the sound alone, right is the threads alone, the middle both in full"},
     {"How much of the moment gets caught", "The size of the window that repeats",
      "How wide each grain is stretched", "How much of the moment gets caught"},
     {"How much the surface smears", "How much the echo wants to stay",
@@ -481,8 +480,12 @@ void BroodEditor::ThreeWay::paint(juce::Graphics& g) {
     for (int i = 0; i < count; ++i) {
         const int x0 = bounds.getX() + bounds.getWidth() * i / count, x1 = bounds.getX() + bounds.getWidth() * (i + 1) / count;
         const juce::Rectangle<int> r(x0, bounds.getY(), x1 - x0, bounds.getHeight());
-        if (i == index) plate(g, r.toFloat().reduced(2.f), kInk, 4.f);
-        g.setColour(i == index ? kPaper : kInk); g.setFont(nameFont(16));
+        const bool temp = effective >= 0 && effective != index;
+        if (i == index && !temp) plate(g, r.toFloat().reduced(2.f), kInk, 4.f);
+        // For now the sound has another cell: that one lit, the chosen one outlined.
+        if (temp && i == effective) plate(g, r.toFloat().reduced(2.f), stock().lit, 4.f);
+        if (temp && i == index) { g.setColour(kInk); g.drawRoundedRectangle(r.toFloat().reduced(2.5f), 4.f, 1.5f); }
+        g.setColour(i == index && !temp ? kPaper : kInk); g.setFont(nameFont(16));
         g.drawFittedText(labels[i].toUpperCase(), r.reduced(2, 0), juce::Justification::centred, 1, 0.8f);
     }
 }
@@ -556,9 +559,10 @@ void BroodEditor::Footswitch::paint(juce::Graphics& g) {
     g.setColour(lit ? stock().lit : kInk.withAlpha(0.25f)); g.fillEllipse(led.toFloat());
     row.removeFromLeft(10);
     g.setColour(kInk); g.setFont(nameFont(24));
-    g.drawText(name, row.removeFromLeft(62), juce::Justification::centredLeft);
+    g.drawText(name, row.removeFromLeft(juce::jmax(62, kit::textWidth(g.getCurrentFont(), name) + 6)), juce::Justification::centredLeft);
     g.setFont(font(16));
-    g.drawText("[ " + keyName + " ]", row.removeFromRight(36), juce::Justification::centredRight);
+    // Narrowed beside OVERDUB and RESAMPLE, the key's hint goes before the name would be cut.
+    if (row.getWidth() >= 36) g.drawText("[ " + keyName + " ]", row.removeFromRight(36), juce::Justification::centredRight);
     g.setColour(kMuted);
     if (row.getWidth() >= kit::textWidth(g.getCurrentFont(), "TAP / HOLD") + 8)   // narrowed beside OVERDUB, it goes
         g.drawText("TAP / HOLD", row, juce::Justification::centred);
@@ -592,9 +596,15 @@ void BroodEditor::updateTakeControls() {
     };
     grey(overdub, proc.ui.canOverdub.load() || proc.ui.dubLatched.load());
     grey(clearTake, proc.ui.lsrc.load() > 0 || proc.ui.loopLed.load() == 2 || proc.ui.recArmed.load());
-    grey(undoTake, proc.ui.undoKind.load() != 0 && proc.ui.loopLed.load() != 2 && !proc.ui.recArmed.load());
-    const juce::String undoText = proc.ui.undoRedo.load() ? "REDO" : "UNDO";
+    // UNDO says how far back it goes; while a RECORD take or a RESAMPLE runs it stands that down.
+    const int depth = proc.ui.undoDepth.load();
+    const bool standDown = proc.ui.loopLed.load() == 2 || proc.ui.recArmed.load() || proc.ui.resampling.load();
+    grey(undoTake, depth > 0 || standDown);
+    grey(redoTake, proc.ui.redoDepth.load() > 0);
+    const juce::String undoText = depth > 0 && !standDown ? "UNDO " + juce::String(depth) : juce::String("UNDO");
     if (undoTake.getButtonText() != undoText) undoTake.setButtonText(undoText);
+    grey(resampleKey, proc.ui.canResample.load() || proc.ui.resampling.load());
+    if (resampleKey.getToggleState() != proc.ui.resampling.load()) resampleKey.setToggleState(proc.ui.resampling.load(), juce::dontSendNotification);
 }
 
 // ───────── loop display ─────────
@@ -784,7 +794,7 @@ void BroodEditor::LoopView::paint(juce::Graphics& g) {
         g.fillRect(b.getWidth() * static_cast<float>(t / seconds), b.getBottom() - 6.f, 1.f, 6.f);
     const int n = BroodProcessor::kWaveBins;
     const float bw = b.getWidth() / n;
-    const float gain = juce::Decibels::decibelsToGain(proc.apvts.getRawParameterValue("loopDb")->load());   // what you see is the level you hear
+    const float gain = static_cast<float>(brood::loopLevelGain(proc.apvts.getRawParameterValue("loopLevel")->load()));   // what you see is the level you hear
     const float rise = b.getHeight() / 2 - 10.f;
     for (int i = 0; i < n; ++i) {
         const float a = std::min(1.f, wave[static_cast<size_t>(i)] * 1.6f * gain) * rise;
@@ -836,7 +846,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
       benchStrip(stock(), "BROOD", "", "BROOD"), loopView(p) {
     setLookAndFeel(&look);
     const std::pair<const char*, const char*> defs[] = {
-        {"time", "TIME"}, {"mix", "MIX"}, {"length", "LENGTH"}, {"modWet", "MODIFY"}, {"clock", "CLOCK"}, {"modLoop", "MODIFY"}};
+        {"time", "TIME"}, {"wetMix", "WET MIX"}, {"length", "LENGTH"}, {"modWet", "MODIFY"}, {"clock", "CLOCK"}, {"modLoop", "MODIFY"}};
     for (const auto& [id, label] : defs) {
         Knob k { id, label, std::make_unique<ModSlider>(juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox), nullptr };
         k.slider->editor = this;
@@ -864,7 +874,12 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         };
     };
     wetMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("wetMode"), juce::StringArray{"Reverb", "Delay", "Slip", "Weave"}, modeChanged("WET MODE", "wetMode"));
-    routing = std::make_unique<ThreeWay>(*proc.apvts.getParameter("routing"), juce::StringArray{"In", "In + Loop", "Loop"}, modeChanged("ROUTING", "routing"));
+    routing = std::make_unique<ThreeWay>(*proc.apvts.getParameter("routing"), juce::StringArray{"In", "In + Loop", "Loop", "Off"}, modeChanged("ROUTING", "routing"));
+    monitor = std::make_unique<ThreeWay>(*proc.apvts.getParameter("monitor"), juce::StringArray{"Auto", "On", "Off"}, [this] {
+        if (isVisible()) showReadout("INPUT MONITOR", proc.describe("monitor"));
+        repaintDesign(inputArea);
+    });
+    addAndMakeVisible(*monitor);
     loopMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("loopMode"), juce::StringArray{"Env", "Tape", "Stretch"}, modeChanged("LOOP MODE", "loopMode"));
     for (auto* t : {wetMode.get(), routing.get(), loopMode.get()}) addAndMakeVisible(*t);
     recMode = std::make_unique<ThreeWay>(*proc.apvts.getParameter("recMode"), juce::StringArray{"Capture", "Record"}, [this] {
@@ -881,53 +896,50 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     recAtTap.onClick = [this] { showReadout("RECORD", recAtTap.getToggleState() ? "bars start at the tap" : "bars start on the next bar line"); };
     addChildComponent(recAtTap);
     recAtTapAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "recAtTap", recAtTap);
-    fsWet = std::make_unique<Footswitch>(*proc.apvts.getParameter("wetSwitch"), "WET", "A");
+    fsWet = std::make_unique<Footswitch>(*proc.apvts.getParameter("freezeKey"), "FREEZE", "A");
     fsLoop = std::make_unique<Footswitch>(*proc.apvts.getParameter("loopSwitch"), "LOOP", "L");
     addAndMakeVisible(*fsWet); addAndMakeVisible(*fsLoop);
     overdub.getProperties().set("plate", true);
     overdub.onClick = [this] { showReadout("OVERDUB", overdub.getToggleState() ? "layering until you switch it off" : "off"); };
     addAndMakeVisible(overdub);
     overdubAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(proc.apvts, "overdub", overdub);
-    for (auto* b : {&clearTake, &undoTake}) loopView.addAndMakeVisible(*b);
+    for (auto* b : {&clearTake, &undoTake, &redoTake}) loopView.addAndMakeVisible(*b);
     clearTake.onClick = [this] { pulse("clear"); showReadout("LOOP", "cleared. undo brings it back"); };
     undoTake.onClick = [this] {
-        static const char* const what[] = {"", "the take before", "the cleared take", "the layer"};
-        const int kind = juce::jlimit(0, 3, proc.ui.undoKind.load());
-        const bool redo = proc.ui.undoRedo.load();
+        const bool standDown = proc.ui.loopLed.load() == 2 || proc.ui.recArmed.load() || proc.ui.resampling.load();
+        const auto what = proc.history->nextUndoLabel().toLowerCase();
         pulse("undo");
-        showReadout(redo ? "REDO" : "UNDO", juce::String(redo ? "again: " : "back to ") + (kind == 3 ? (redo ? "the layer is back" : "before the layer") : what[kind]));
+        showReadout("UNDO", standDown ? juce::String("stood down, the take as it was") : "back before the " + what);
+    };
+    redoTake.onClick = [this] {
+        const auto what = proc.history->nextRedoLabel().toLowerCase();
+        pulse("redo");
+        showReadout("REDO", "the " + what + " again");
     };
     addAndMakeVisible(loopView);
-    // Normalise, as on Silt: the take's loudest moment to -1 dB.
-    gainBox = std::make_unique<GainBox>(*proc.apvts.getParameter("loopDb"), [this] {
-        std::array<float, BroodProcessor::kWaveBins> peaks {};
-        const float peak = proc.copyWave(peaks) ? *std::max_element(peaks.begin(), peaks.end()) : 0.f;
-        return peak > 1e-5f ? juce::jlimit(-24.f, 12.f, -1.f - juce::Decibels::gainToDecibels(peak)) : 0.f;
-    });
-    loopView.addAndMakeVisible(*gainBox);
-
-    inputGain.setSliderStyle(juce::Slider::LinearHorizontal);
-    inputGain.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    inputGain.setRange(0, 15.85);   // up to +24 dB, with unity in the middle of the travel
-    inputGain.setSkewFactorFromMidPoint(1.0);
-    inputGain.setDoubleClickReturnValue(true, 1.0);
-    inputGain.setValue(proc.inputGain.load(), juce::dontSendNotification);
-    inputGain.setTitle("Input level");
-    inputGain.onValueChange = [this] {
-        proc.inputGain = static_cast<float>(inputGain.getValue());
-        const auto db = juce::Decibels::gainToDecibels(proc.inputGain.load(), -100.f);
-        showReadout("LEVEL", juce::String(db, 1) + " dB" + (db > 0.05f ? ", into old tape" : ""));
-        repaintDesign(hoodArea);
+    resampleKey.getProperties().set("plate", true);
+    resampleKey.setClickingTogglesState(false);
+    resampleKey.onClick = [this] {
+        const bool running = proc.ui.resampling.load();
+        pulse("resample");
+        showReadout("RESAMPLE", running ? "stopped there, kept" : "playing the loop into a new take");
     };
-    addAndMakeVisible(inputGain);
-    balance.editor = this;
-    balance.target = 6;
-    balance.setSliderStyle(juce::Slider::LinearHorizontal);
-    balance.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    balance.setTitle("Balance");
-    balance.onValueChange = [this] { touch("balance"); };
-    addAndMakeVisible(balance);
-    balanceAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "balance", balance);
+    addAndMakeVisible(resampleKey);
+
+    inputLevel.setSliderStyle(juce::Slider::LinearHorizontal);
+    inputLevel.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    inputLevel.setTitle("Input level");
+    inputLevel.onValueChange = [this] { touch("inputLevel"); repaintDesign(inputArea); };
+    addAndMakeVisible(inputLevel);
+    inputLevelAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "inputLevel", inputLevel);
+    loopLevel.editor = this;
+    loopLevel.target = 6;
+    loopLevel.setSliderStyle(juce::Slider::LinearHorizontal);
+    loopLevel.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    loopLevel.setTitle("Loop level");
+    loopLevel.onValueChange = [this] { touch("loopLevel"); };
+    addAndMakeVisible(loopLevel);
+    loopLevelAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(proc.apvts, "loopLevel", loopLevel);
     auto loopSlider = [this](juce::Slider& sl, const char* id, const char* name) {
         sl.setSliderStyle(juce::Slider::LinearHorizontal);
         sl.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -942,15 +954,11 @@ BroodEditor::BroodEditor(BroodProcessor& p)
         if (loopView.windowText.isNotEmpty()) showReadout(loopView.dragging == 0 ? "START" : loopView.dragging == 1 ? "END" : "THE WINDOW", loopView.windowText);
         loopView.repaint();
     };
-    // One row of four switches. DRY KILL was MIX at the top of its travel, LATCH is
-    // what FREEZE does, SPREAD is WIDTH above the middle, and SYNC sits beside the
-    // knob it governs. FREEZE and CLASSIC came up from under the hood: they are
-    // switches, and the hood is now sliders only.
+    // TRAILS and SMOOTH. FREEZE is the big key now (tap latches, hold freezes while held).
     struct DipDef { const char* id; const char* label; const char* on; const char* off; };
     static constexpr DipDef dipDefs[] = {
         {"trails", "Trails", "tails keep falling", "tails cut"},
         {"smooth", "Smooth", "clock glides", "clock steps"},
-        {"freeze", "Freeze", "held, ringing", "moving"},
     };
     for (size_t i = 0; i < dips.size(); ++i) {
         const auto& def = dipDefs[i];
@@ -1067,7 +1075,7 @@ BroodEditor::BroodEditor(BroodProcessor& p)
     benchSource.setTitle("What SEND sends");
     addAndMakeVisible(benchSource);
 
-    // The bottom strip: LEVEL (above), then the four sliders the pedal keeps behind both footswitches.
+    // The bottom strip: the four sliders the pedal keeps behind both footswitches.
     const std::pair<const char*, const char*> hoodDefs[] = {
         {"tone", "TONE"}, {"fade", "FADE"}, {"width", "WIDTH"}, {"wearNoise", "NOISE"}};
     for (size_t i = 0; i < hood.size(); ++i) {
@@ -1128,7 +1136,7 @@ void BroodEditor::touch(const juce::String& id) {
     // The readout's own names for the parameters, so it never shows a raw id.
     static const std::pair<const char*, const char*> names[] = {
         {"loopEnd", "END"}, {"start", "START"},
-        {"balance", "BALANCE"}, {"mod1Rate", "MOD 1 RATE"}, {"mod2Rate", "MOD 2 RATE"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"}, {"wearNoise", "NOISE"},
+        {"loopLevel", "LOOP LEVEL"}, {"inputLevel", "INPUT LEVEL"}, {"mod1Rate", "MOD 1 RATE"}, {"mod2Rate", "MOD 2 RATE"}, {"wetDiv", "WET DIV"}, {"loopDiv", "LOOP DIV"}, {"wearNoise", "NOISE"},
     };
     juce::String label = id.toUpperCase();
     for (const auto& [key, name] : names) if (id == key) label = name;
@@ -1137,7 +1145,7 @@ void BroodEditor::touch(const juce::String& id) {
     if (id == "clock") repaintDesign(pedalArea);
     // The small readouts beside the trim and hood sliders are drawn by this
     // editor rather than by the control, so they need a repaint to follow it.
-    if (id == "memory" || id == "start" || id == "loopEnd" || id == "balance") repaintDesign(loopArea);
+    if (id == "memory" || id == "start" || id == "loopEnd" || id == "loopLevel") repaintDesign(loopArea);
     if (id == "mod1Rate" || id == "mod2Rate") repaintDesign(rampArea);
     if (id == "tone" || id == "fade" || id == "width" || id == "wetDiv" || id == "loopDiv" || id == "wearNoise") repaintDesign(hoodArea);
     if (id == "wetDiv") repaintDesign(pedalArea);   // TIME's readout counts WET DIV in
@@ -1188,7 +1196,7 @@ void BroodEditor::chipClicked(int k) {
 }
 
 juce::Rectangle<int> BroodEditor::targetDesign(int t) const {
-    if (t == 6) return balanceDesign.expanded(4, 6);
+    if (t == 6) return loopLevelDesign.expanded(4, 6);
     static constexpr int knobOf[] = {0, 1, 2, 3, 4, 5};
     return knobDesign[knobOf[t]];
 }
@@ -1200,7 +1208,7 @@ int BroodEditor::targetAt(juce::Point<int> screen, juce::Point<float>& design) c
     design = {x, y};
     // Knobs in this order hold what kModTargetIds lists, so look each one up by id.
     for (int t = 0; t < brood::kModTargets; ++t) {
-        juce::Rectangle<int> rect = t == 6 ? balanceDesign.expanded(4, 6) : juce::Rectangle<int>();
+        juce::Rectangle<int> rect = t == 6 ? loopLevelDesign.expanded(4, 6) : juce::Rectangle<int>();
         if (t < 6) for (size_t i = 0; i < knobs.size(); ++i) if (knobs[i].id == brood::kModTargetIds[t]) rect = knobDesign[i];
         if (rect.toFloat().contains(design)) return t;
     }
@@ -1299,7 +1307,7 @@ void BroodEditor::paintOverChildren(juce::Graphics& g) {
     const auto colour = modColour(dragSource);
     if (dropTarget >= 0) {
         g.setColour(colour);
-        g.drawRect(dropTarget == 6 ? balanceDesign.expanded(4, 6) : [&] {
+        g.drawRect(dropTarget == 6 ? loopLevelDesign.expanded(4, 6) : [&] {
             juce::Rectangle<int> rect;
             for (size_t i = 0; i < knobs.size(); ++i) if (knobs[i].id == brood::kModTargetIds[dropTarget]) rect = knobDesign[i];
             return rect;
@@ -1424,23 +1432,24 @@ void BroodEditor::resized() {
     // value under its knob and each switch under the value it belongs with.
     loopViewDesign = {pedalArea.getX() + 14, pedalArea.getY() + 8, pedalArea.getWidth() - 28, 100};
     place(loopView, loopViewDesign);
-    const auto gainLocal = juce::Rectangle<int>(130, 16).withPosition(loopViewDesign.getWidth() - 130, 0);
-    gainBox->setBounds(gainLocal);
-    // CLEAR and UNDO on the heading, left of GAIN.
-    const auto undoLocal = juce::Rectangle<int>(52, 15).withPosition(gainLocal.getX() - 6 - 52, 0);
+    // CLEAR, UNDO (with how far back it goes) and REDO on the heading, at its right.
+    const auto redoLocal = juce::Rectangle<int>(52, 15).withPosition(loopViewDesign.getWidth() - 52, 0);
+    const auto undoLocal = juce::Rectangle<int>(66, 15).withPosition(redoLocal.getX() - 4 - 66, 0);
     const auto clearLocal = undoLocal.withX(undoLocal.getX() - 4 - 56).withWidth(56);
-    undoTake.setBounds(undoLocal); clearTake.setBounds(clearLocal);
+    undoTake.setBounds(undoLocal); clearTake.setBounds(clearLocal); redoTake.setBounds(redoLocal);
     undoDesign = undoLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
     clearDesign = clearLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
-    gainDesign = gainLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
+    redoDesign = redoLocal.translated(loopViewDesign.getX(), loopViewDesign.getY());
     const int cx[3] = {pedalArea.getX() + 138, pedalArea.getX() + 414, pedalArea.getX() + 690};
     fsWetDesign = juce::Rectangle<int>(248, 46).withCentre({cx[0], 245});
-    // LOOP gives up some width for OVERDUB beside it, the plate the same height as the switch.
-    fsLoopDesign = juce::Rectangle<int>(176, 46).withPosition(cx[2] - 124, 222);
-    overdubDesign = juce::Rectangle<int>(70, 43).withPosition(fsLoopDesign.getRight() + 2, 222);
+    // LOOP gives up width for OVERDUB and RESAMPLE beside it, plates the same height as the switch.
+    fsLoopDesign = juce::Rectangle<int>(118, 46).withPosition(cx[2] - 124, 222);
+    overdubDesign = juce::Rectangle<int>(62, 43).withPosition(fsLoopDesign.getRight() + 2, 222);
+    resampleDesign = juce::Rectangle<int>(66, 43).withPosition(overdubDesign.getRight() + 2, 222);
     place(*fsWet, fsWetDesign);
     place(*fsLoop, fsLoopDesign);
     place(overdub, overdubDesign);
+    place(resampleKey, resampleDesign);
     // Between them, what's true of both sides: how worn the one clock is.
     characterDesign = juce::Rectangle<int>(138, 24).withCentre({cx[1], 234});   // 8 wider for PEDAL in Chivo Mono
     place(*character, characterDesign);
@@ -1467,11 +1476,9 @@ void BroodEditor::resized() {
     place(*wetMode, wetModeDesign);
     place(*routing, routingDesign);
     place(*loopMode, loopModeDesign);
-    // The switches, each with what it acts on: FREEZE and TRAILS under the wet column, SMOOTH
-    // under CLOCK.
+    // The switches, each with what it acts on: TRAILS under the wet column, SMOOTH under CLOCK.
     const int switchY = knobDesign[3].getBottom() + 18;
-    dipCellDesign[2] = {cx[0] - 124, switchY, 54, 19};   // FREEZE
-    dipCellDesign[0] = {cx[0] - 66, switchY, 54, 19};    // TRAILS
+    dipCellDesign[0] = {cx[0] - 124, switchY, 54, 19};   // TRAILS
     dipCellDesign[1] = juce::Rectangle<int>(66, 19).withCentre({cx[1], switchY + 10});   // SMOOTH
     for (size_t i = 0; i < dips.size(); ++i) place(*dips[i].button, dipCellDesign[i]);
     // WET DIV beside TRAILS; LOOP DIV mirrors it in the loop column.
@@ -1487,23 +1494,30 @@ void BroodEditor::resized() {
     auto side = juce::Rectangle<int>(864, 108, 312, 548);
     lcdArea = side.removeFromTop(112);
     side.removeFromTop(10);
-    loopArea = side.removeFromTop(113);
+    inputArea = side.removeFromTop(86);
+    side.removeFromTop(10);
+    loopArea = side.removeFromTop(112);
     side.removeFromTop(10);
     rampArea = side;
 
     // 01 LOOP: two rows of label / slider / figure on the same three columns so the figures line up.
     constexpr int labelW = 74, figureW = 44;
-    auto inner = loopArea.withTrimmedTop(kit::panelHeadHeight).reduced(12, 6);
+    // 01 INPUT: its level, and whether you hear it.
+    auto inner = inputArea.withTrimmedTop(kit::panelHeadHeight).reduced(12, 6);
     inner.removeFromTop(4);
     auto trimRow = [&](juce::Rectangle<int>& out, juce::Slider& sl) {
         out = inner.removeFromTop(21).withTrimmedLeft(labelW).withTrimmedRight(figureW);
         place(sl, out);
         inner.removeFromTop(4);
     };
+    trimRow(inputLevelDesign, inputLevel);
+    monitorDesign = inner.removeFromTop(22).withTrimmedLeft(labelW);
+    place(*monitor, monitorDesign);
+    // 02 LOOP: its level, MEMORY, and CAPTURE or RECORD.
+    inner = loopArea.withTrimmedTop(kit::panelHeadHeight).reduced(12, 6);
+    inner.removeFromTop(4);
+    trimRow(loopLevelDesign, loopLevel);
     trimRow(memoryDesign, memory);
-    trimRow(balanceDesign, balance);
-    balanceDesign = balanceDesign.withTrimmedLeft(kBalanceEnd);   // LOOP is printed at the left end
-    place(balance, balanceDesign);
     auto recRow = inner.removeFromTop(21);
     recModeDesign = recRow.removeFromLeft(120);
     recRow.removeFromLeft(6);
@@ -1516,8 +1530,8 @@ void BroodEditor::resized() {
 
     // MODULATION: the two sources and the route list; under them, once a chip is clicked,
     // that source's shape, rate and switches.
-    auto ramp = rampArea.withTrimmedTop(kit::panelHeadHeight).reduced(10, 7);
-    auto rampRow = ramp.removeFromTop(120);
+    auto ramp = rampArea.withTrimmedTop(kit::panelHeadHeight).reduced(10, 6);
+    auto rampRow = ramp.removeFromTop(82);
     routesDesign = rampRow.removeFromRight(60);
     rampRow.removeFromRight(6);
     const int chipW = (rampRow.getWidth() - 6) / 2;
@@ -1527,13 +1541,13 @@ void BroodEditor::resized() {
     place(*chips[0], chipDesign[0]);
     place(*chips[1], chipDesign[1]);
     place(routesButton, routesDesign);
-    ramp.removeFromTop(18);
+    ramp.removeFromTop(8);
     rampRow = ramp.removeFromTop(28);
     const int half = (rampRow.getWidth() - kSp2) / 2;
     rampWaveDesign = rampRow.removeFromLeft(half);
     rampRow.removeFromLeft(kSp2);
     rampRateDesign = rampRow;                    // "RATE" and its figure are painted at the ends
-    ramp.removeFromTop(18);
+    ramp.removeFromTop(8);
     rampRow = ramp.removeFromTop(26);
     // Three even cells: UNI, SYNC, HOLD.
     const int swTotal = rampRow.getWidth();
@@ -1546,15 +1560,12 @@ void BroodEditor::resized() {
     }
 
     // ── the bottom strip ──
-    // A band across the whole panel, always open: LEVEL, then TONE, FADE, WIDTH and NOISE,
-    // in five even cells.
+    // A band across the whole panel, always open: TONE, FADE, WIDTH and NOISE, in four even cells.
     hoodArea = {24, 668, 1152, 67};
     const int hoodLeft = hoodArea.getX() + 14;
-    const int cell = (hoodArea.getRight() - 14 - hoodLeft - 4 * 24) / 5;
-    for (int i = 0; i < 5; ++i) hoodCellDesign[i] = {hoodLeft + i * (cell + 24), hoodArea.getY() + 8, cell, 52};
-    inputGainDesign = hoodCellDesign[0].withY(hoodArea.getY() + 30).withHeight(26);
-    place(inputGain, inputGainDesign);
-    for (size_t i = 0; i < hood.size(); ++i) place(hood[i].slider, hoodCellDesign[i + 1].withY(hoodArea.getY() + 30).withHeight(26));
+    const int cell = (hoodArea.getRight() - 14 - hoodLeft - 3 * 32) / 4;
+    for (int i = 0; i < 4; ++i) hoodCellDesign[i] = {hoodLeft + i * (cell + 32), hoodArea.getY() + 8, cell, 52};
+    for (size_t i = 0; i < hood.size(); ++i) place(hood[i].slider, hoodCellDesign[i].withY(hoodArea.getY() + 30).withHeight(26));
     updateKnobValues();
     rebuildHoverHelp();
 }
@@ -1568,11 +1579,10 @@ void BroodEditor::rebuildHoverHelp() {
         hoverHelp.push_back({r, juce::String(label), juce::String(text)});
     };
     static const char* dipText[] = {
-        "The tails keep falling after you switch the wet side off.",
+        "The tails keep falling after you set ROUTING to OFF.",
         "The sample rate slides instead of stepping, so CLOCK bends pitch as it turns.",
-        "The hold gesture without the holding: the wet side comes up frozen and rings on its own.",
     };
-    static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE"};
+    static const char* dipNames[] = {"TRAILS", "SMOOTH"};
     add(characterDesign, "WEAR", "Clean to worn. Clean= fewer artefacts. Worn= noise, a loop that warbles and a longer reverb.");
     for (size_t i = 0; i < dips.size(); ++i) if (dips[i].button->isVisible()) add(dipCellDesign[i], dipNames[i], dipText[i]);
     if (wearPost->isVisible())
@@ -1602,27 +1612,28 @@ void BroodEditor::rebuildHoverHelp() {
     if (modOpen) for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
     add(memoryDesign.expanded(0, 2), "MEMORY", "In CAPTURE mode, MEMORY relates to how much of the input audio is captured. All the way left for short loops, and all the way right for loops of up to 30 seconds.");
-    add(gainDesign, "GAIN", "The loop's own level. Drag or scroll; hold Shift for fine. Double-click for 0 dB, right-click to normalise.");
-    // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
+    // CLEAR, UNDO and REDO sit inside the window, and the first match wins, so they go first.
     add(clearDesign, "CLEAR", "Empties the take. UNDO brings it back.");
-    add(undoDesign, "UNDO", "One step back: a clear, a new take, or the last overdub layer. Press again to redo.");
+    add(undoDesign, "UNDO", "Steps back through the last four things you did: a knob, a preset, a new take, a layer, a clear or a resample. The number is how far it can go.");
+    add(redoDesign, "REDO", "Puts back what UNDO took away, until you do something new.");
     add(loopViewDesign, "THE WINDOW", "Drag START or END to trim the loop. Double-click for the whole take.");
     add(recModeDesign, "CAPTURE / RECORD", "CAPTURE= a tap keeps what you just played. RECORD= tap to start, tap to play, or hold to overdub.");
     if (recBars->isVisible()) {
         add(recBarsDesign, "BARS", "Free records until the next tap. A number records that many bars, then plays.");
         add(recAtTapDesign, "AT TAP", "Off= a bar count waits for the next bar line, so loops land on the grid. On= it starts the moment you tap.");
     }
-    add(balanceDesign.withTrimmedLeft(-kBalanceEnd).expanded(0, 2), "BALANCE", "Left= just the loop. Right= just the wet side. Middle= both in full. Drag up or down on it to add modulation.");
-
-    add(hoodCellDesign[0], "LEVEL", "How hard the input hits the machine. Past the middle it's driven into old tape: rounder, duller, a little hiss.");
+    add(loopLevelDesign.expanded(0, 2), "LOOP LEVEL", "How loud the loop is, and how loud it reaches WET. Drag up or down on it to add modulation.");
+    add(inputLevelDesign.expanded(0, 2), "INPUT LEVEL", "The input, before everything: what you hear of it and what Brood keeps. Past 0 dB it's driven into old tape.");
+    add(monitorDesign, "INPUT MONITOR", "Whether you hear the input. AUTO= heard until a loop plays, and again while you overdub. ON= always. OFF= never, and no overdub.");
+    add(resampleDesign, "RESAMPLE", "Plays one pass of the loop, as you hear it, into a new take that replaces it. Live input stays out. UNDO brings the old one back.");
 
     add(wetModeDesign, "WET MODE", "Four ways of treating time: reverb, delay, slip, weave.");
-    add(routingDesign, "ROUTING", "What the wet side hears. IN= the input. IN + LOOP= input and loop. LOOP= just the loop.");
+    add(routingDesign, "ROUTING", "What WET hears. IN= the input. IN + LOOP= input and loop. LOOP= just the loop. OFF= nothing. Lit in ochre: what it hears for now.");
     add(loopModeDesign, "LOOP MODE", "Three ways of holding a moment: envelope, tape, stretch.");
 
-    add(fsWetDesign, "WET", "Tap for the wet side, hold to freeze it where it stands. Key A.");
+    add(fsWetDesign, "FREEZE", "Tap to hold WET where it stands, tap again to let it go. Hold to freeze only while held. Key A.");
     add(fsLoopDesign, "LOOP", "Tap to catch the recent past, tap again to stop, hold to overdub. Key L.");
-    add(overdubDesign, "OVERDUB", "Latches: layers into the playing loop until you switch it off. Needs a loop playing.");
+    add(overdubDesign, "OVERDUB", "Latches: layers into the playing loop until you switch it off. Needs a loop playing, and INPUT MONITOR on or AUTO.");
 
     add(benchSourceDesign, "SEND", "What SEND sends: the loop, or the exact output for that many bars, from the next bar line.");
     add(presetBarDesign, "PATCH", "Click the name to search, star and audition sounds. The arrows step through them. SAVE keeps what you hear.");
@@ -1634,7 +1645,7 @@ void BroodEditor::rebuildHoverHelp() {
         "How much of the worn clock's hiss is let through. Only heard with WEAR on WORN; left is silent.",
     };
     static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "NOISE"};
-    for (int i = 0; i < 4; ++i) add(hoodCellDesign[i + 1], hoodNames[i], hoodText[i]);
+    for (int i = 0; i < 4; ++i) add(hoodCellDesign[i], hoodNames[i], hoodText[i]);
     add(wetDivDesign, "WET DIV", "The wet side runs on a divided clock, so the room and the echo stretch out.");
     add(loopDivDesign, "LOOP DIV", "The loop runs on a divided clock: lower, longer, further from the other side.");
 
@@ -1722,12 +1733,18 @@ void BroodEditor::paint(juce::Graphics& g) {
     }
     g.setColour(kMuted); g.setFont(nameFont(15));
 
-    // BALANCE's readout on the LOOP heading: "LOOP 100 / WET 60", where the sound has it now
-    // while a source is moving it.
+    // INPUT's mark is its lamp: lit while the input is heard. The heading says why.
     {
-        const bool moving = (routeMaskSeen & balanceRouteBits) != 0 && routeMaskSeen != -1;
-        const float bv = moving ? juce::jlimit(0.f, 1.f, proc.ui.effective[6].load()) : proc.apvts.getRawParameterValue("balance")->load();
-        drawSection(g, loopArea, kMoss, "LOOP", proc.describe("balance", bv).toUpperCase());
+        const bool heard = proc.ui.inputHeard.load();
+        const int mon = juce::roundToInt(proc.apvts.getRawParameterValue("monitor")->load());
+        const juce::String why = mon == 1 ? "ON: HEARD" : mon == 2 ? "OFF: NOT HEARD" : heard ? "AUTO: HEARD" : "AUTO: LOOP REPLACES IT";
+        drawSection(g, inputArea, heard ? stock().lit : kInk.withAlpha(0.25f), "INPUT", why);
+    }
+    // LOOP LEVEL's readout on the LOOP heading, where the sound has it now while a source moves it.
+    {
+        const bool moving = (routeMaskSeen & loopLevelRouteBits) != 0 && routeMaskSeen != -1;
+        const float lv = moving ? juce::jlimit(0.f, 1.f, proc.ui.effective[6].load()) : proc.apvts.getRawParameterValue("loopLevel")->load();
+        drawSection(g, loopArea, kMoss, "LOOP", "LEVEL " + proc.describe("loopLevel", lv).toUpperCase());
     }
     drawSection(g, rampArea, kInk, "MODULATION", {});
 
@@ -1743,11 +1760,9 @@ void BroodEditor::paint(juce::Graphics& g) {
         rowLabel("MEMORY", memoryDesign, 74);
         if (recordMode) g.endTransparencyLayer();
     }
-    rowLabel("BALANCE", balanceDesign.withTrimmedLeft(-kBalanceEnd), 74);
-    // LOOP at the left end, WET at the right: the order every mention of BALANCE uses.
-    g.setFont(nameFont(15)); g.setColour(kMuted);
-    g.drawText("LOOP", balanceDesign.getX() - kBalanceEnd, balanceDesign.getY(), kBalanceEnd, balanceDesign.getHeight(), juce::Justification::centredLeft);
-    g.drawText("WET", balanceDesign.getRight() + kSp1, balanceDesign.getY(), 40, balanceDesign.getHeight(), juce::Justification::centredLeft);
+    rowLabel("LEVEL", loopLevelDesign, 74);
+    rowLabel("LEVEL", inputLevelDesign, 74);
+    rowLabel("MONITOR", monitorDesign, 74);
     // RATE sits inside the rate cell, so it costs no extra row. With SYNC on it is
     // no longer a rate at all, so the caption says what the readout now means.
     const juce::String modId = "mod" + juce::String(selectedMod + 1);
@@ -1770,6 +1785,13 @@ void BroodEditor::paint(juce::Graphics& g) {
     if (recordMode) g.setColour(kMuted.withMultipliedAlpha(0.35f));
     figure("memory", memoryDesign, false);
     g.setColour(kMuted);
+    // The two levels' figures, in dB.
+    auto dbFigure = [&](const char* id, const juce::Rectangle<int>& r) {
+        auto t = proc.hostValue(id, proc.apvts.getRawParameterValue(id)->load());
+        g.drawFittedText(t.replace(" dB", "").toUpperCase(), r.withX(r.getRight() + kSp1).withWidth(40), juce::Justification::centredRight, 1, 0.8f);
+    };
+    dbFigure("inputLevel", inputLevelDesign);
+    dbFigure("loopLevel", loopLevelDesign);
     // The rate's figure: a period, or with SYNC the span of the beat it turns over.
     if (const auto* rv = proc.apvts.getRawParameterValue(modId + "Rate"); rv != nullptr && modOpen) {
         const double secs = 1.0 / brood::rampHertz(rv->load());
@@ -1781,7 +1803,7 @@ void BroodEditor::paint(juce::Graphics& g) {
 
     // ── the bottom strip ──
     kit::drawSheet(g, hoodArea, stock());
-    static const char* hoodNames[] = {"LEVEL", "TONE", "FADE", "WIDTH", "NOISE"};
+    static const char* hoodNames[] = {"TONE", "FADE", "WIDTH", "NOISE"};
     static const char* hoodIds[] = {"tone", "fade", "width", "wearNoise"};
     static const float hoodDefaults[] = {1.f, 0.f, 0.5f, 1.f};
     float hv[4];
@@ -1790,16 +1812,14 @@ void BroodEditor::paint(juce::Graphics& g) {
         hv[i] = v != nullptr ? v->load() : hoodDefaults[i];
     }
     auto percent = [](float v) { return juce::String(juce::roundToInt(v * 100.f)) + "%"; };
-    const float levelDb = juce::Decibels::gainToDecibels(proc.inputGain.load(), -100.f);
-    juce::String hoodText[5];
-    hoodText[0] = (levelDb > 0.05f ? "+" : "") + juce::String(levelDb, 1) + " dB";
-    hoodText[1] = hv[0] > 0.995f ? "open" : "cut " + percent(1.f - hv[0]);
-    hoodText[2] = hv[1] <= 0.001f ? "pedal" : "keeps " + percent(1.f - hv[1]);
-    hoodText[3] = hv[2] <= 0.005f ? "mono" : hv[2] < 0.49f ? "narrow " + percent(hv[2] * 2) :
+    juce::String hoodText[4];
+    hoodText[0] = hv[0] > 0.995f ? "open" : "cut " + percent(1.f - hv[0]);
+    hoodText[1] = hv[1] <= 0.001f ? "pedal" : "keeps " + percent(1.f - hv[1]);
+    hoodText[2] = hv[2] <= 0.005f ? "mono" : hv[2] < 0.49f ? "narrow " + percent(hv[2] * 2) :
                   hv[2] > 0.51f ? "wide " + percent((hv[2] - 0.5f) * 2) : "as built";
     // Only the worn clock hisses, so that's the only time this says a figure.
-    hoodText[4] = proc.apvts.getRawParameterValue("character")->load() > 0.75f ? (hv[3] <= 0.005f ? juce::String("off") : percent(hv[3])) : juce::String("when worn");
-    for (int i = 0; i < 5; ++i) {
+    hoodText[3] = proc.apvts.getRawParameterValue("character")->load() > 0.75f ? (hv[3] <= 0.005f ? juce::String("off") : percent(hv[3])) : juce::String("when worn");
+    for (int i = 0; i < 4; ++i) {
         const auto cellRect = hoodCellDesign[i].withHeight(18);
         g.setColour(kInk); g.setFont(labelFont());
         const int nameW = kit::textWidth(g.getCurrentFont(), hoodNames[i]) + 2;
@@ -1889,7 +1909,8 @@ void BroodEditor::timerCallback() {
     const uint32_t cycles = ui.histCycles.load();
     if (cycles != lastCycles) { lastCycles = cycles; flashUntil = now + 120; }   // off: blink each new loop recorded
     const int led = ui.loopLed.load();   // 0 off, 1 play, 2 rec, 3 dub
-    const bool wetOn = ui.wetOn.load() && !(ui.freeze.load() && !blink);
+    // FREEZE's light: solid while it's held, latched or by a hand on the key.
+    const bool wetOn = ui.freeze.load();
     const bool loopOn = led == 1 || ((led == 2 || led == 3) && blink) || (led == 0 && now < flashUntil);
     // The chips' moving traces, the knobs' rings, and the route list keeping up.
     if (modulationTick) {
@@ -1907,14 +1928,30 @@ void BroodEditor::timerCallback() {
             }
         }
         if (routeMaskSeen != 0) for (auto& knob : knobs) if (knob.slider->isShowing()) knob.slider->repaint();
-        if ((routeMaskSeen & balanceRouteBits) != 0) {
-            balance.repaint();
+        if ((routeMaskSeen & loopLevelRouteBits) != 0) {
+            loopLevel.repaint();
             repaintDesign(loopArea);
         }
     }
     fsWet->setLit(wetOn);
     fsLoop->setLit(loopOn);
     updateTakeControls();
+    // ROUTING as the sound has it for now (IN while overdubbing in IN + LOOP, LOOP while
+    // resampling), and INPUT's lamp.
+    {
+        const int chosen = juce::roundToInt(proc.apvts.getRawParameterValue("routing")->load());
+        const int nowAt = ui.routingNow.load();
+        const int eff = nowAt != chosen ? nowAt : -1;
+        if (routing->effective != eff) { routing->effective = eff; routing->repaint(); }
+        const bool heard = ui.inputHeard.load();
+        if (heard != lastHeard) { lastHeard = heard; repaintDesign(inputArea); }
+    }
+    // RESAMPLE: once it has stopped at its limit, say so.
+    {
+        const bool hit = ui.resampleLimitHit.load() && !ui.resampling.load();
+        if (hit && !limitShown) showReadout("RESAMPLE", "stopped at the 30 s limit. the take is kept, undo brings the old one back");
+        limitShown = hit;
+    }
     if (led != lastLoopLed) {
         const char* msg[] = {nullptr, "playing", "recording", "overdubbing"};
         if (msg[led] != nullptr) showReadout("LOOP", msg[led]);
@@ -1929,9 +1966,14 @@ void BroodEditor::timerCallback() {
     }
     if (!slowTick) return;
     const int lsrc = ui.lsrc.load();
-    const juce::String meta = juce::String(ui.clockHz.load() / 1000.f, 1) + " kHz    "
-        + (lsrc > 0 ? "loop " + juce::String(ui.winLen.load() / ui.clockHz.load(), 2) + " s" : juce::String("no loop"))
-        + "    cpu " + juce::String(ui.load.load(), 1) + "%";
+    // While RESAMPLE runs, the screen's foot is its progress: how long so far and how long it needs.
+    const float need = ui.resampleNeed.load();
+    const juce::String rsText = need > 1e8f ? juce::String("not moving") : "of " + juce::String(need, 1) + " s" + (need > 30.f ? " (30 s max)" : "");
+    const juce::String meta = ui.resampling.load()
+        ? "resampling " + juce::String(ui.resampleSecs.load(), 1) + " s " + rsText
+        : juce::String(ui.clockHz.load() / 1000.f, 1) + " kHz    "
+            + (lsrc > 0 ? "loop " + juce::String(ui.winLen.load() / ui.clockHz.load(), 2) + " s" : juce::String("no loop"))
+            + "    cpu " + juce::String(ui.load.load(), 1) + "%";
     if (meta != lcdMeta) { lcdMeta = meta; repaintDesign(lcdArea); }
     if (readoutFollows && lastTouched.isNotEmpty()) {
         const juce::String v = proc.describe(lastTouched);   // follows automation and mode changes

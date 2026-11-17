@@ -2,12 +2,13 @@
 # bars. Sweeps the span, changes tempo underneath it, and returns to free Hz.
 rate 48000
 seconds 10
+0 param routing 3   # the old WET switch started off: ROUTING OFF
 0 param wetMode 1
 0 param loopMode 1
-0 param routing 1
+0 param routing 3
 0 param clock 0.7
 0 param time 0.5
-0 param mix 0.8
+0 param wetMix 0.8
 0 param modWet 0.5
 0 param length 0.6
 0 param mod1_time 0.5
@@ -15,8 +16,7 @@ seconds 10
 0 param mod1Sync 1
 0 param mod2Sync 1
 0 param bpm 120
-0 fs wet down
-3 fs wet up
+0 param routing 1   # was a tap on WET
 40 param mod1Rate 0.15
 40 param mod2Rate 0.15
 90 param mod1Rate 0.45

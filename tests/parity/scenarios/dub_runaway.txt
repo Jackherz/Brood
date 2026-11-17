@@ -4,8 +4,8 @@
 # GAIN +4 dB, CLOCK 64 kHz, WORN after the loop, BALANCE loop 100 / wet 20.
 rate 48000
 seconds 30
-0 param mix 1
-0 param routing 1
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param routing 3
 0 param wetMode 2
 0 param time 0.62
 0 param modWet 0.896
@@ -13,16 +13,15 @@ seconds 30
 0 param loopMode 1
 0 param modLoop 0.55
 0 param loopDiv 1
-0 param loopDb 4
+0 param loopLevel 0.866667
 0 param clock 1
 0 param classic 1
 0 param wearPost 1
 0 param wearNoise 0.29
-0 param balance 0.1
+0 param wetMix 0.1
 0 param width 1
 0 param memory 0.4
-0 fs wet down
-2 fs wet up
+0 param routing 1   # was a tap on WET
 300 fs loop down
 304 fs loop up
 1200 param overdubLatch 1

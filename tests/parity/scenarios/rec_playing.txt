@@ -2,9 +2,9 @@
 # a hold with nothing playing records a new loop.
 rate 48000
 seconds 12
-0 param mix 1
-0 param routing 2
-0 param balance 0
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param routing 3
+0 param wetMix 0
 0 param clock 1
 0 param memory 0.8
 0 param recMode 1

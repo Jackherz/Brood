@@ -2,19 +2,18 @@
 # when the head bows out, and TIME moved under a slice ends it early, instead of silence.
 rate 48000
 seconds 24
+0 param routing 3   # the old WET switch started off: ROUTING OFF
 0 param wetMode 2
 0 param modWet 1
 0 param time 1
 0 param clock 0.7
 0 param smooth 1
 0 param wetDiv 1
-0 param routing 0
-0 param balance 1
-0 param mix 1
+0 param routing 3
+0 param wetMix 1
 0 param mod1On 0
 0 param mod2On 0
-10 fs wet down
-14 fs wet up
+10 param routing 0   # was a tap on WET
 3000 param time 0.6
 3600 param time 0.95
 4200 param time 0.7

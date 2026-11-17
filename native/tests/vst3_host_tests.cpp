@@ -48,14 +48,14 @@ int main(int argc, char** argv) {
     CHECK(std::fabs(audio.getSample(1, 64) + 0.25f) < 1e-4f, "VST3 bypass right");
 
     juce::AudioProcessorParameter* mix = nullptr;
-    for (auto* parameter : plugin->getParameters()) if (parameter->getName(32).equalsIgnoreCase("mix")) mix = parameter;
-    CHECK(mix != nullptr, "MIX is host-automatable");
-    if (mix) { mix->setValueNotifyingHost(0.7f); CHECK(std::fabs(mix->getValue() - 0.7f) < 0.01f, "host changes MIX"); }
+    for (auto* parameter : plugin->getParameters()) if (parameter->getName(32).equalsIgnoreCase("wet mix")) mix = parameter;
+    CHECK(mix != nullptr, "WET MIX is host-automatable");
+    if (mix) { mix->setValueNotifyingHost(0.7f); CHECK(std::fabs(mix->getValue() - 0.7f) < 0.01f, "host changes WET MIX"); }
     audio.clear();
     midi.addEvent(juce::MidiMessage::controllerEvent(1, 103, 1), 0);
     midi.addEvent(juce::MidiMessage::controllerEvent(1, 15, 100), 0);
     plugin->processBlock(audio, midi);
-    if (mix) CHECK(std::fabs(mix->getValue() - 100.f / 127.f) < 0.01f, "MIDI CC 15 controls MIX in VST3");
+    if (mix) CHECK(std::fabs(mix->getValue() - 100.f / 127.f) < 0.01f, "MIDI CC 15 controls WET MIX in VST3");
     CHECK(reverbEnergy(*plugin) > 1.f, "MIDI CC 103 enables reverb in VST3");
     juce::MemoryBlock state; plugin->getStateInformation(state);
     CHECK(state.getSize() > 0, "VST3 exports project state");

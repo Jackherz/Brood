@@ -1,0 +1,16 @@
+# RESAMPLE that can't finish: STRETCH all but stopped, so a pass never ends. It stops at the 30 s limit
+# (host time), keeps the take, and UNDO brings the old one back. ENV at the end, with an
+# UNDO during a second RESAMPLE that cancels it.
+rate 48000
+seconds 40
+0 param routing 2
+0 param loopMode 2
+0 param modLoop 0.5
+0 param memory 0.3
+100 fs loop down
+104 fs loop up
+200 op resample
+12200 op undo
+12300 param loopMode 0
+12500 op resample
+12600 op undo

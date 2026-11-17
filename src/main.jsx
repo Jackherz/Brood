@@ -37,8 +37,8 @@ const rampDivIndex = (knob) => Math.round(clamp(knob) * (RAMP_DIV_BEATS.length -
 const rampDivLabel = (knob) => RAMP_DIV_LABELS[rampDivIndex(knob)];
 const rampCycleSeconds = (bpm, knob) => RAMP_DIV_BEATS[rampDivIndex(knob)] * 60 / clamp(bpm, 20, 300);
 // The modulation sources, mirrored from src/brood-worklet.js and native/dsp/brood.h.
-const MOD_TARGETS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance'];
-const MOD_TARGET_NAMES = { time: 'TIME', mix: 'MIX', length: 'LENGTH', modWet: 'MODIFY / WET', clock: 'CLOCK', modLoop: 'MODIFY / LOOP', balance: 'BALANCE' };
+const MOD_TARGETS = ['time', 'wetMix', 'length', 'modWet', 'clock', 'modLoop', 'loopLevel'];
+const MOD_TARGET_NAMES = { time: 'TIME', wetMix: 'WET MIX', length: 'LENGTH', modWet: 'MODIFY / WET', clock: 'CLOCK', modLoop: 'MODIFY / LOOP', loopLevel: 'LOOP LEVEL' };
 const MOD_COLOURS = ['#b4452a', '#2f6f8f'];
 const MOD_FLAGS = ['On', 'Uni', 'Sync', 'Hold'];
 const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH'];
@@ -62,16 +62,27 @@ const fmtTime = (s) => s < 1 ? `${Math.round(s * 1000)} ms` : `${s.toFixed(2)} s
 const fmtSpeed = (s) => Math.abs(s) < 1e-9 ? 'frozen' : `${s < 0 ? 'reverse ' : ''}${Math.abs(s).toFixed(2)}x`;
 const pct = (x) => `${Math.round(x * 100)}%`;
 const signedRate = (s) => `${s < 0 ? '-' : '+'}${Math.abs(s).toFixed(2)}`;
-const balanceLoop = (v) => Math.round(Math.min(1, 2 * (1 - v)) * 100);
-const balanceWet = (v) => Math.round(Math.min(1, 2 * v) * 100);
+// WET MIX in both words: the routed source unprocessed, and WET (each full in the middle).
+const wetMixDry = (v) => Math.round(Math.min(1, 2 * (1 - v)) * 100);
+const wetMixWet = (v) => Math.round(Math.min(1, 2 * v) * 100);
+// LOOP LEVEL and INPUT LEVEL are faders: off at the bottom, then dB on a straight line (see
+// levelGain in native/dsp/brood.h). LOOP LEVEL is 0 dB at 0.8, INPUT LEVEL at 2/3.
+const faderDb = (v, top) => -48 + clamp(v) * (top + 48);
+const faderGain = (v, top) => (v <= 0 ? 0 : Math.pow(10, faderDb(v, top) / 20) * Math.min(1, clamp(v) / 0.05));
+const faderText = (v, top) => { if (v <= 0.0005) return 'off'; const db = faderDb(v, top); return `${db > 0.04 ? '+' : ''}${db.toFixed(1)} dB`; };
+const INPUT_UNITY = 48 / 72;
+// What Brood moves by itself as part of an action (AutoParam in native/dsp/brood.h).
+const AUTO_IDS = ['start', 'loopEnd', 'length', 'loopMode', 'modLoop', 'loopDiv', 'loopLevel', 'routing', 'freeze', 'mod1On', 'mod2On'];
+// Settings that are gestures, or follow the source, and so aren't steps of UNDO.
+const NOT_UNDONE = ['freeze', 'bpm'];
 
 const BASE = {
-  time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
-  wetMode: 0, routing: 1, loopMode: 1,
-  trails: 0, smooth: 0, balance: 0.5,
+  time: 0.55, wetMix: 0, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66,
+  wetMode: 0, routing: 1, loopMode: 1, monitor: 0,
+  trails: 0, smooth: 0, loopLevel: 0.8, inputLevel: INPUT_UNITY,
   sync: 0, bpm: 120, memory: 0, loopEnd: 1, start: 1, envSync: 0, recMode: 0, recBars: 0, tapeDelay: 0,
   tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0,
-  envSoft: 0, loopDb: 0, hiQ: 0,
+  envSoft: 0, hiQ: 0,
   ...Object.fromEntries([1, 2].flatMap((n) => [
     [`mod${n}On`, 1], [`mod${n}Rate`, 0.45], [`mod${n}Wave`, 0], [`mod${n}Uni`, 0], [`mod${n}Sync`, 0], [`mod${n}Hold`, 0],
     ...MOD_TARGETS.map((t) => [`mod${n}_${t}`, 0]),
@@ -79,30 +90,30 @@ const BASE = {
 };
 const PRESETS = [
   { name: 'A LITTLE DAYDREAM', subtitle: 'a place to begin', category: 'SPACES', params: BASE },
-  { name: 'SOFT FOCUS', subtitle: 'a warm, hazy reverb', category: 'SPACES', params: { ...BASE, time: 0.73, mix: 0.56, modWet: 0.83, length: 0.65, clock: 0.8, wetMode: 0, routing: 1, loopMode: 2, modLoop: 0.62 } },
-  { name: 'GLASS ECHO', subtitle: 'a pocket of repeats', category: 'ECHOES', params: { ...BASE, time: 0.46, mix: 0.48, modWet: 0.70, wetMode: 1, routing: 0, loopMode: 1, clock: 0.9 } },
-  { name: 'LITTLE GHOST', subtitle: 'a strange harmony', category: 'ECHOES', params: { ...BASE, time: 0.45, mix: 0.54, modWet: 0.83, wetMode: 2, routing: 1, loopMode: 1, clock: 0.8 } },
-  { name: 'MELT AWAY', subtitle: 'a slow-motion memory', category: 'LOOPS', params: { ...BASE, time: 0.67, mix: 0.58, length: 0.35, modWet: 0.75, clock: 0.7, modLoop: 0.57, wetMode: 0, routing: 2, loopMode: 2 } },
+  { name: 'SOFT FOCUS', subtitle: 'a warm, hazy reverb', category: 'SPACES', params: { ...BASE, time: 0.73, wetMix: 0.56, modWet: 0.83, length: 0.65, clock: 0.8, wetMode: 0, routing: 1, loopMode: 2, modLoop: 0.62 } },
+  { name: 'GLASS ECHO', subtitle: 'a pocket of repeats', category: 'ECHOES', params: { ...BASE, time: 0.46, wetMix: 0.48, modWet: 0.70, wetMode: 1, routing: 0, loopMode: 1, clock: 0.9 } },
+  { name: 'LITTLE GHOST', subtitle: 'a strange harmony', category: 'ECHOES', params: { ...BASE, time: 0.45, wetMix: 0.54, modWet: 0.83, wetMode: 2, routing: 1, loopMode: 1, clock: 0.8 } },
+  { name: 'MELT AWAY', subtitle: 'a slow-motion memory', category: 'LOOPS', params: { ...BASE, time: 0.67, wetMix: 0.58, length: 0.35, modWet: 0.75, clock: 0.7, modLoop: 0.57, wetMode: 0, routing: 2, loopMode: 2 } },
 ];
 const PRESET_CATEGORIES = ['SPACES', 'ECHOES', 'LOOPS', 'USER'];
-const KNOB_DEFAULTS = { time: 0.55, mix: 0.5, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66 };
+const KNOB_DEFAULTS = { time: 0.55, wetMix: 0, length: 0.72, modWet: 0.58, clock: 0.9, modLoop: 0.66 };
 const WET = ['REVERB', 'DELAY', 'SLIP', 'WEAVE'];
 // RECORD's bar counts. 0 is FREE: it records until the next tap. Here there is no host
 // transport, so a bar count starts at the tap, timed from the TEMPO field.
 const REC_BARS = [0, 1, 2, 3, 4, 6, 8, 12, 16];
 
 // One whispered sentence per knob per mode, from the plug-in (kWhisper in
-// native/plugin/PluginEditor.cpp), in the knobs' order: TIME, MIX, LENGTH, MODIFY (wet),
+// native/plugin/PluginEditor.cpp), in the knobs' order: TIME, WET MIX, LENGTH, MODIFY (wet),
 // CLOCK, MODIFY (loop).
-const KNOB_IDS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop'];
+const KNOB_IDS = ['time', 'wetMix', 'length', 'modWet', 'clock', 'modLoop'];
 const KNOB_MODE = [0, 2, 1, 0, 2, 1];   // 0 = wet modes, 1 = loop modes, 2 = shared
 const WHISPER = [
   ['How long the room keeps breathing', 'How far back the echo remembers',
     'How wide a slice of time is borrowed', 'How far back the threads reach'],
-  ['Your dry sound against Brood: the loop and the room. Left is dry alone, right is Brood alone, the middle both in full',
-    'Your dry sound against Brood: the loop and the echoes. Left is dry alone, right is Brood alone, the middle both in full',
-    'Your dry sound against Brood: the loop and the slipped slices. Left is dry alone, right is Brood alone, the middle both in full',
-    'Your dry sound against Brood: the loop and the threads. Left is dry alone, right is Brood alone, the middle both in full'],
+  ['What ROUTING sends, against the room. Left is the sound alone, right is the room alone, the middle both in full',
+    'What ROUTING sends, against the echoes. Left is the sound alone, right is the echoes alone, the middle both in full',
+    'What ROUTING sends, against the slipped slices. Left is the sound alone, right is the slices alone, the middle both in full',
+    'What ROUTING sends, against the threads. Left is the sound alone, right is the threads alone, the middle both in full'],
   ['How much of the moment gets caught', 'The size of the window that repeats',
     'How wide each grain is stretched', 'How much of the moment gets caught'],
   ['How much the surface smears', 'How much the echo wants to stay',
@@ -116,7 +127,7 @@ const WHISPER = [
 function knobName(i, p) {
   if (KNOB_IDS[i] === 'modWet') return ['SMEAR', 'FEEDBACK', 'RATE', 'STITCH'][p.wetMode];
   if (KNOB_IDS[i] === 'modLoop') return ['SENSITIVITY', 'SPEED', 'STRETCH'][p.loopMode];
-  return ['TIME', 'MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'MODIFY'][i];
+  return ['TIME', 'WET MIX', 'LENGTH', 'MODIFY', 'CLOCK', 'MODIFY'][i];
 }
 
 function safeRead(key) {
@@ -131,10 +142,10 @@ function sanitize(input) {
   for (const key of Object.keys(out)) {
     if (!Number.isFinite(input[key])) continue;
     if (key === 'wetMode') out[key] = Math.round(clamp(input[key], 0, WET.length - 1));
-    else if (key === 'routing' || key === 'loopMode') out[key] = Math.round(clamp(input[key], 0, 2));
+    else if (key === 'routing') out[key] = Math.round(clamp(input[key], 0, 3));
+    else if (key === 'loopMode' || key === 'monitor') out[key] = Math.round(clamp(input[key], 0, 2));
     else if (['trails', 'smooth', 'sync', 'envSync', 'envSoft', 'hiQ', 'freeze', 'classic', 'wearPost', 'tapeDelay'].includes(key) || MOD_FLAGS.some((f) => key === `mod1${f}` || key === `mod2${f}`)) out[key] = input[key] ? 1 : 0;
     else if (key.includes('_')) out[key] = clamp(input[key], -1, 1);
-    else if (key === 'loopDb') out[key] = clamp(input[key], -24, 12);
     else if (key === 'recMode') out[key] = input[key] ? 1 : 0;
     else if (key === 'recBars') out[key] = REC_BARS.includes(input[key]) ? input[key] : 0;
     else if (key === 'bpm') out[key] = clamp(Math.round(input[key]), 40, 300);
@@ -161,9 +172,10 @@ function describe(id, p, value) {
     }
     return `refresh ${fmtTime(expMap(v, 0.05, 1.5) * div / c)}`;
   }
-  // On this page a playing loop mutes the dry sound (dryMuted is set while it does; never saved).
-  if (id === 'mix' && p.dryMuted) return `dry muted / brood ${pct(Math.min(1, 2 * v))}`;
-  if (id === 'mix') return `dry ${pct(v > 0.995 ? 0 : Math.min(1, 2 * (1 - v)))} / brood ${pct(Math.min(1, 2 * v))}`;
+  if (id === 'wetMix') return `dry ${wetMixDry(v)} / wet ${wetMixWet(v)}`;
+  if (id === 'loopLevel') return faderText(v, 12);
+  if (id === 'inputLevel') return faderText(v, 24);
+  if (id === 'monitor') return ['auto', 'on', 'off'][v] ?? 'auto';
   if (id === 'length') {
     const full = LOOP_SAMPLES / hz;
     if (p.loopMode === 1) return `loop ${fmtTime(full * expMap(v, 0.02, 1))} of ${fmtTime(full)}`;
@@ -183,7 +195,6 @@ function describe(id, p, value) {
     if (p.loopMode === 1) return `tape ${fmtSpeed(speedMap(v))}`;
     return `stretch ${fmtSpeed(stretchMap(v))}, same pitch`;
   }
-  if (id === 'balance') return `loop ${balanceLoop(v)} / wet ${balanceWet(v)}`;
   if (id === 'wearPost') return v ? 'post loop: heard worn, recorded clean' : 'pre loop: recorded worn';
   if (id === 'memory') return v <= 0.001 ? `pedal ${fmtTime(LOOP_SAMPLES / hz)}` : `up to ${fmtTime(expMap(v, 1, 30))} of ${fmtTime(30)}`;
   if (id === 'loopEnd') return v >= 0.999 ? 'to the end' : `plays to ${pct(v)}`;
@@ -204,7 +215,6 @@ function describe(id, p, value) {
     if (field === 'Hold') return v ? 'held where it is' : 'running';
     if (field.startsWith('_')) return `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
   }
-  if (id === 'loopDb') return `${Math.round(v * 2) > 0 ? '+' : ''}${(Math.round(v * 2) / 2).toFixed(1)} dB`;
   if (id === 'envSync') return v ? 'slice follows the tempo' : 'free slice';
   if (id === 'wetDiv' || id === 'loopDiv') { const d = DIV_STEPS[divIndex(v)]; return d === 1 ? '1x clock' : `${d}x slower`; }
   return v.toFixed(3);
@@ -233,6 +243,23 @@ function migrateRouting(p) {
   delete out.wetPre;
   if (Number.isFinite(p.balance)) out.balance = 1 - p.balance;
   for (const id of ['mod1_balance', 'mod2_balance']) if (Number.isFinite(p[id])) out[id] = -p[id];
+  return out;
+}
+
+// Settings and presets from before version 5 had MIX, BALANCE and GAIN. WET MIX takes BALANCE's
+// wet share where it was set, otherwise MIX's value; GAIN in dB becomes LOOP LEVEL's fader.
+// Mirrors BroodProcessor::migrateLevels in native/plugin/PluginProcessor.cpp.
+function migrateLevels(p) {
+  if (!p || typeof p !== 'object') return p;
+  const out = { ...p };
+  if (Number.isFinite(p.balance)) out.wetMix = p.balance;
+  else if (Number.isFinite(p.mix)) out.wetMix = p.mix;
+  for (const n of [1, 2]) {
+    if (Number.isFinite(p[`mod${n}_mix`])) out[`mod${n}_wetMix`] = p[`mod${n}_mix`];
+    delete out[`mod${n}_mix`]; delete out[`mod${n}_balance`];
+  }
+  if (Number.isFinite(p.loopDb)) out.loopLevel = clamp((p.loopDb + 48) / 60);
+  delete out.mix; delete out.balance; delete out.loopDb;
   return out;
 }
 
@@ -300,14 +327,20 @@ const inside = ([x, y, w, h], px, py) => px >= x && px < x + w && py >= y && py 
 // (Nothing, for a control a phone's tab leaves off the page.)
 const grow = (r, dx, dy = dx) => (r ? [r[0] - dx, r[1] - dy, r[2] + 2 * dx, r[3] + 2 * dy] : undefined);
 
-// The LOOP and MODULATION sections' insides, from their area, as resized() works them out.
+// The INPUT, LOOP and MODULATION sections' insides, from their area, as resized() works them out.
+function inputRects(a) {
+  const [x, y, w] = a;
+  return {
+    inputLevel: [x + 86, y + 36, w - 24 - 74 - 44, 21], inputLevelLabel: [x + 12, y + 36, 70, 21], inputLevelFigure: [x + w - 52, y + 36, 40, 21],
+    monitor: [x + 86, y + 61, w - 98, 22], monitorLabel: [x + 12, y + 61, 70, 22],
+  };
+}
 function loopRects(a) {
   const [x, y, w] = a;
   const slider = [x + 86, y + 36, w - 24 - 74 - 44, 21];
   return {
-    memory: slider, balance: [slider[0] + 32, y + 61, slider[2] - 32, 21],
-    memoryLabel: [x + 12, y + 36, 70, 21], balanceLabel: [x + 12, y + 61, 70, 21],
-    memoryFigure: [x + w - 52, y + 36, 40, 21], wetEnd: [x + w - 52, y + 61, 40, 21],
+    loopLevel: slider, loopLevelLabel: [x + 12, y + 36, 70, 21], loopLevelFigure: [x + w - 52, y + 36, 40, 21],
+    memory: [slider[0], y + 61, slider[2], 21], memoryLabel: [x + 12, y + 61, 70, 21], memoryFigure: [x + w - 52, y + 61, 40, 21],
     recMode: [x + 12, y + 86, 120, 21], recBars: [x + 138, y + 86, 104, 21],
   };
 }
@@ -316,9 +349,9 @@ function modRects(a) {
   const inner = w - 20, rest = inner - 66, chipW = Math.floor((rest - 6) / 2);
   const half = Math.floor((inner - 8) / 2), cell = Math.floor((inner - 16) / 3) + 8;
   return {
-    chip0: [x + 10, y + 33, chipW, 120], chip1: [x + 16 + chipW, y + 33, rest - chipW - 6, 120], routes: [x + 10 + inner - 60, y + 33, 60, 120],
-    rampWave: [x + 10, y + 171, half, 28], rampRate: [x + 18 + half, y + 171, inner - half - 8, 28],
-    rampSwitch: [[x + 10, y + 217, cell - 8, 26], [x + 10 + cell, y + 217, cell - 8, 26], [x + 10 + 2 * cell, y + 217, inner - 2 * cell, 26]],
+    chip0: [x + 10, y + 32, chipW, 82], chip1: [x + 16 + chipW, y + 32, rest - chipW - 6, 82], routes: [x + 10 + inner - 60, y + 32, 60, 82],
+    rampWave: [x + 10, y + 122, half, 28], rampRate: [x + 18 + half, y + 122, inner - half - 8, 28],
+    rampSwitch: [[x + 10, y + 158, cell - 8, 26], [x + 10 + cell, y + 158, cell - 8, 26], [x + 10 + 2 * cell, y + 158, inner - 2 * cell, 26]],
   };
 }
 
@@ -326,18 +359,18 @@ function modRects(a) {
 const CX = [162, 438, 714];
 const R = {
   mast: [24, 24, 1152, 72], presetBar: [776, 30, 400, 36], pedal: [24, 108, 828, 548],
-  loopView: [38, 116, 800, 100], gain: [708, 116, 130, 16], undo: [650, 116, 52, 15], clear: [590, 116, 56, 15],
-  fsWet: centred(248, 46, CX[0], 245), fsLoop: [590, 222, 176, 46], overdub: [768, 222, 70, 43],
+  loopView: [38, 116, 800, 100], redo: [786, 116, 52, 15], undo: [716, 116, 66, 15], clear: [656, 116, 56, 15],
+  fsWet: centred(248, 46, CX[0], 245), fsLoop: [590, 222, 118, 46], overdub: [710, 222, 62, 43], resample: [774, 222, 66, 43],
   character: centred(138, 24, CX[1], 234), wearPost: centred(160, 20, CX[1], 258),
   wetMode: [CX[0] - 124, 292, 248, 28], routing: [CX[1] - 124, 292, 248, 28], loopMode: [CX[2] - 124, 292, 248, 28],
-  freeze: [38, 632, 54, 19], trails: [96, 632, 54, 19], smooth: centred(66, 19, CX[1], 642),
-  wetDiv: [156, 629, 130, 25], loopDiv: [590, 629, 130, 25],
+  trails: [38, 632, 54, 19], smooth: centred(66, 19, CX[1], 642),
+  wetDiv: [98, 629, 130, 25], loopDiv: [648, 629, 130, 25],
   tapeDelay: centred(54, 19, CX[0] + 29, 472), envSync: centred(54, 19, CX[2] - 29, 472), envSoft: centred(54, 19, CX[2] + 29, 472),
-  lcd: [864, 108, 312, 112], loopArea: [864, 230, 312, 113], rampArea: [864, 353, 312, 303],
+  lcd: [864, 108, 312, 112], inputArea: [864, 230, 312, 86], loopArea: [864, 326, 312, 112], rampArea: [864, 448, 312, 208],
   hood: [24, 668, 1152, 67],
 };
 R.knob = KNOB_IDS.map((_, i) => [CX[i % 3] - 52, i < 3 ? 342 : 510, 104, 104]);
-Object.assign(R, loopRects(R.loopArea), modRects(R.rampArea));
+Object.assign(R, inputRects(R.inputArea), loopRects(R.loopArea), modRects(R.rampArea));
 // The source picker, in the Bench's place under the bottom strip.
 const SRC = {
   caption: [38, 748, 80, 50], picker: [118, 759, 156, 28], demo: [280, 759, 246, 28], load: [532, 759, 90, 28], status: [628, 759, 64, 28],
@@ -347,29 +380,29 @@ const SRC = {
 const DESK = {
   ...R, W, H, phone: false, src: SRC, overlay: R.pedal, knobValueW: 236,
   presetPrev: [776, 30, 32, 36], presetName: [808, 30, 270, 36], presetNext: [1078, 30, 32, 36], save: [1118, 30, 58, 36], reset: [650, 30, 66, 36],
-  // LEVEL, TONE, FADE, WIDTH, NOISE: five even cells across the bottom strip.
-  hoodCell: [0, 1, 2, 3, 4].map((i) => [38 + i * 229, 676, 205, 52]),
+  // TONE, FADE, WIDTH, NOISE: four even cells across the bottom strip.
+  hoodCell: [0, 1, 2, 3].map((i) => [38 + i * 289, 676, 257, 52]),
 };
 function deskLayout(p) {
   return { ...DESK, wetSync: centred(54, 19, CX[0] - (p.wetMode === 1 ? 29 : 0), 472) };
 }
 
 // A phone: the same parts, stacked on a canvas 390 wide, one column's knobs at a time.
-const PW = 390, PH = 1676;
+const PW = 390, PH = 1667;
 const PHONE = {
   W: PW, H: PH, phone: true, knobValueW: 176,
-  presetBar: [12, 58, 366, 36], presetPrev: [12, 58, 32, 36], presetName: [48, 58, 214, 36], presetNext: [266, 58, 32, 36], save: [306, 58, 72, 36], reset: [102, 1591, 82, 32],
-  lcd: [12, 112, 366, 112], loopView: [12, 234, 366, 100], gain: [248, 234, 130, 16], undo: [190, 234, 52, 15], clear: [130, 234, 56, 15],
-  fsWet: [12, 344, 150, 52], fsLoop: [166, 344, 150, 52], overdub: [320, 344, 58, 49],
+  presetBar: [12, 58, 366, 36], presetPrev: [12, 58, 32, 36], presetName: [48, 58, 214, 36], presetNext: [266, 58, 32, 36], save: [306, 58, 72, 36], reset: [102, 1582, 82, 32],
+  lcd: [12, 112, 366, 112], loopView: [12, 234, 366, 100], redo: [326, 234, 52, 15], undo: [256, 234, 66, 15], clear: [196, 234, 56, 15],
+  fsWet: [12, 344, 108, 52], fsLoop: [124, 344, 108, 52], overdub: [236, 344, 68, 49], resample: [308, 344, 70, 49],
   tabs: [12, 406, 366, 36], tabSheet: [12, 450, 366, 306], overlay: [12, 112, 366, 644],
-  loopArea: [12, 768, 366, 113], rampArea: [12, 891, 366, 260], hood: [12, 1161, 366, 236],
-  hoodCell: [0, 1, 2, 3, 4].map((i) => [24, 1169 + i * 44, 342, 44]),
+  inputArea: [12, 768, 366, 86], loopArea: [12, 864, 366, 112], rampArea: [12, 986, 366, 196], hood: [12, 1192, 366, 196],
+  hoodCell: [0, 1, 2, 3].map((i) => [24, 1200 + i * 44, 342, 44]),
   src: {
-    caption: [24, 1407, 120, 22], picker: [12, 1433, 366, 32], demo: [12, 1471, 366, 32], load: [12, 1511, 120, 32], status: [140, 1511, 238, 32],
-    tempoLabel: [24, 1551, 50, 32], tempo: [74, 1551, 106, 32], start: [190, 1551, 188, 32], tour: [12, 1591, 82, 32], plugin: [192, 1591, 186, 32], song: [12, 1633, 366, 28],
+    caption: [24, 1398, 120, 22], picker: [12, 1424, 366, 32], demo: [12, 1462, 366, 32], load: [12, 1502, 120, 32], status: [140, 1502, 238, 32],
+    tempoLabel: [24, 1542, 50, 32], tempo: [74, 1542, 106, 32], start: [190, 1542, 188, 32], tour: [12, 1582, 82, 32], plugin: [192, 1582, 186, 32], song: [12, 1624, 366, 28],
   },
 };
-Object.assign(PHONE, loopRects(PHONE.loopArea), modRects(PHONE.rampArea));
+Object.assign(PHONE, inputRects(PHONE.inputArea), loopRects(PHONE.loopArea), modRects(PHONE.rampArea));
 function phoneLayout(p, tab) {
   const L = { ...PHONE, knob: [] };
   // The tab's two knobs side by side, big enough for a thumb.
@@ -377,7 +410,7 @@ function phoneLayout(p, tab) {
   L.knob[tab + 3] = [220, 524, 132, 132];
   L[['wetMode', 'routing', 'loopMode'][tab]] = [24, 462, 342, 34];
   // Its switches in a row, then its stepper.
-  const plates = tab === 0 ? ['freeze', ...(p.wetMode !== 2 ? ['trails'] : []), ...(p.wetMode === 1 || p.wetMode === 3 ? ['wetSync'] : []), ...(p.wetMode === 1 ? ['tapeDelay'] : [])]
+  const plates = tab === 0 ? [...(p.wetMode !== 2 ? ['trails'] : []), ...(p.wetMode === 1 || p.wetMode === 3 ? ['wetSync'] : []), ...(p.wetMode === 1 ? ['tapeDelay'] : [])]
     : tab === 1 ? ['smooth'] : p.loopMode === 0 ? ['envSync', 'envSoft'] : [];
   plates.forEach((key, i) => { L[key] = [24 + i * 86, 690, 78, 26]; });
   if (tab === 0) L.wetDiv = [24, 722, 176, 30];
@@ -393,9 +426,8 @@ function helpTable(p, modOpen, L) {
   const add = (r, label, text) => { if (r) out.push({ r, label, text }); };
   const wm = p.wetMode, lm = p.loopMode, worn = !!p.classic, record = p.recMode === 1;
   add(L.character, 'WEAR', 'Clean to worn. Clean= fewer artefacts. Worn= noise, a loop that warbles and a longer reverb.');
-  if (wm !== 2) add(L.trails, 'TRAILS', 'The tails keep falling after you switch the wet side off.');
+  if (wm !== 2) add(L.trails, 'TRAILS', 'The tails keep falling after you set ROUTING to OFF.');
   add(L.smooth, 'SMOOTH', 'The sample rate slides instead of stepping, so CLOCK bends pitch as it turns.');
-  add(L.freeze, 'FREEZE', 'The hold gesture without the holding: the wet side comes up frozen and rings on its own.');
   if (worn) add(L.wearPost, 'PRE / POST LOOP', 'Where the wear sits. Pre: the loop records it worn. Post: you hear it worn, but the loop keeps a clean take.');
   if (wm === 1) add(grow(L.tapeDelay, 4), 'TAPE', 'A tape echo: turning TIME bends the pitch, with wow, flutter and saturation. Off: TIME changes the delay without changing the pitch.');
   if (wm === 1 || wm === 3) add(grow(L.wetSync, 4), 'SYNC', 'TIME becomes a division of the beat, so the echoes or threads land on the grid.');
@@ -414,29 +446,31 @@ function helpTable(p, modOpen, L) {
     add(L.rampSwitch[2], 'HOLD', 'This source stops where it is and its knobs stay pushed there. CC 52 holds both.');
   }
   add(grow(L.memory, 0, 2), 'MEMORY', 'In CAPTURE mode, MEMORY relates to how much of the input audio is captured. All the way left for short loops, and all the way right for loops of up to 30 seconds.');
-  add(L.gain, 'GAIN', 'The loop\'s own level. Drag or scroll; hold Shift for fine. Double-click for 0 dB, right-click to normalise.');
-  // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
+  // CLEAR, UNDO and REDO sit inside the window, and the first match wins, so they go first.
   add(L.clear, 'CLEAR', 'Empties the take. UNDO brings it back.');
-  add(L.undo, 'UNDO', 'One step back: a clear, a new take, or the last overdub layer. Press again to redo.');
+  add(L.undo, 'UNDO', 'Steps back through the last four things you did: a knob, a preset, a new take, a layer, a clear or a resample. The number is how far it can go.');
+  add(L.redo, 'REDO', 'Puts back what UNDO took away, until you do something new.');
   add(L.loopView, 'THE WINDOW', 'Drag START or END to trim the loop. Double-click for the whole take.');
   add(L.recMode, 'CAPTURE / RECORD', 'CAPTURE= a tap keeps what you just played. RECORD= tap to start, tap to play, or hold to overdub.');
   if (record) add(L.recBars, 'BARS', 'Free records until the next tap. A number records that many bars, then plays.');
-  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'Left= just the loop. Right= just the wet side. Middle= both in full. Drag up or down on it to add modulation.');
-  // The plug-in's LEVEL drives into old tape past the middle; this one only sets the level
+  add(grow(L.loopLevel, 0, 2), 'LOOP LEVEL', 'How loud the loop is, and how loud it reaches WET. Drag up or down on it to add modulation.');
+  // The plug-in's INPUT LEVEL drives into old tape past 0 dB; this one only sets the level
   // (IN THE PLUG-IN says so).
-  add(L.hoodCell[0], 'LEVEL', 'How loud the input reaches Brood. The middle is as it comes in.');
+  add(grow(L.inputLevel, 0, 2), 'INPUT LEVEL', 'The input, before everything: what you hear of it and what Brood keeps.');
+  add(L.monitor, 'INPUT MONITOR', 'Whether you hear the input. AUTO= heard until a loop plays, and again while you overdub. ON= always. OFF= never, and no overdub.');
+  add(L.resample, 'RESAMPLE', 'Plays one pass of the loop, as you hear it, into a new take that replaces it. Live input stays out. UNDO brings the old one back.');
   add(L.wetMode, 'WET MODE', 'Four ways of treating time: reverb, delay, slip, weave.');
-  add(L.routing, 'ROUTING', 'What the wet side hears. IN= the input. IN + LOOP= input and loop. LOOP= just the loop.');
+  add(L.routing, 'ROUTING', 'What WET hears. IN= the input. IN + LOOP= input and loop. LOOP= just the loop. OFF= nothing. Lit in ochre: what it hears for now.');
   add(L.loopMode, 'LOOP MODE', 'Three ways of holding a moment: envelope, tape, stretch.');
-  add(L.fsWet, 'WET', 'Tap for the wet side, hold to freeze it where it stands. Key A.');
+  add(L.fsWet, 'FREEZE', 'Tap to hold WET where it stands, tap again to let it go. Hold to freeze only while held. Key A.');
   add(L.fsLoop, 'LOOP', 'Tap to catch the recent past, tap again to stop, hold to overdub. Key L.');
-  add(L.overdub, 'OVERDUB', 'Latches: layers into the playing loop until you switch it off. Needs a loop playing.');
+  add(L.overdub, 'OVERDUB', 'Latches: layers into the playing loop until you switch it off. Needs a loop playing, and INPUT MONITOR on or AUTO.');
   add(L.presetBar, 'PATCH', 'Click the name to search, star and audition sounds. The arrows step through them. SAVE keeps what you hear.');
   [['TONE', 'A high-cut on the wet side. Right is open, left is soft and far away.'],
     ['FADE', 'How much of the old take an overdub erases. Left keeps the pedal\'s slow erosion, right replaces it.'],
     ['WIDTH', 'How far apart the two speakers sit: left is mono, the middle is the image as built, right opens the sides.'],
     ['NOISE', 'How much of the worn clock\'s hiss is let through. Only heard with WEAR on WORN; left is silent.']]
-    .forEach(([label, text], i) => add(L.hoodCell[i + 1], label, text));
+    .forEach(([label, text], i) => add(L.hoodCell[i], label, text));
   add(L.wetDiv, 'WET DIV', 'The wet side runs on a divided clock, so the room and the echo stretch out.');
   add(L.loopDiv, 'LOOP DIV', 'The loop runs on a divided clock: lower, longer, further from the other side.');
   // The source picker exists only in the browser.
@@ -445,13 +479,12 @@ function helpTable(p, modOpen, L) {
   add(L.src.song, 'SONG', 'Where you are in the song. Drag to jump; LOOP keeps what you just heard.');
   add(L.src.load, 'LOAD FILE', 'Choose an audio file from this computer. It loops into Brood; nothing is uploaded.');
   add(L.src.tempo, 'TEMPO', 'The beat SYNC and RECORD\'s bars count in. A host sets it in the plug-in; here you do.');
-  add(L.reset, 'RESET', 'Every control back to A LITTLE DAYDREAM, LEVEL to 0 dB, no MOD routes. WET goes off and the loop is cleared, with nothing to UNDO. TEMPO and your sound stay.');
+  add(L.reset, 'RESET', 'Every control back to A LITTLE DAYDREAM, INPUT LEVEL to 0 dB, no MOD routes. The loop is cleared, with nothing to UNDO. TEMPO and your sound stay.');
   add(L.src.tour, 'TOUR', 'A few steps through Brood, opening the panel a part at a time. The sound and every setting carry on as they are.');
   add(L.src.plugin, 'IN THE PLUG-IN', 'How the plug-in and this page differ: what each does that the other does not.');
   add(L.src.start, 'AUDIO', 'Starts and stops the sound on this page. Nothing plays until you press it.');
   // The knobs say what they do in the current mode. Last, so a switch beside a knob explains itself first.
-  // MIX adds what only this page does: a playing loop mutes the dry sound.
-  KNOB_IDS.forEach((id, i) => add(L.knob?.[i], knobName(i, p), `${WHISPER[i][KNOB_MODE[i] === 0 ? wm : KNOB_MODE[i] === 1 ? lm : 0]}.${id === 'mix' ? ' Here, the dry sound is muted while a loop plays.' : ''}`));
+  KNOB_IDS.forEach((id, i) => add(L.knob?.[i], knobName(i, p), `${WHISPER[i][KNOB_MODE[i] === 0 ? wm : KNOB_MODE[i] === 1 ? lm : 0]}.`));
   return out;
 }
 // ───────── the wordmark ─────────
@@ -612,12 +645,16 @@ function Slider({ r, value, onChange, onReset, onTouch, label, valueText, disabl
 }
 
 // One plate across the column, the chosen cell a solid block (ThreeWay).
-function ThreeWay({ r, labels, index, onChange, label }) {
+// `effective`: a cell the sound has for now (ROUTING while overdubbing or resampling), lit in
+// ochre, with the chosen one outlined.
+function ThreeWay({ r, labels, index, onChange, label, effective = -1 }) {
   const n = labels.length;
+  const temp = effective >= 0 && effective !== index;
   return <div className="abs threeway" style={at(r)} role="radiogroup" aria-label={label}>
     {labels.map((name, i) => {
       const x0 = Math.floor((r[2] - 2) * i / n), x1 = Math.floor((r[2] - 2) * (i + 1) / n);
-      return <button key={name} type="button" role="radio" aria-checked={i === index} className={i === index ? 'on' : ''}
+      const cls = i === index ? (temp ? 'chosen' : 'on') : temp && i === effective ? 'temp' : '';
+      return <button key={name} type="button" role="radio" aria-checked={i === index} className={cls}
         style={{ left: x0, width: x1 - x0, height: r[3] - 2, ...nf(16) }} onClick={() => onChange(i)}><span>{name.toUpperCase()}</span></button>;
     })}
   </div>;
@@ -882,7 +919,11 @@ function Footswitch({ r, name, keyName, lit, onGesture, which }) {
     return () => window.removeEventListener('blur', blur);
   });
   const w = r[2] - 3, h = r[3] - 3;
-  const middle = w - 24 - 16 - 10 - 62 - 36;
+  // The name's room (FREEZE is wider than LOOP); narrowed beside OVERDUB and RESAMPLE, the key's
+  // hint goes before the name would be cut, as TAP / HOLD does.
+  const nameW = Math.max(62, Math.ceil(name.length * 10.6));
+  const keyRoom = w - 12 - 36 >= 38 + nameW + 4;
+  const middle = w - 24 - 16 - 10 - nameW - 36;
   return <button type="button" className={`abs footswitch ${down ? 'down' : ''}`} style={at([r[0], r[1], w, h])}
     aria-label={`${name}: tap or hold. key ${keyName}`} aria-pressed={!!lit}
     onPointerDown={(event) => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); press(); }}
@@ -890,16 +931,16 @@ function Footswitch({ r, name, keyName, lit, onGesture, which }) {
     onKeyDown={(event) => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); press(); } }}
     onKeyUp={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); release(); } }}>
     <i className="led" style={{ left: 13, top: h / 2 - 7, background: lit ? LIT : 'rgba(24,24,21,.25)' }}/>
-    <Txt r={[38, 0, 62, h]} size={nf(24)} color={INK}>{name}</Txt>
-    {middle >= 80 && <Txt r={[100, 0, middle, h]} align="center" cls="vl" size={vf(16)} color={MUTED}>TAP / HOLD</Txt>}
-    <Txt r={[w - 12 - 36, 0, 36, h]} align="right" cls="vl" size={vf(16)} color={INK}>[ {keyName} ]</Txt>
+    <Txt r={[38, 0, nameW, h]} size={nf(24)} color={INK}>{name}</Txt>
+    {middle >= 80 && <Txt r={[38 + nameW, 0, middle, h]} align="center" cls="vl" size={vf(16)} color={MUTED}>TAP / HOLD</Txt>}
+    {keyRoom && <Txt r={[w - 12 - 36, 0, 36, h]} align="right" cls="vl" size={vf(16)} color={INK}>[ {keyName} ]</Txt>}
   </button>;
 }
 
 // ───────── the take strip ─────────
 // The take: an ink window, with what plays in pale and the rest of the take dimmed, START and
 // END as markers, and the play heads. With nothing caught it says what the looper is doing.
-function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReadout, running, engine, openMenu }) {
+function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReadout, running, engine, openMenu, history }) {
   const canvas = useRef(null);
   const drag = useRef(null);
   const [hot, setHot] = useState(-1);
@@ -946,7 +987,7 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
     g.fillStyle = TICK;
     for (let t = every; t < seconds; t += every) g.fillRect(w * t / seconds, h - 6, 1, 6);
     const peaks = wave.peaks, n = peaks.length, bw = w / n;
-    const gain = Math.pow(10, params.loopDb / 20);   // what you see is the level you hear
+    const gain = faderGain(params.loopLevel, 12);   // what you see is the level you hear
     for (let i = 0; i < n; i++) {
       const a = Math.min(1, peaks[i] * 1.6 * gain) * rise, x = i * bw;
       g.fillStyle = x >= xs && x < xe ? PAPER : DIMMED;
@@ -1045,39 +1086,13 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
     else { onChange('loopEnd', clamp(params.loopEnd + d, 0.02, 1)); onTouch('loopEnd'); }
   };
 
-  // CLEAR, UNDO and GAIN on the heading line.
+  // CLEAR, UNDO (with how far back it goes) and REDO on the heading line. While a RECORD take
+  // or a RESAMPLE runs, UNDO stands it down instead.
   const can = running && !!state;
   const canClear = can && (lsrc > 0 || state.loop === 'rec' || state.recArmed);
-  const canUndo = can && state.undoKind > 0 && state.loop !== 'rec' && !state.recArmed;
-  const redo = !!state?.undoRedo;
-  const gain = useRef(null);
-  const db = params.loopDb, half = Math.round(db * 2);
-  const normalise = () => {
-    const peak = wave?.peaks ? Math.max(...wave.peaks) : 0;
-    return peak > 1e-5 ? clamp(-1 - 20 * Math.log10(peak), -24, 12) : 0;
-  };
-  const gainDown = (event) => {
-    if (event.button === 2) return;
-    if (event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    gain.current = { y: event.clientY, db, k: designPoint(event.currentTarget, event, 130).k };
-    onTouch('loopDb');
-  };
-  const gainMove = (event) => {
-    const gd = gain.current;
-    if (!gd) return;
-    // Each move adds its own change at the rate Shift sets now.
-    gd.db = clamp(gd.db + (gd.y - event.clientY) * gd.k * (event.shiftKey ? 0.02 : 0.15), -24, 12);
-    gd.y = event.clientY;
-    onChange('loopDb', Math.round(gd.db * 100) / 100);
-  };
-  useEffect(() => {
-    const el = document.getElementById('brood-gain');
-    const wheel = (event) => { event.preventDefault(); onTouch('loopDb'); onChange('loopDb', clamp(db + (event.deltaY < 0 ? 0.5 : -0.5), -24, 12)); };
-    el.addEventListener('wheel', wheel, { passive: false });
-    return () => el.removeEventListener('wheel', wheel);
-  }, [db, onChange, onTouch]);
-  const what = ['', 'the take before', 'the cleared take', 'the layer'];
+  const standDown = can && (state.loop === 'rec' || state.recArmed || state.resampling);
+  const canUndo = can && (history.undo > 0 || standDown);
+  const canRedo = can && history.redo > 0;
   return <>
     <div className="abs take" style={at(r)} tabIndex={live ? -1 : 0} role="group" onKeyDown={key}
       aria-label={live ? 'The take: nothing caught yet' : `The take. START ${describe('start', params)}, END ${describe('loopEnd', params)}. Arrow keys move END, shift and arrow keys move START.`}>
@@ -1088,26 +1103,10 @@ function TakeStrip({ L, wave, state, params, scale, onChange, onTouch, showReado
     <button type="button" className="abs strip-key sc" style={{ ...at(L.clear), ...sf(14) }} disabled={!canClear}
       onClick={() => { engine.clearLoop(); showReadout('LOOP', 'cleared. undo brings it back'); }}>CLEAR</button>
     <button type="button" className="abs strip-key sc" style={{ ...at(L.undo), ...sf(14) }} disabled={!canUndo}
-      onClick={() => {
-        const kind = clamp(state.undoKind, 0, 3);
-        engine.undoLoop();
-        showReadout(redo ? 'REDO' : 'UNDO', `${redo ? 'again: ' : 'back to '}${kind === 3 ? (redo ? 'the layer is back' : 'before the layer') : what[kind]}`);
-      }}>{redo ? 'REDO' : 'UNDO'}</button>
-    <div id="brood-gain" className="abs gain sc" style={{ ...at(L.gain), ...sf(14), color: half === 0 ? PAPER : LIT }} role="slider" tabIndex="0"
-      aria-label="Loop gain" aria-valuemin="-24" aria-valuemax="12" aria-valuenow={db} aria-valuetext={`${db.toFixed(1)} dB`}
-      onPointerDown={gainDown} onPointerMove={gainMove} onPointerUp={() => { gain.current = null; }} onPointerCancel={() => { gain.current = null; }}
-      onDoubleClick={() => { onTouch('loopDb'); onChange('loopDb', 0); }}
-      onKeyDown={(event) => {
-        const d = event.key === 'ArrowUp' || event.key === 'ArrowRight' ? 0.5 : event.key === 'ArrowDown' || event.key === 'ArrowLeft' ? -0.5 : 0;
-        if (d) { event.preventDefault(); onTouch('loopDb'); onChange('loopDb', clamp(db + d, -24, 12)); }
-      }}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        openMenu(event, null, [
-          { label: 'Normalise (peak at -1 dB)', act: () => { onTouch('loopDb'); onChange('loopDb', Math.round(normalise() * 100) / 100); } },
-          { label: 'Reset to 0 dB', act: () => { onTouch('loopDb'); onChange('loopDb', 0); } },
-        ]);
-      }}>GAIN {half > 0 ? '+' : ''}{(half / 2).toFixed(1)} DB</div>
+      onClick={() => { const label = history.step(true); showReadout('UNDO', standDown ? 'stood down, the take as it was' : `back before the ${label}`); }}>
+      {history.undo > 0 && !standDown ? `UNDO ${history.undo}` : 'UNDO'}</button>
+    <button type="button" className="abs strip-key sc" style={{ ...at(L.redo), ...sf(14) }} disabled={!canRedo}
+      onClick={() => { const label = history.step(false); showReadout('REDO', `the ${label} again`); }}>REDO</button>
   </>;
 }
 
@@ -1194,16 +1193,15 @@ function RouteList({ L, params, onChange, close, openMenu }) {
 // entry with no text is a heading.
 const PLUGIN_ONLY = [
   ['ONLY IN THE PLUG-IN', ''],
-  ['LEVEL', 'Past the middle, the input is driven into old tape: rounder, duller, a little hiss. Here LEVEL only sets how loud the input reaches Brood.'],
+  ['INPUT LEVEL', 'Past 0 dB, the input is driven into old tape: rounder, duller, a little hiss. Here it only sets how loud the input reaches Brood.'],
   ['THE TAKE STRIP', 'With nothing caught, the input scrolls past, newest at the right, over the window a tap would keep, so you can see what a tap will catch. Here the strip says what the looper is doing instead.'],
   ['AT TAP', 'Beside BARS in RECORD. Off: a bar count starts on the next bar line while the host plays, so loops land on the grid. On: it starts the moment you tap. Here there is no host, so a bar count always starts at the tap.'],
   ['TEMPO', 'Follows the host, as do every SYNC and RECORD\'s bars. Here you set it under the panel.'],
   ['THE SONG', 'A loop caught while the host plays stops when the host stops, and plays on in time when it starts again. Here a loop plays until you stop it.'],
-  ['MIX', 'Your dry sound plays on under a playing loop. Here it is muted while a loop plays, and comes back when the loop stops or while you overdub.'],
   ['DROP A FILE', 'An audio file dropped on the window becomes the loop. Here LOAD FILE plays a file in as the input.'],
   ['THE BENCH', 'Passes takes between Brood and Silt in a DAW: SEND the loop or a few bars of the output, TAKE one back as the loop.'],
   ['AUTOMATION', 'The host can move every control, CLEAR and UNDO included, and keeps them with the session.'],
-  ['MIDI', 'Control changes reach the knobs, modes, switches and MODs; CC 102 and 103 tap LOOP and WET. Here there is no MIDI.'],
+  ['MIDI', 'Control changes reach the knobs, modes, switches and MODs; CC 102 taps LOOP and CC 103 switches ROUTING OFF and back. Here there is no MIDI.'],
   ['PRESETS', 'Kept as files that every host sees. Here they stay in this browser.'],
   ['ONLY ON THIS PAGE', ''],
   ['SOURCE', 'DEMO, FILE and MIC choose what Brood hears, and START AUDIO starts it. The plug-in hears its track.'],
@@ -1287,7 +1285,7 @@ const TOUR = [
   { title: 'START WITH SOUND',
     body: 'Brood plays a demo loop, or your own file, or your voice with MIC.',
     try: 'Press START AUDIO.',
-    holes: (L) => [L.phone ? [12, 1403, 366, 264] : [24, 744, 1152, 72], L.loopView],
+    holes: (L) => [L.phone ? [12, 1377, 366, 264] : [24, 744, 1152, 72], L.loopView],
     tasks: [{ target: (L) => L.src.start, done: (now) => now.running }] },
   { title: 'CATCH A LOOP', tab: 2,
     body: 'Brood is always listening: LOOP keeps the last few seconds, and MEMORY sets how many.',
@@ -1301,25 +1299,24 @@ const TOUR = [
     holes: (L) => [L.loopView, L.fsLoop, ...(L.phone ? [L.tabs, L.tabSheet] : [grow(L.knob[2], 10)])],
     tasks: [{ target: (L) => L.loopView, done: (now, was) => !!now.take && (now.start !== was.start || now.loopEnd !== was.loopEnd) }] },
   { title: 'IN BETWEEN', tab: 1,
-    body: 'MIX sets dry against Brood, BALANCE the loop against WET, ROUTING what WET hears. CLOCK is the sample rate. While a loop plays, the dry sound is muted.',
+    body: 'ROUTING sets what WET hears, and WET MIX how much of it you hear. CLOCK is the sample rate. INPUT MONITOR on AUTO lets the loop replace the input while it plays.',
     try: 'Turn CLOCK down for an old-sampler sound.',
     holes: (L) => (L.phone ? [L.tabs, L.tabSheet, L.loopArea] : [deskColumn(1), [300, 216, 276, 54], L.loopArea]),
     tasks: [{ target: (L) => knobCell(L, 4), done: (now, was) => Math.abs(now.clock - was.clock) >= 0.05 }] },
   { title: 'ADD SOME SPACE', tab: 0, wet: true,
-    body: 'WET adds space around the sound, and TIME sets how long it lasts.',
-    try: 'Tap WET (key A), then turn TIME up.',
-    tryPhone: 'Tap WET, then turn TIME up.',
+    body: 'WET adds space around the sound: WET MIX brings it in, and TIME sets how long it lasts.',
+    try: 'Turn WET MIX up, then turn TIME up.',
     holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [0, 1].map((i) => [L.knob[i][0] - 20, L.knob[i][1] - 8, L.knob[i][2] + 40, L.knob[i][3] + 40]))],
-    tasks: [{ target: (L) => L.fsWet, done: (now) => now.wetOn },
+    tasks: [{ target: (L) => knobCell(L, 1), done: (now) => now.wetMix >= 0.3 },
       { target: (L) => knobCell(L, 0), done: (now, was) => Math.abs(now.time - was.time) >= 0.05 }] },
   { title: 'FOUR KINDS OF SPACE', tab: 0, wet: true,
-    body: 'REVERB, DELAY, SLIP and WEAVE each treat time differently. Hold WET to freeze it.',
-    try: 'Pick DELAY, then hold WET.',
+    body: 'REVERB, DELAY, SLIP and WEAVE each treat time differently. Hold FREEZE to hold WET where it stands.',
+    try: 'Pick DELAY, then hold FREEZE.',
     holes: (L) => [L.fsWet, ...(L.phone ? [L.tabs, L.tabSheet] : [deskColumn(0)])],
     tasks: [{ target: (L) => L.wetMode, done: (now) => now.wetMode === 1 },
       { target: (L) => L.fsWet, done: (now, was) => now.freeze && !was.freeze }] },
   { title: 'MOVE A KNOB', tab: 0,
-    body: 'MOD 1 and MOD 2 can turn knobs for you. Drag up or down around the edge of a knob to set how far one swings it. BALANCE works the same way.',
+    body: 'MOD 1 and MOD 2 can turn knobs for you. Drag up or down around the edge of a knob to set how far one swings it. LOOP LEVEL works the same way.',
     try: 'Drag up around the edge of TIME.',
     holes: (L) => [L.loopArea, ...(L.phone ? [L.tabs, L.tabSheet] : [knobCell(L, 0), knobCell(L, 3)])],
     tasks: [{ target: (L) => knobCell(L, 0), done: (now, was) => now.timeMod > was.timeMod + 0.04 }] },
@@ -1423,31 +1420,26 @@ function useScale(tall) {
   return fit;
 }
 
-// The input level, as the plug-in's LEVEL slider has it: a gain from silence to +24 dB, with
-// unity in the middle of the travel (JUCE's skew from the mid point).
-const LEVEL_MAX = 15.85, LEVEL_SKEW = Math.log(0.5) / Math.log(1 / LEVEL_MAX);
-const levelPos = (g) => Math.pow(clamp(g / LEVEL_MAX), LEVEL_SKEW);
-const levelGain = (pos) => LEVEL_MAX * Math.pow(clamp(pos), 1 / LEVEL_SKEW);
-const levelDb = (g) => (g <= 1e-5 ? -100 : 20 * Math.log10(g));
-
 function App() {
   const [params, setParams] = useState(() => {
-    const now = safeRead('brood-params-v4');
+    const now = safeRead('brood-params-v5');
     if (now) return sanitize(now);
+    const v4 = safeRead('brood-params-v4');
+    if (v4) return sanitize(migrateLevels(v4));
     const v3 = safeRead('brood-params-v3');
-    if (v3) return sanitize(migrateShapes(v3));
+    if (v3) return sanitize(migrateLevels(migrateShapes(v3)));
     const v2 = safeRead('brood-params-v2');
-    return sanitize(migrateShapes(migrateRouting(v2 ?? migrateStart(safeRead('brood-params-v1')))));
+    return sanitize(migrateLevels(migrateShapes(migrateRouting(v2 ?? migrateStart(safeRead('brood-params-v1'))))));
   });
   // User presets, named and filed. Anything saved in the old slots becomes a preset.
   const [userPatches, setUserPatches] = useState(() => {
-    const saved = safeRead('brood-user-presets-v4') ?? safeRead('brood-user-presets-v3') ?? safeRead('brood-user-presets-v2');
-    const upgrade = (p) => (p.v >= 4 ? p.params : migrateShapes(p.v >= 3 ? p.params : migrateRouting(p.v >= 2 ? p.params : migrateStart(p.params))));
-    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 4, params: sanitize(upgrade(p)) }));
+    const saved = safeRead('brood-user-presets-v5') ?? safeRead('brood-user-presets-v4') ?? safeRead('brood-user-presets-v3') ?? safeRead('brood-user-presets-v2');
+    const upgrade = (p) => (p.v >= 5 ? p.params : migrateLevels(p.v >= 4 ? p.params : migrateShapes(p.v >= 3 ? p.params : migrateRouting(p.v >= 2 ? p.params : migrateStart(p.params)))));
+    if (Array.isArray(saved)) return saved.filter((p) => p && p.name).map((p) => ({ name: String(p.name), category: PRESET_CATEGORIES.includes(p.category) ? p.category : 'USER', v: 5, params: sanitize(upgrade(p)) }));
     const slots = safeRead('brood-user-patches-v1');
     const legacy = safeRead('brood-user-patch-v1');
     const old = Array.isArray(slots) ? slots : legacy ? [legacy] : [];
-    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 4, params: sanitize(migrateShapes(migrateRouting(migrateStart(p)))) } : null)).filter(Boolean);
+    return old.map((p, i) => (p ? { name: `USER ${i + 1}`, category: 'USER', v: 5, params: sanitize(migrateLevels(migrateShapes(migrateRouting(migrateStart(p))))) } : null)).filter(Boolean);
   });
   const [favourites, setFavourites] = useState(() => { const f = safeRead('brood-favourites-v1'); return Array.isArray(f) ? f : []; });
   const [browsing, setBrowsing] = useState(null);   // the sound to go back to while the browser is open
@@ -1460,7 +1452,6 @@ function App() {
   // in the DEMO stepper, streamed rather than loaded whole.
   const [songs, setSongs] = useState([]);
   const [fileName, setFileName] = useState('');
-  const [inputGain, setInputGain] = useState(1);
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState(null);
@@ -1511,6 +1502,7 @@ function App() {
   const engineRef = useRef(null);
   const paramsRef = useRef(params); paramsRef.current = params;
   const runningRef = useRef(running); runningRef.current = running;
+  const stateRef = useRef(state); stateRef.current = running ? state : null;
   if (!engineRef.current) {
     engineRef.current = new AudioEngine((message) => {
       if (message.type === 'state') {
@@ -1519,12 +1511,17 @@ function App() {
         setState(message.st);
       }
       if (message.type === 'wave') setWave(message);
-      // A new take plays all of itself: the knobs follow what the engine has already done.
-      if (message.type === 'fit') setParams((previous) => ({ ...previous, start: 1, loopEnd: 1, ...(message.length ? { length: 1 } : {}) }));
+      // The UNDO history's news, with the controls each action moved (a new take fits the window;
+      // a RESAMPLE resets the player). Those move here, as part of that action.
+      if (message.type === 'version') historyRef.current?.version(message.ev);
+      // A tap on the FREEZE key flips the FREEZE switch.
+      if (message.type === 'freezeTap') setParams((previous) => ({ ...previous, freeze: previous.freeze ? 0 : 1 }));
     }, (message) => setNotice(message));
     engineRef.current.demoId = demoId;
   }
-  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v4', params); }, [params]);
+  useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v5', params); }, [params]);
+  // INPUT LEVEL is the gain in front of the worklet (the plug-in drives tape past 0 dB; this doesn't).
+  useEffect(() => { engineRef.current.setInputLevel(faderGain(params.inputLevel, 24)); }, [params.inputLevel]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
   useEffect(() => {
     let gone = false;
@@ -1564,7 +1561,7 @@ function App() {
         engine.setParams(paramsRef.current);
         await Promise.race([engine.context.resume(), new Promise((resolve) => setTimeout(resolve, 700))]);
         if (!engine.running) { ready(); return; }
-        engine.setInputLevel(inputGain);
+        engine.setInputLevel(faderGain(paramsRef.current.inputLevel, 24));
         await engine.connectSource('demo');
         setRunning(true);
         showReadout('SONG', song.title.toLowerCase());
@@ -1575,11 +1572,90 @@ function App() {
     })();
   }, [songs]);
   useEffect(() => { const id = setInterval(() => setBlink(Math.floor(performance.now() / 160) % 2 === 0), 40); return () => clearInterval(id); }, []);
-  const update = useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
+  // UNDO and REDO: the last four actions, in order (as BroodHistory in the plug-in). A control's
+  // run of changes is one action until it has been still for 400 ms; a preset, or something done
+  // to the loop with the controls it moved, is one action too.
+  const [, setHistoryTick] = useState(0);
+  const historyRef = useRef(null);
+  if (!historyRef.current) {
+    const h = { undo: [], redo: [], open: null };
+    const changed = () => setHistoryTick((n) => n + 1);
+    const release = (e) => { if (e.audioId != null) engineRef.current?.releaseVersion(e.audioId); };
+    h.push = (e, dropRedo = true) => {
+      if (dropRedo) { h.redo.forEach(release); h.redo = []; }
+      h.undo.push(e);
+      while (h.undo.length > 4) release(h.undo.shift());
+      changed();
+    };
+    // A control moved by hand: its first value, then the latest, until it rests.
+    h.touched = (id, before, after) => {
+      if (NOT_UNDONE.includes(id)) return;
+      const o = h.open;
+      if (o && o.id === id) { o.after = after; clearTimeout(o.timer); o.timer = setTimeout(h.close, 400); return; }
+      h.close();
+      h.open = { id, before, after, timer: setTimeout(h.close, 400) };
+    };
+    h.close = () => {
+      const o = h.open;
+      if (!o) return;
+      h.open = null; clearTimeout(o.timer);
+      if (o.before === o.after) return;
+      const name = KNOB_IDS.includes(o.id) ? knobName(KNOB_IDS.indexOf(o.id), paramsRef.current) : (MOD_TARGET_NAMES[o.id] || o.id.toUpperCase());
+      h.push({ changes: [{ id: o.id, before: o.before, after: o.after }], label: name.toLowerCase() });
+    };
+    // Many controls at once (a preset, WEAR): one action.
+    h.group = (label, before, after) => {
+      h.close();
+      const changes = Object.keys(after).filter((k) => !NOT_UNDONE.includes(k) && before[k] !== after[k]).map((k) => ({ id: k, before: before[k], after: after[k] }));
+      if (changes.length) h.push({ changes, label });
+    };
+    h.version = (ev) => {
+      if (ev.type === 'reset') { h.undo = []; h.redo = []; changed(); return; }
+      if (ev.type === 'released' || ev.type === 'evicted') {
+        const at = h.undo.findIndex((e) => e.audioId === ev.id);
+        if (at >= 0) h.undo.splice(ev.type === 'evicted' ? 0 : at, ev.type === 'evicted' ? at + 1 : 1);
+        h.redo = h.redo.filter((e) => e.audioId !== ev.id);
+        changed(); return;
+      }
+      h.close();
+      const before = paramsRef.current, after = { ...before };
+      for (const a of ev.autos || []) after[AUTO_IDS[a.which]] = a.value;
+      const changes = AUTO_IDS.filter((k) => after[k] !== before[k]).map((k) => ({ id: k, before: before[k], after: after[k] }));
+      if (changes.length) setParams((p) => ({ ...p, ...Object.fromEntries(changes.map((c) => [c.id, c.after])) }));
+      h.redo = [];   // the cores already let the redo side go
+      h.push({ changes, audioId: ev.id, label: ['', 'new take', 'clear', 'overdub layer', 'resample'][ev.kind] || 'loop' }, false);
+    };
+    // UNDO (back) or REDO: the controls, and the take's version. Returns what it was.
+    h.step = (back) => {
+      h.close();
+      const st = stateRef.current;
+      if (back && st && (st.loop === 'rec' || st.recArmed || st.resampling)) { engineRef.current.cancelActive(); return 'recording'; }
+      const from = back ? h.undo : h.redo, to = back ? h.redo : h.undo;
+      const e = from.pop();
+      if (!e) return '';
+      if (e.changes.length) setParams((p) => ({ ...p, ...Object.fromEntries(e.changes.map((c) => [c.id, back ? c.before : c.after])) }));
+      if (e.audioId != null) engineRef.current.swapVersion(e.audioId);
+      to.push(e);
+      changed();
+      return e.label;
+    };
+    historyRef.current = h;
+  }
+  const history = historyRef.current;
+  const update = useCallback((id, value) => setParams((previous) => {
+    if (previous[id] !== value) historyRef.current.touched(id, previous[id], value);
+    return { ...previous, [id]: value };
+  }), []);
+  // Many controls at once, as one step of UNDO.
+  const updateMany = useCallback((label, fn) => setParams((previous) => {
+    const next = fn(previous);
+    historyRef.current.group(label, previous, next);
+    return next;
+  }), []);
   const showReadout = useCallback((label, value) => setLcd({ label, value, follows: null }), []);
   // The readout's own names for the parameters, so it never shows a raw id.
   const touch = useCallback((id, follow = true) => {
-    const names = { loopEnd: 'END', start: 'START', balance: 'BALANCE', mod1Rate: 'MOD 1 RATE', mod2Rate: 'MOD 2 RATE', wetDiv: 'WET DIV', loopDiv: 'LOOP DIV', wearNoise: 'NOISE', loopDb: 'GAIN' };
+    const names = { loopEnd: 'END', start: 'START', loopLevel: 'LOOP LEVEL', inputLevel: 'INPUT LEVEL', mod1Rate: 'MOD 1 RATE', mod2Rate: 'MOD 2 RATE', wetDiv: 'WET DIV', loopDiv: 'LOOP DIV', wearNoise: 'NOISE' };
     const i = KNOB_IDS.indexOf(id);
     if (follow) setLcd({ label: i >= 0 ? null : names[id] || id.toUpperCase(), value: '', follows: id, knob: i });
   }, []);
@@ -1617,11 +1693,12 @@ function App() {
   const currentPatch = patches[Math.min(preset, patches.length - 1)];
   const loadPatch = (index) => {
     const n = (index + patches.length) % patches.length;
-    setPreset(n); setParams(sanitize(patches[n].params)); showReadout('PATCH', patches[n].name.toLowerCase());
+    setPreset(n); updateMany('preset', (p) => ({ ...sanitize(patches[n].params), inputLevel: p.inputLevel, monitor: p.monitor, bpm: p.bpm }));
+    showReadout('PATCH', patches[n].name.toLowerCase());
   };
   const openBrowser = () => { setRoutesOpen(false); setPluginOpen(false); setBrowsing({ params, preset }); };
   // Every preset kept here is in today's form (v 2: START counts from the oldest audio in every mode).
-  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 4 })); setUserPatches(marked); safeWrite('brood-user-presets-v4', marked); };
+  const storeUser = (next) => { const marked = next.map((p) => ({ ...p, v: 5 })); setUserPatches(marked); safeWrite('brood-user-presets-v5', marked); };
   const savePatch = (category) => {
     const name = (window.prompt('A name for this sound:', currentPatch.factory ? '' : currentPatch.name) || '').trim().toUpperCase();
     if (!name) return;
@@ -1657,7 +1734,6 @@ function App() {
     lastLoop.current = 'off';   // the screen says RESET, not that the loop stopped
     setParams((p) => ({ ...sanitize(BASE), bpm: p.bpm }));
     setPreset(0); setModSource(0); setModOpen(false); setBrowsing(null); setRoutesOpen(false);
-    setInputGain(1); engineRef.current.setInputLevel(1);
     setHover(null);
     showReadout('RESET', 'a little daydream, loop cleared');
   };
@@ -1666,7 +1742,7 @@ function App() {
     setBusy(true); setNotice('');
     try {
       if (engineRef.current.running) { await engineRef.current.pause(); setRunning(false); showReadout('AUDIO', 'stopped'); }
-      else { engineRef.current.setInputLevel(inputGain); await engineRef.current.start(paramsRef.current); setRunning(true); showReadout('AUDIO', 'running'); }
+      else { engineRef.current.setInputLevel(faderGain(paramsRef.current.inputLevel, 24)); await engineRef.current.start(paramsRef.current); setRunning(true); showReadout('AUDIO', 'running'); }
     } catch (error) {
       setRunning(!!engineRef.current.running);
       setNotice(error?.name === 'NotAllowedError' ? 'Microphone access was denied. Choose DEMO or allow access in your browser.' : (error.message || 'Could not start audio.'));
@@ -1700,12 +1776,6 @@ function App() {
     try { await engineRef.current.chooseFile(file); setSource('file'); setFileName(file.name); showReadout(file.name, 'loaded, and looping into Brood'); }
     catch (error) { setNotice(error.message || 'Could not load that file.'); }
   };
-  const setLevel = (pos) => {
-    const g = levelGain(pos);
-    setInputGain(g); engineRef.current.setInputLevel(g);
-    const db = levelDb(g);
-    showReadout('LEVEL', `${db.toFixed(1)} dB`);
-  };
   const openMenu = useCallback((event, title, items) => {
     const box = stage.current.getBoundingClientRect(), w = stage.current.offsetWidth, k = w / box.width;
     setMenu({ x: (event.clientX - box.left) * k, y: (event.clientY - box.top) * k, w, h: stage.current.offsetHeight, title, items });
@@ -1724,10 +1794,10 @@ function App() {
     }
     return clamp(v);
   };
-  // What the screen and the knobs describe: the settings, and whether a playing loop mutes the dry sound.
-  const said = running && state?.loop === 'play' ? { ...params, dryMuted: true } : params;
+  // What the screen and the knobs describe.
+  const said = params;
   const routeMask = [0, 1].map((k) => MOD_TARGETS.map((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005));
-  const balanceRouted = routeMask[0][6] || routeMask[1][6];
+  const levelRouted = routeMask[0][6] || routeMask[1][6];
 
   const L = phone ? phoneLayout(params, tab) : { ...deskLayout(params), H: H + (tour >= 0 ? TOUR_DESK_H : 0) };
   const holes = tour >= 0 ? tourHoles(tour, L, overlayOpen) : null;
@@ -1748,14 +1818,14 @@ function App() {
   // What would keep the wet side silent in the wet steps, and the least that puts it right.
   const loopPlaying = running && (state?.loop === 'play' || state?.loop === 'dub');
   const quietWhy = [
-    params.mix < 0.05 && 'MIX is all dry',
-    params.balance < 0.05 && 'BALANCE is the loop alone',
+    params.wetMix < 0.05 && 'WET MIX is at 0',
+    params.routing === 3 && 'ROUTING is OFF',
     params.routing === 2 && !loopPlaying && 'ROUTING is LOOP, and no loop is playing',
   ].filter(Boolean);
   const quiet = quietWhy.length ? {
     why: quietWhy.join('; '),
     fix: () => {
-      setParams((p) => ({ ...p, ...(p.mix < 0.05 ? { mix: 0.5 } : {}), ...(p.balance < 0.05 ? { balance: 0.5 } : {}), ...(p.routing === 2 && !loopPlaying ? { routing: 1 } : {}) }));
+      setParams((p) => ({ ...p, ...(p.wetMix < 0.05 ? { wetMix: 0.5 } : {}), ...((p.routing === 3 || (p.routing === 2 && !loopPlaying)) ? { routing: 1 } : {}) }));
       showReadout('TOUR', 'set up to hear the wet side');
     },
   } : null;
@@ -1826,7 +1896,7 @@ function App() {
   const tourNow = {
     running, loop: running ? state?.loop || 'off' : 'off', take: running ? state?.lsrc || 0 : 0, time: params.time,
     start: params.start, loopEnd: params.loopEnd, clock: params.clock,
-    wetOn: running && !!state?.wetOn, freeze: running && !!state?.freeze, wetMode: params.wetMode, routes: routeCount,
+    wetMix: params.wetMix, freeze: running && !!state?.freeze, wetMode: params.wetMode, routes: routeCount,
     timeMod: Math.abs(params.mod1_time) + Math.abs(params.mod2_time), modOpen,
     rate: params[`mod${modSource + 1}Rate`], wave: params[`mod${modSource + 1}Wave`],
   };
@@ -1897,7 +1967,7 @@ function App() {
     if (phone && TOUR[tour]?.all) setBarHelp(item && !event.target.closest('button, [role=button], [role=radio], [role=switch]') ? { label: item.label, text: item.text } : null);
   };
   // Dragging a chip: the control it would land on, and a tag at the mouse.
-  const targetRect = (t) => (t === 6 ? grow(L.balance, 4, 6) : L.knob[KNOB_IDS.indexOf(MOD_TARGETS[t])]);
+  const targetRect = (t) => (t === 6 ? grow(L.loopLevel, 4, 6) : L.knob[KNOB_IDS.indexOf(MOD_TARGETS[t])]);
   const chipTarget = (event) => {
     const { x, y } = toDesign(event);
     return { x, y, target: MOD_TARGETS.findIndex((_, t) => targetRect(t) && inside(targetRect(t), x, y)) };
@@ -1919,12 +1989,17 @@ function App() {
   const lcdLabel = lcd.follows ? (lcd.knob >= 0 ? knobName(lcd.knob, params) : lcd.label) : lcd.label;
   const lcdValue = (lcd.follows ? describe(lcd.follows, said) : lcd.value).toUpperCase();
   const lsrc = state?.lsrc || 0;
-  const meta = `${((state?.clockHz ?? clockHz(params.clock, params.smooth)) / 1000).toFixed(1)} kHz    ${lsrc > 0 && state ? `loop ${(state.winLen / state.clockHz).toFixed(2)} s` : 'no loop'}`;
+  // While RESAMPLE runs, the screen's foot is its progress: how long so far and how long it needs.
+  const need = state?.resampleNeed ?? 0;
+  const meta = running && state?.resampling
+    ? `resampling ${state.resampleSecs.toFixed(1)} s ${need > 1e8 ? 'not moving' : `of ${need.toFixed(1)} s${need > 30 ? ' (30 s max)' : ''}`}`
+    : `${((state?.clockHz ?? clockHz(params.clock, params.smooth)) / 1000).toFixed(1)} kHz    ${lsrc > 0 && state ? `loop ${(state.winLen / state.clockHz).toFixed(2)} s` : 'no loop'}`;
 
   // The switches' lights: the wet side blinks while frozen; the loop blinks while it records or
   // layers, and flashes once each time a stopped looper fills its memory.
   if (state && state.histCycles !== loopFlash.current.cycles) { loopFlash.current = { cycles: state.histCycles, until: performance.now() + 120 }; }
-  const wetLit = running && !!state?.wetOn && !(state.freeze && !blink);
+  // FREEZE's light: solid while it's held, latched or by a hand on the key.
+  const wetLit = running && !!state?.freeze;
   const loopState = running ? state?.loop || 'off' : 'off';
   const loopLit = loopState === 'play' || ((loopState === 'rec' || loopState === 'dub') && blink) || (running && loopState === 'off' && performance.now() < loopFlash.current.until);
   const canDub = running && !!state && (state.canOverdub || state.dubLatched);
@@ -1936,14 +2011,23 @@ function App() {
   const rateFigure = spanMode ? rampDivLabel(rateValue) : (() => { const secs = 1 / rampHertz(rateValue); return secs < 1 ? `${Math.round(secs * 1000)}ms` : `${secs.toFixed(secs < 10 ? 1 : 0)}s`; })();
   const memoryFigure = params.memory <= 0.001 ? 'PEDAL' : `${expMap(params.memory, 1, 30).toFixed(1)}s`;
   const hoodValues = [
-    `${levelDb(inputGain) > 0.05 ? '+' : ''}${levelDb(inputGain).toFixed(1)} dB`,
     params.tone > 0.995 ? 'open' : `cut ${pct(1 - params.tone)}`,
     params.fade <= 0.001 ? 'pedal' : `keeps ${pct(1 - params.fade)}`,
     params.width <= 0.005 ? 'mono' : params.width < 0.49 ? `narrow ${pct(params.width * 2)}` : params.width > 0.51 ? `wide ${pct((params.width - 0.5) * 2)}` : 'as built',
     worn ? (params.wearNoise <= 0.005 ? 'off' : pct(params.wearNoise)) : 'when worn',
   ];
-  const balanceShown = balanceRouted && running ? effective(6) : params.balance;
+  const levelShown = levelRouted && running ? effective(6) : params.loopLevel;
+  const heard = !running || state?.inputHeard !== false;
+  const canResample = running && !!state && (state.canResample || state.resampling);
+  const routingNow = running && state && state.routingNow !== params.routing ? state.routingNow : -1;
   const pressSwitch = (id, label, on, off) => { const next = params[id] ? 0 : 1; update(id, next); showReadout(label, next ? on : off); };
+  // RESAMPLE that stopped at its limit says so, once.
+  const limitSeen = useRef(false);
+  useEffect(() => {
+    const hit = running && !!state?.resampleLimitHit && !state?.resampling;
+    if (hit && !limitSeen.current) showReadout('RESAMPLE', 'stopped at the 30 s limit. the take is kept, undo brings the old one back');
+    limitSeen.current = hit;
+  }, [running, state?.resampleLimitHit, state?.resampling, showReadout]);
   const demo = sounds.find((d) => d.id === demoId) || sounds[0];
   const sourceText = notice || (source === 'demo' ? '' : source === 'file' ? fileName : 'use headphones');
 
@@ -1991,22 +2075,25 @@ function App() {
           <div className="abs sheet" style={at(L.tabSheet)}/>
         </>}
         <TakeStrip L={L} wave={wave} state={running ? state : null} params={params} scale={scale} onChange={update} onTouch={touch} showReadout={showReadout}
-          running={running} engine={engineRef.current} openMenu={openMenu}/>
-        <Footswitch r={L.fsWet} name="WET" keyName="A" which="wet" lit={wetLit} onGesture={gesture}/>
+          running={running} engine={engineRef.current} openMenu={openMenu}
+          history={{ undo: history.undo.length, redo: history.redo.length, step: history.step }}/>
+        <Footswitch r={L.fsWet} name="FREEZE" keyName="A" which="wet" lit={wetLit} onGesture={gesture}/>
         <Footswitch r={L.fsLoop} name="LOOP" keyName="L" which="loop" lit={loopLit} onGesture={gesture}/>
         <Plate r={L.overdub} text="OVERDUB" on={state?.dubLatched && running} disabled={!canDub}
           onClick={() => { const on = !state?.dubLatched; engineRef.current.overdub(on); showReadout('OVERDUB', on ? 'layering until you switch it off' : 'off'); }}/>
+        <Plate r={L.resample} text="RESAMPLE" on={running && !!state?.resampling} disabled={!canResample}
+          onClick={() => { const was = !!state?.resampling; engineRef.current.resample(); showReadout('RESAMPLE', was ? 'stopped there, kept' : 'playing the loop into a new take'); }}/>
         {L.character && <Stepper r={L.character} caption="WEAR" names={['CLEAN', 'PEDAL', 'WORN']} index={wear} onStep={(d) => {
           const next = (wear + d + 3) % 3;
-          setParams((p) => ({ ...p, hiQ: next === 0 ? 1 : 0, classic: next === 2 ? 1 : 0 }));
+          updateMany('wear', (p) => ({ ...p, hiQ: next === 0 ? 1 : 0, classic: next === 2 ? 1 : 0 }));
           showReadout('WEAR', next === 0 ? 'clean: fewer artefacts, wet a little later' : next === 2 ? 'worn: a noisy clock, a restless loop, a longer reverb' : 'the pedal as built');
         }}/>}
         {worn && L.wearPost && <ThreeWay r={L.wearPost} labels={['Pre loop', 'Post loop']} index={params.wearPost} label="Pre or post loop"
           onChange={(i) => { update('wearPost', i); showReadout('PRE / POST LOOP', describe('wearPost', params, i)); }}/>}
         {L.wetMode && <ThreeWay r={L.wetMode} labels={['Reverb', 'Delay', 'Slip', 'Weave']} index={params.wetMode} label="Wet mode"
           onChange={(i) => { update('wetMode', i); showReadout('WET MODE', WET[i].toLowerCase()); }}/>}
-        {L.routing && <ThreeWay r={L.routing} labels={['In', 'In + Loop', 'Loop']} index={params.routing} label="Routing"
-          onChange={(i) => { update('routing', i); showReadout('ROUTING', ['in', 'in + loop', 'loop'][i]); }}/>}
+        {L.routing && <ThreeWay r={L.routing} labels={['In', 'In + Loop', 'Loop', 'Off']} index={params.routing} label="Routing" effective={routingNow}
+          onChange={(i) => { update('routing', i); showReadout('ROUTING', ['in', 'in + loop', 'loop', 'off'][i]); }}/>}
         {L.loopMode && <ThreeWay r={L.loopMode} labels={['Env', 'Tape', 'Stretch']} index={params.loopMode} label="Loop mode"
           onChange={(i) => { update('loopMode', i); showReadout('LOOP MODE', ['env', 'tape', 'stretch'][i]); }}/>}
         {KNOB_IDS.map((id, i) => L.knob[i] && <Knob key={id} i={i} r={L.knob[i]} valueW={L.knobValueW} params={said} effective={effective(MOD_TARGETS.indexOf(id))}
@@ -2016,12 +2103,11 @@ function App() {
         {L.tapeDelay && params.wetMode === 1 && <Plate r={L.tapeDelay} text="TAPE" on={params.tapeDelay} onClick={() => pressSwitch('tapeDelay', 'TAPE', 'tape echo: TIME bends the pitch', 'digital: TIME crossfades')}/>}
         {L.envSync && params.loopMode === 0 && <Plate r={L.envSync} text="SYNC" on={params.envSync} onClick={() => pressSwitch('envSync', 'SYNC', 'on the beat', 'free')}/>}
         {L.envSoft && params.loopMode === 0 && <Plate r={L.envSoft} text="SOFT" on={params.envSoft} onClick={() => pressSwitch('envSoft', 'SOFT', 'slices fade', 'slices cut')}/>}
-        {L.freeze && <Plate r={L.freeze} text="FREEZE" on={params.freeze} onClick={() => pressSwitch('freeze', 'FREEZE', 'held, ringing', 'moving')}/>}
         {L.trails && params.wetMode !== 2 && <Plate r={L.trails} text="TRAILS" on={params.trails} onClick={() => pressSwitch('trails', 'TRAILS', 'tails keep falling', 'tails cut')}/>}
         {L.smooth && <Plate r={L.smooth} text="SMOOTH" on={params.smooth} onClick={() => {
           const next = params.smooth ? 0 : 1;
           // Turning SMOOTH on starts from the step CLOCK is on, so the click doesn't move the sound.
-          setParams((p) => ({ ...p, smooth: next, ...(next ? { clock: Math.floor(clamp(p.clock) * 10 + 0.5) / 10 } : {}) }));
+          updateMany('smooth', (p) => ({ ...p, smooth: next, ...(next ? { clock: Math.floor(clamp(p.clock) * 10 + 0.5) / 10 } : {}) }));
           showReadout('SMOOTH', next ? 'clock glides' : 'clock steps');
         }}/>}
         {[['wetDiv', 'WET DIV', L.wetDiv], ['loopDiv', 'LOOP DIV', L.loopDiv]].map(([id, caption, r]) => {
@@ -2045,38 +2131,48 @@ function App() {
             </>}
         </div>
 
+        {/* INPUT: its level, and whether you hear it. Its mark is the lamp: lit while it's heard. */}
+        <Section r={L.inputArea} mark={heard ? LIT : 'rgba(24,24,21,.25)'} name="INPUT"
+          tail={params.monitor === 1 ? 'ON: HEARD' : params.monitor === 2 ? 'OFF: NOT HEARD' : heard ? 'AUTO: HEARD' : 'AUTO: LOOP REPLACES IT'}/>
+        <Txt r={L.inputLevelLabel} size={nf(16)} color={INK}>LEVEL</Txt>
+        <Slider r={L.inputLevel} value={params.inputLevel} label="Input level" valueText={describe('inputLevel', params)}
+          onTouch={() => touch('inputLevel')} onChange={(v) => update('inputLevel', v)} onReset={() => update('inputLevel', INPUT_UNITY)}/>
+        <Txt r={L.inputLevelFigure} align="right" cls="vl" size={vf(14)} color={MUTED}>{faderText(params.inputLevel, 24).replace(' dB', '').toUpperCase()}</Txt>
+        <Txt r={L.monitorLabel} size={nf(16)} color={INK}>MONITOR</Txt>
+        <ThreeWay r={L.monitor} labels={['Auto', 'On', 'Off']} index={params.monitor} label="Input monitor"
+          onChange={(i) => { update('monitor', i); showReadout('INPUT MONITOR', describe('monitor', params, i)); }}/>
+
         {/* LOOP */}
-        <Section r={L.loopArea} mark={MOSS} name="LOOP" tail={describe('balance', params, balanceShown).toUpperCase()}/>
-        <Txt r={L.memoryLabel} size={nf(16)} color={INK} style={{ opacity: record ? 0.35 : 1 }}>MEMORY</Txt>
-        <Slider r={L.memory} value={params.memory} disabled={record} label="Loop memory" valueText={describe('memory', params)}
-          onTouch={() => touch('memory')} onChange={(v) => update('memory', v)}/>
-        <Txt r={L.memoryFigure} align="right" cls="vl" size={vf(14)} color={MUTED} style={{ opacity: record ? 0.35 : 1 }}>{memoryFigure}</Txt>
-        <Txt r={L.balanceLabel} size={nf(16)} color={INK}>BALANCE</Txt>
-        <Txt r={[L.balance[0] - 32, L.balance[1], 32, 21]} size={nf(15)} color={MUTED}>LOOP</Txt>
-        <Txt r={L.wetEnd} size={nf(15)} color={MUTED}>WET</Txt>
-        <Slider r={L.balance} value={params.balance} label="Balance" valueText={describe('balance', params)} targetId="balance"
-          onTouch={() => touch('balance')} onChange={(v) => update('balance', v)}
+        <Section r={L.loopArea} mark={MOSS} name="LOOP" tail={`LEVEL ${describe('loopLevel', params, levelShown).toUpperCase()}`}/>
+        <Txt r={L.loopLevelLabel} size={nf(16)} color={INK}>LEVEL</Txt>
+        <Txt r={L.loopLevelFigure} align="right" cls="vl" size={vf(14)} color={MUTED}>{faderText(params.loopLevel, 12).replace(' dB', '').toUpperCase()}</Txt>
+        <Slider r={L.loopLevel} value={params.loopLevel} label="Loop level" valueText={describe('loopLevel', params)} targetId="loopLevel"
+          onTouch={() => touch('loopLevel')} onChange={(v) => update('loopLevel', v)} onReset={() => update('loopLevel', BASE.loopLevel)}
           modDepth={{
-            // Which source a vertical drag works on: the one already on BALANCE if only one is,
+            // Which source a vertical drag works on: the one already on LOOP LEVEL if only one is,
             // otherwise the selected one (as a knob's edge picks).
             source: () => (routeMask[0][6] !== routeMask[1][6] ? (routeMask[0][6] ? 0 : 1) : modSource),
-            get: (k) => params[`mod${k + 1}_balance`] || 0,
-            set: (k, v) => { update(`mod${k + 1}_balance`, v); setModSource(k); showReadout(`MOD ${k + 1} > BALANCE`, `${Math.round(v * 100) > 0 ? '+' : ''}${Math.round(v * 100)}%`); },
+            get: (k) => params[`mod${k + 1}_loopLevel`] || 0,
+            set: (k, v) => { update(`mod${k + 1}_loopLevel`, v); setModSource(k); showReadout(`MOD ${k + 1} > LOOP LEVEL`, `${Math.round(v * 100) > 0 ? '+' : ''}${Math.round(v * 100)}%`); },
           }}>
           {({ inset, span, cy }) => {
             // Clear of the tab: the first source's swing under the track, the second's over it.
             const bars = [0, 1].map((k) => {
-              const d = params[`mod${k + 1}_balance`];
+              const d = params[`mod${k + 1}_loopLevel`];
               if (Math.abs(d) < 0.005) return null;
-              const uni = params[`mod${k + 1}Uni`], v = params.balance;
+              const uni = params[`mod${k + 1}Uni`], v = params.loopLevel;
               const lo = clamp(uni ? Math.min(v, v + d) : v - Math.abs(d)), hi = clamp(uni ? Math.max(v, v + d) : v + Math.abs(d));
               return <rect key={k} x={inset + span * lo} y={k === 0 ? cy + 8 : cy - 13} width={span * (hi - lo)} height="3" rx="1.5" fill={MOD_COLOURS[k]} fillOpacity={params[`mod${k + 1}On`] ? 1 : 0.35}/>;
             });
-            if (!balanceRouted) return bars;
+            if (!levelRouted) return bars;
             const moving = [0, 1].filter((k) => routeMask[k][6] && params[`mod${k + 1}On`]);
             return <>{bars}<rect x={inset + span * effective(6) - 2.5} y={cy - 7.5} width="5" height="13" rx="2" fill={moving.length === 1 ? MOD_COLOURS[moving[0]] : INK}/></>;
           }}
         </Slider>
+        <Txt r={L.memoryLabel} size={nf(16)} color={INK} style={{ opacity: record ? 0.35 : 1 }}>MEMORY</Txt>
+        <Slider r={L.memory} value={params.memory} disabled={record} label="Loop memory" valueText={describe('memory', params)}
+          onTouch={() => touch('memory')} onChange={(v) => update('memory', v)}/>
+        <Txt r={L.memoryFigure} align="right" cls="vl" size={vf(14)} color={MUTED} style={{ opacity: record ? 0.35 : 1 }}>{memoryFigure}</Txt>
         <ThreeWay r={L.recMode} labels={['Capture', 'Record']} index={params.recMode} label="Capture or record"
           onChange={(i) => { update('recMode', i); showReadout('CAPTURE / RECORD', i ? 'record: tap, play, tap. or hold while you play' : 'capture: a tap keeps the recent past'); }}/>
         {record && <Stepper r={L.recBars} caption="BARS" names={['FREE', '1', '2', '3', '4', '6', '8', '12', '16']} index={REC_BARS.indexOf(params.recBars)}
@@ -2100,19 +2196,17 @@ function App() {
             onClick={() => { const next = params[`mod${n}${f}`] ? 0 : 1; update(`mod${n}${f}`, next); showReadout(`MOD ${n} ${f.toUpperCase()}`, next ? 'on' : 'off'); }}/>)}
         </>}
 
-        {/* the bottom strip: five cells on a desktop, five rows on a phone */}
+        {/* the bottom strip: four cells on a desktop, four rows on a phone */}
         <div className="abs sheet" style={at(L.hood)}/>
-        {['LEVEL', 'TONE', 'FADE', 'WIDTH', 'NOISE'].map((name, i) => {
-          const cell = L.hoodCell[i], id = ['input', 'tone', 'fade', 'width', 'wearNoise'][i];
+        {['TONE', 'FADE', 'WIDTH', 'NOISE'].map((name, i) => {
+          const cell = L.hoodCell[i], id = ['tone', 'fade', 'width', 'wearNoise'][i];
           const nameW = Math.ceil(name.length * 8.6) + 2;
           const slider = [cell[0], cell[1] + 22, cell[2], 26];
           return <React.Fragment key={name}>
             <Txt r={[cell[0], cell[1], nameW, 18]} size={nf(16)} color={INK}>{name}</Txt>
             <Txt r={[cell[0] + nameW + 8, cell[1], cell[2] - nameW - 8, 18]} align="right" cls="vl" size={vf(14)} color={MUTED}>{hoodValues[i]}</Txt>
-            {i === 0
-              ? <Slider r={slider} value={levelPos(inputGain)} label="Input level" valueText={hoodValues[0]} onChange={setLevel} onReset={() => setLevel(0.5)}/>
-              : <Slider r={slider} value={params[id]} label={name} valueText={describe(id, params)} onTouch={() => touch(id)}
-                onChange={(v) => update(id, v)} onReset={() => update(id, BASE[id])}/>}
+            <Slider r={slider} value={params[id]} label={name} valueText={describe(id, params)} onTouch={() => touch(id)}
+              onChange={(v) => update(id, v)} onReset={() => update(id, BASE[id])}/>
           </React.Fragment>;
         })}
 
@@ -2139,7 +2233,7 @@ function App() {
         </button>
 
         {browsing && <PresetBrowser L={L} patches={patches} current={currentPatch.name} favourites={favourites} onStar={starPatch} onSave={savePatch} onDelete={deletePatch}
-          onChoose={(patch) => { setPreset(patches.findIndex((p) => p.name === patch.name)); setParams(sanitize(patch.params)); }}
+          onChoose={(patch) => { setPreset(patches.findIndex((p) => p.name === patch.name)); updateMany('preset', (p) => ({ ...sanitize(patch.params), inputLevel: p.inputLevel, monitor: p.monitor, bpm: p.bpm })); }}
           onKeep={() => { setBrowsing(null); showReadout('PATCH', currentPatch.name.toLowerCase()); }}
           onCancel={() => { setParams(browsing.params); setPreset(browsing.preset); setBrowsing(null); }}/>}
         {pluginOpen && <PluginOnly L={L} close={() => setPluginOpen(false)}/>}

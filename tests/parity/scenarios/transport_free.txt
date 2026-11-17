@@ -2,9 +2,9 @@
 # around never touches it. ENV-free TAPE, as in transport_follow.
 rate 48000
 seconds 10
-0 param mix 1
-0 param routing 2
-0 param balance 0
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param routing 3
+0 param wetMix 0
 0 param clock 1
 0 param loopMode 1
 0 param memory 0.4

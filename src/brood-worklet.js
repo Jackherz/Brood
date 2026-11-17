@@ -28,6 +28,15 @@ const MAX_LOOP_SAMPLES = LOOP_SAMPLES * MAX_LOOP_SECONDS;
 // The take strip's live view: a peak for every this many ticks of history, kept as it's written.
 const LIVE_COL_TICKS = 128;
 const LIVE_COLS = MAX_LOOP_SAMPLES / LIVE_COL_TICKS;
+// The arena of loop audio, its regions and the versions UNDO and REDO swap in (see brood.h).
+const ARENA_TAKES = 4;
+const ARENA_SAMPLES = MAX_LOOP_SAMPLES * ARENA_TAKES;
+const REGIONS = 8, VERSIONS = 6, CHUNK = 4096, CHUNKS = Math.ceil(MAX_LOOP_SAMPLES / CHUNK);
+const VERSION_KIND = { none: 0, take: 1, clear: 2, layer: 3, resample: 4 };
+// RESAMPLE records one pass of the loop's window, up to its limit (see brood.h).
+const RESAMPLE_MAX_SEC = 30;
+const RESAMPLE_CAP = Math.trunc(RESAMPLE_MAX_SEC * 64000) + 1280;
+const AUTO = { start: 0, loopEnd: 1, length: 2, loopMode: 3, modLoop: 4, loopDiv: 5, loopLevel: 6, routing: 7, freeze: 8, mod1On: 9, mod2On: 10 };
 const CLOCK_MIN_HZ = 2000;
 const CLOCK_MAX_HZ = 64000;
 const CORE_FS = 64000;       // buffer timings are defined at the pedal’s 64 kHz clock
@@ -75,7 +84,21 @@ const TONE_HZ = 2600;
 // Each channel has a function generator that can drive one control. The first
 // position is off; MODIFY means this channel's own MODIFY knob.
 // What a modulation source can move, in the order of Core::effective().
-const MOD_TARGETS = ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance'];
+const MOD_TARGETS = ['time', 'wetMix', 'length', 'modWet', 'clock', 'modLoop', 'loopLevel'];
+
+// LOOP LEVEL and INPUT LEVEL are 0..1 faders: off at the bottom, then dB on a straight line
+// (LOOP LEVEL -48 to +12 dB, 0 dB at 0.8; INPUT LEVEL -48 to +24 dB, 0 dB at 2/3), the last 5%
+// fading to silence. Mirrors levelGain in native/dsp/brood.h.
+function levelGain(v, topDb) {
+  v = Math.min(1, Math.max(0, v));
+  if (v <= 0) return 0;
+  const db = -48 + v * (topDb + 48);
+  return Math.pow(10, db / 20) * Math.min(1, v / 0.05);
+}
+const loopLevelGain = (v) => levelGain(v, 12);
+const inputLevelGain = (v) => levelGain(v, 24);
+const loopLevelOfDb = (db) => Math.min(1, Math.max(0, (db + 48) / 60));
+const inputLevelOfDb = (db) => Math.min(1, Math.max(0, (db + 48) / 72));
 const RAMP_WAVES = ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH'];
 const rampWaveIndex = (k) => Math.round(clamp(k, 0, 1) * (RAMP_WAVES.length - 1));
 const rampHz = (k) => expMap(clamp(k, 0, 1), 0.05, 8);   // one cycle every 20 s … eight a second
@@ -548,9 +571,10 @@ class BroodCore {
   constructor(fs) {
     this.fs = fs;
     this.p = {
-      time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5,
-      wetMode: 0, routing: 0, loopMode: 0,
-      trails: 0, smooth: 0, balance: 0.5,
+      time: 0.5, wetMix: 0, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5,
+      // ROUTING: 0 IN, 1 IN + LOOP, 2 LOOP, 3 OFF. MONITOR: 0 AUTO, 1 ON, 2 OFF (see brood.h).
+      wetMode: 0, routing: 0, loopMode: 0, monitor: 0,
+      trails: 0, smooth: 0,
       sync: 0, bpm: 120,
       loopEnd: 1, start: 1, memory: 0,
       tone: 1, fade: 0, width: 0.5, wetDiv: 0, loopDiv: 0, classic: 0, wearNoise: 1, wearPost: 0, freeze: 0, tapeDelay: 0, overdubLatch: 0,
@@ -558,7 +582,7 @@ class BroodCore {
       // past. recBars 0 records until the next tap; otherwise that many bars, then plays.
       // Bars start at the next bar line while the host plays, unless recAtTap.
       recMode: 0, recBars: 0, recAtTap: 0, barQuarters: 4, hostPlaying: 0, ppq: 0, barStartPpq: 0,
-      envSoft: 0, loopDb: 0, hiQ: 0,
+      envSoft: 0, loopLevel: 0.8, hiQ: 0,
       // The two modulation sources: each its own rate and shape, and a depth (-1..1,
       // 0 is no route) for each control it can move.
       ...Object.fromEntries([1, 2].flatMap((n) => [
@@ -569,11 +593,11 @@ class BroodCore {
       envSync: 0,
     };
     // host-rate smoothed knobs
-    this.s = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5,
+    this.s = { time: 0.5, wetMix: 0, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, loopLevel: 0.8,
       tone: 1, fade: 0, width: 0.5, modRate: [0.45, 0.45] };
     // What the DSP actually reads: the smoothed knobs plus whatever a ramp is
     // moving. Rebuilt every host sample, so the ramps never disturb a knob.
-    this.e = { time: 0.5, mix: 0.5, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, balance: 0.5 };
+    this.e = { time: 0.5, wetMix: 0, length: 0.75, modWet: 0.5, clock: 1, modLoop: 0.5, loopLevel: 0.8 };
     this.hostCount = 0;
     this.phase = 0;
     this.clockRatio = 1;
@@ -599,18 +623,18 @@ class BroodCore {
     this.delay = new Delay(CORE_FS);
     this.slip = new Slip(CORE_FS);
     this.weave = new Weave(CORE_FS);
-    this.wetOn = false;
     this.freeze = false;
-    this.wetMomentary = false;
+    this.freezeTapped = false;
+    // The mix as it stands (mixTick): the monitor gate, what WET hears of the input and the
+    // loop, WET MIX's gains for the source and for WET, and the share of WET a take keeps.
+    this.mon = 1; this.rIn = 0; this.rLoop = 0; this.dGain = 1; this.gGain = 0; this.recK = 0; this.wetMixNow = 0;
+    this.routingNow = 0;
     this.dubGain = 0; this.dubPrev = 0; this.dubLast = -1; this.dubPos = 0; this.dubW = 64; this.dubStart = 0;
-    this.loopDbSeen = 0; this.loopLevelTarget = 1; this.loopLevel = 1;
+    this.loopLevel = 1;
     this.softStart = 0; this.softPh = 0; this.softS = 0; this.softOldFade = 0; this.softOldS = 0;   // SOFT: the slice being let go
-    this.wetIn = 0; this.wetOut = 0;           // core-rate gains
+    this.wetOut = 0;                           // core-rate gain
     this.lastWet = 0;                          // the wet side's last tick, for an overdub to layer
-    this.loopBare = 0;                         // the loop's last tick before GAIN (IN + LOOP's ceiling)
-    this.routeLoop = 0;                        // 1 in IN + LOOP, faded across a ROUTING change
-    this.dubReplace = 0;                       // how much of the old layer an overdub replaces
-    this.feedPow = 0; this.wetPow = 0; this.dubCeil = 1;   // IN + LOOP's ceiling on the re-recorded wet side
+    this.loopBare = 0;                         // the loop's last tick before LOOP LEVEL
     this.modeGain = [1, 0, 0, 0];               // crossfade between wet modes
     this.decor = [new Allpass(Math.round(113 * CORE_FS / 48000), 0.6), new Allpass(Math.round(337 * CORE_FS / 48000), 0.6)];
 
@@ -623,21 +647,29 @@ class BroodCore {
     this.liveCols = new Float32Array(LIVE_COLS);
     this.histTotal = 0;
     this.dubLo = Infinity; this.dubHi = -1;   // cells an overdub wrote since the strip looked
-    this.loopBuf = new Float32Array(nLoop);
-    // UNDO's copy: the take before the last CLEAR, new take or overdub layer (or after it,
-    // once undone). Swapped with loopBuf, never copied, except when a layer begins.
-    this.undoBuf = new Float32Array(nLoop);
-    this.undoLen = 0;
-    this.undoKind = 0;                          // 0 none, 1 take, 2 clear, 3 layer
-    this.undoRedo = false;
-    this.pendingOp = null;                      // 'clear' | 'undo', waiting for the loop to fade out
+    this.arena = new Float32Array(ARENA_SAMPLES);
+    this.regions = Array.from({ length: REGIONS }, () => ({ off: 0, len: 0, used: false }));
+    this.curRegion = -1;
+    this.loopBuf = null;                        // the take playing: a view of its region
+    this.versions = Array.from({ length: VERSIONS }, () => ({ used: false, undone: false, id: 0, kind: 0, region: -1, len: 0, follows: false, anchor: 0, base: -1, dirty: new Uint8Array(CHUNKS) }));
+    // RESAMPLE under way, and the tail left ringing after RESAMPLE moved ROUTING.
+    this.resampling = false; this.rsInTail = false; this.rsWetSeen = false; this.rsLimitHit = false; this.rsFollows = false;
+    this.rsRegion = -1; this.rsW = 0; this.rsLen = 0; this.rsTail = 0; this.wetSide = 0;
+    this.rsTravel = 0; this.rsTarget = 0; this.rsAnchor = 0; this.travelStep = 0; this.rsFeedIn = 1;
+    // The handover: the old loop dips out over 5 ms, the takes swap, the new one dips in (see brood.h).
+    this.rsHandover = false; this.rsHandLimit = false; this.rsSinceEnd = 0; this.rsDip = 1;
+    this.rsLimitAt = 0; this.rsStartHost = 0;
+    this.ring = false; this.ringRouting = -1;
+    this.nextVersionId = 1; this.layerVersion = -1; this.pendingSwap = -1;
+    this.versionEvents = [];                    // the core's news for the page's UNDO history
+    this.pendingOp = null;                      // 'clear' | 'swap', waiting for the loop to fade out
     this.resumeAfterOp = false;
     this.dubLatched = false; this.latchSeen = false;
     this.fitted = false;
     // Transport takes: caught while the host played, anchored at the song position of their
     // first sample. The undo copy keeps its own.
-    this.takeFollows = false; this.undoFollows = false; this.parked = false;
-    this.anchorPpq = 0; this.undoAnchor = 0;
+    this.takeFollows = false; this.parked = false;
+    this.anchorPpq = 0;
     this.lastHostPlaying = false; this.lastPpq = 0; this.lastBlockN = 0; this.blockStartCount = 0;
     this.pendingLock = false; this.lockGain = 1; this.lockShift = NaN;
     this.sliceFresh = false; this.gridS = -1; this.gridLine = 0; this.gridTLine = 0;   // ENV synced to a playing host
@@ -688,12 +720,6 @@ class BroodCore {
     this.fsDown = { wet: null, loop: null };   // press state for footswitches
     this.rec = { phase: 'idle', histIdx: 0, histCycle: 0, endAt: -1, barTarget: 0 };   // RECORD
     this.engaged = 0;
-    // The browser page's own (the plug-in has no such thing, and with it off nothing changes):
-    // while a loop plays, the dry side stands down so the loop is heard alone. It comes back
-    // when the loop stops, and while a layer is being added, so you hear what you're adding.
-    this.soloLoop = false;
-    this.dryKeep = 1;                           // the dry side's share, ramped over 30 ms
-    this.dryStep = 1 / (0.03 * fs);
     this.dropUndo = false;                      // a full reset: the cleared take isn't kept for UNDO
     this.events = [];                           // UI notifications (loop captured, ...)
     this.peakIn = 0; this.peakOut = 0;
@@ -706,22 +732,15 @@ class BroodCore {
   // which: 'wet' | 'loop', action: 'down' | 'up'
   footswitch(which, action) {
     const now = this.hostCount;
+    // The FREEZE key: a hold freezes WET for as long as it's held; a tap asks the page to flip
+    // the FREEZE switch (takeFreezeTap), which is a setting and so is saved.
     if (which === 'wet') {
-      if (action === 'down') {
-        this.fsDown.wet = { t: now, held: false };
-        if (!this.wetOn) { this.wetOn = true; this.wetMomentary = true; }
-        else this.wetMomentary = false;
-      } else if (this.fsDown.wet) {
+      if (action === 'down') this.fsDown.wet = { t: now, held: false };
+      else if (this.fsDown.wet) {
         const held = this.fsDown.wet.held;
         this.fsDown.wet = null;
-        if (held) {                       // a hold freezes for as long as it is held
-          this.freeze = false;
-          if (this.wetMomentary) this.wetOn = false;
-        } else if (!this.wetMomentary) {
-          this.wetOn = false;
-          this.freeze = false;
-        }
-        this.wetMomentary = false;
+        if (held) this.freeze = false;
+        else this.freezeTapped = true;
       }
       return;
     }
@@ -778,6 +797,7 @@ class BroodCore {
   clearLoop() {
     this.settlePending();
     this.rec.phase = 'idle';
+    if (this.resampling) this.cancelResample();
     if (this.lsrc < 64) return;
     this.overdub = false; this.dubLatched = false;
     if (this.loopState === 'play' || this.loopGain > 0) { this.loopState = 'off'; this.pendingOp = 'clear'; this.resumeAfterOp = false; return; }
@@ -788,76 +808,330 @@ class BroodCore {
   // it's playing, as CLEAR does) and nothing is kept for UNDO. The settings are the page's to
   // put back; the memory of what was just heard carries on.
   fullReset() {
-    this.fsDown.wet = null; this.wetOn = false; this.wetMomentary = false; this.freeze = false;
+    this.fsDown.wet = null; this.freeze = false; this.freezeTapped = false;
     this.fsDown.loop = null;
     this.overdub = false; this.dubLatched = false; this.p.overdubLatch = 0;
     this.clearLoop();
     if (this.pendingOp) this.dropUndo = true; else this.forgetUndo();
   }
-  forgetUndo() { this.undoKind = 0; this.undoLen = 0; this.undoRedo = false; this.dropUndo = false; }
-
-  // UNDO: one step back over the last CLEAR, new take or overdub layer; again, it redoes.
-  // Undoing a layer keeps a playing loop playing (it dips while the take is swapped);
-  // undoing a clear or a take leaves the loop stopped, ready for a tap.
-  undoLoop() {
-    this.settlePending();
-    if (this.undoKind === 0 || this.rec.phase !== 'idle') return;
-    this.resumeAfterOp = this.loopState === 'play' && this.undoKind === 3;
-    this.overdub = false; this.dubLatched = false;
-    if (this.loopState === 'play' || this.loopGain > 0) { this.loopState = 'off'; this.pendingOp = 'undo'; return; }
-    this.pendingOp = 'undo';
-    this.settlePending();
+  forgetUndo() {
+    // Nothing kept for UNDO: every version goes (the take playing, if any, keeps its region).
+    for (let v = 0; v < VERSIONS; v++) this.freeVersion(v);
+    this.layerVersion = -1; this.pendingSwap = -1; this.dropUndo = false;
+    this.versionEvents.push({ type: 'reset' });
   }
 
-  canOverdub() { return this.loopState === 'play' && this.lsrc >= 64 && this.pendingOp === null; }
+  // UNDO and REDO: swap a version back in (see brood.h).
+  swapVersion(id) {
+    this.settlePending();
+    const v = this.versionIndex(id);
+    if (v < 0) return;
+    this.resumeAfterOp = this.loopState === 'play' && this.versions[v].kind === VERSION_KIND.layer;
+    this.overdub = false; this.dubLatched = false;
+    this.pendingSwap = id; this.pendingOp = 'swap';
+    if (this.loopState === 'play' || this.loopGain > 0) { this.loopState = 'off'; return; }
+    this.settlePending();
+  }
+  releaseVersion(id) { const v = this.versionIndex(id); if (v >= 0) this.freeVersion(v); }
+  cancelActive() {
+    if (this.rec.phase !== 'idle') { this.rec.phase = 'idle'; return true; }
+    if (this.resampling) { this.cancelResample(); return true; }
+    return false;
+  }
+  // RESAMPLE's key (see brood.h).
+  resampleKey() {
+    this.settlePending();
+    if (this.resampling) { this.beginHandover(false); return; }
+    if (!this.canResample()) return;
+    const r = this.allocRegion(RESAMPLE_CAP);
+    if (r < 0) return;
+    this.resampling = true; this.rsHandover = false; this.rsLimitHit = false; this.rsRegion = r; this.rsW = 0; this.rsTravel = 0; this.rsInTail = false; this.rsLen = 0; this.rsTail = 0; this.rsWetSeen = false;
+    this.rsTarget = this.resampleTarget();
+    this.rsLimitAt = this.hostCount + Math.round(RESAMPLE_MAX_SEC * this.fs);
+    this.rsStartHost = this.hostCount;
+    this.rsFollows = this.takeFollows && !!this.p.hostPlaying; this.rsAnchor = this.songNow();
+  }
+  setSide(side) { this.wetSide = side === 1 ? 1 : 0; }
+  resampleEstimate() {
+    const rate = Math.abs(this.loopRate()) * this.clockRatio * this.fs;
+    const need = this.resampleTarget();
+    return rate < 1e-6 ? 1e9 : need / rate;
+  }
+  canResample() { return this.loopState === 'play' && this.lsrc >= 64 && this.pendingOp === null && !this.overdub && this.dubGain < 1e-4 && this.rec.phase === 'idle'; }
+  resampleTarget() {
+    return this.lsrc < 64 ? 0 : (this.p.loopMode === 1 && this.lengthSlew >= 0 ? this.loopWindowAt(this.lengthSlew) : this.loopWindow()).W;
+  }
+  cancelResample() { if (!this.resampling) return; this.resampling = false; this.rsHandover = false; this.freeRegion(this.rsRegion); this.rsRegion = -1; }
+  beginHandover(limit) {
+    if (!this.resampling || this.rsHandover) return;
+    this.rsHandover = true; this.rsHandLimit = limit; this.rsSinceEnd = 0;
+  }
+  finishResample(limit) {
+    if (!this.resampling) return;
+    this.resampling = false; this.rsHandover = false;
+    const off = this.regions[this.rsRegion].off, a = this.arena;
+    let main = this.rsInTail ? this.rsLen : this.rsW;
+    let F = this.rsInTail ? this.rsW - this.rsLen : 0;
+    if (F <= 0) {
+      F = Math.min(Math.round(0.01 * this.clockRatio * this.fs), Math.trunc(main / 4));
+      main -= F;
+    }
+    if (main < 64) { this.freeRegion(this.rsRegion); this.rsRegion = -1; return; }
+    for (let i = 0; i < F; i++) {
+      const w = i / F;
+      a[off + i] = a[off + i] * w + a[off + main + i] * (1 - w);
+    }
+    this.dropRedo(); this.endLayer();
+    const v = this.keepTake(VERSION_KIND.resample);
+    const region = this.rsRegion; this.rsRegion = -1; this.regions[region].len = Math.ceil(main / CHUNK) * CHUNK;
+    this.setTake(region);
+    // Where the new take should be by now (see brood.h).
+    this.lsrc = main; this.loopPos = (this.rsW - main + this.rsSinceEnd) % main;
+    this.grain[0].ph = 0; this.grain[1].ph = 0.5;
+    this.grain[0].start = 0; this.grain[1].start = 0;
+    this.grain[0].dir = 1; this.grain[1].dir = 1;
+    this.grain[0].off = -1; this.grain[1].off = -1;
+    this.takeFollows = this.rsFollows; this.anchorPpq = this.rsAnchor; this.parked = false; this.pendingLock = false; this.lockGain = 1;
+    this.loopState = 'play'; this.events.push('loop-wave');
+    this.rsLimitHit = limit;
+    const p = this.p, autos = [];
+    this.fitWindow();
+    autos.push({ which: AUTO.start, value: 1 }, { which: AUTO.loopEnd, value: 1 }, { which: AUTO.length, value: 1 });
+    p.length = 1; this.s.length = 1;
+    p.loopMode = 1; autos.push({ which: AUTO.loopMode, value: 1 });
+    p.modLoop = 0.66; this.s.modLoop = 0.66; this.tapeSpeed = 1; autos.push({ which: AUTO.modLoop, value: 0.66 });
+    p.loopDiv = 0; autos.push({ which: AUTO.loopDiv, value: 0 });
+    p.loopLevel = 0.8; this.s.loopLevel = 0.8; autos.push({ which: AUTO.loopLevel, value: 0.8 });
+    if (this.rsWetSeen && (p.routing === 1 || p.routing === 2)) {
+      p.routing = p.routing === 2 ? 3 : 0; autos.push({ which: AUTO.routing, value: p.routing });
+      this.ring = true; this.ringRouting = p.routing;
+      if (p.freeze > 0.5) { p.freeze = 0; autos.push({ which: AUTO.freeze, value: 0 }); }
+      this.freeze = false;
+    }
+    for (let k = 0; k < 2; k++) {
+      const n = k + 1;
+      let loopOnly = !!p[`mod${n}On`], any = false;
+      for (let t2 = 0; t2 < MOD_TARGETS.length; t2++) {
+        if (Math.abs(p[`mod${n}_${MOD_TARGETS[t2]}`]) < 1e-6) continue;
+        any = true;
+        if (t2 !== 2 && t2 !== 5 && t2 !== 6) loopOnly = false;
+      }
+      if (loopOnly && any) { p[`mod${n}On`] = 0; autos.push({ which: k === 0 ? AUTO.mod1On : AUTO.mod2On, value: 0 }); }
+    }
+    this.announce(v, autos);
+  }
+  resampleTick(loopOut, wetHere) {
+    if (this.loopState !== 'play') { this.finishResample(false); return; }
+    if (this.rsHandover) {
+      this.rsSinceEnd++;
+      this.rsDip = Math.max(0, this.rsDip - 1 / (0.005 * CORE_FS));
+      if (this.rsDip <= 0) this.finishResample(this.rsHandLimit);
+      return;
+    }
+    const rl = this.rLoop * (1 - this.rIn);
+    if (rl * this.gGain > 1e-3) this.rsWetSeen = true;
+    this.arena[this.regions[this.rsRegion].off + this.rsW++] = softClip(loopOut * (1 - rl * (1 - this.dGain)) + rl * this.gGain * wetHere);
+    if (!this.rsInTail) {
+      this.rsTravel += this.travelStep;
+      if (this.rsTravel >= this.rsTarget) {
+        this.rsInTail = true; this.rsLen = this.rsW;
+        this.rsTail = Math.max(1, Math.min(Math.round(0.01 * this.clockRatio * this.fs), Math.trunc(this.rsLen / 4)));
+      }
+    }
+    if (this.rsInTail && this.rsW - this.rsLen >= this.rsTail) { this.beginHandover(false); return; }
+    if (this.rsW >= RESAMPLE_CAP) this.beginHandover(true);
+  }
+  resamplingNeed() {
+    if (!this.resampling) return this.resampleEstimate();
+    const rate = Math.abs(this.loopRate()) * this.clockRatio * this.fs;
+    const secs = (this.hostCount - this.rsStartHost) / this.fs;
+    return rate < 1e-6 ? 1e9 : secs + Math.max(0, this.rsTarget - this.rsTravel) / rate;
+  }
+  popVersionEvent() { return this.versionEvents.length ? this.versionEvents.shift() : null; }
 
-  // A new overdub layer: the take as it stands becomes UNDO's copy first.
+  // ── the arena and its versions ── (mirrors native/dsp/brood.h)
+  versionIndex(id) {
+    for (let v = 0; v < VERSIONS; v++) if (this.versions[v].used && this.versions[v].id === id) return v;
+    return -1;
+  }
+  freeRegion(r) { if (r >= 0) { const g = this.regions[r]; g.off = 0; g.len = 0; g.used = false; } }
+  freeVersion(v) {
+    const ver = this.versions[v];
+    if (!ver.used) return;
+    this.freeRegion(ver.region);
+    if (this.layerVersion === v) this.layerVersion = -1;
+    ver.used = false; ver.region = -1;
+  }
+  evictOldest() {
+    let oldest = -1;
+    for (let v = 0; v < VERSIONS; v++)
+      if (this.versions[v].used && v !== this.layerVersion && (oldest < 0 || this.versions[v].id < this.versions[oldest].id)) oldest = v;
+    if (oldest < 0) return false;
+    const id = this.versions[oldest].id;
+    this.freeVersion(oldest);
+    this.versionEvents.push({ type: 'evicted', id });
+    return true;
+  }
+  allocRegion(n) {
+    n = Math.ceil(n / CHUNK) * CHUNK;   // whole chunks (see brood.h)
+    for (;;) {
+      let slot = -1;
+      for (let r = 0; r < REGIONS; r++) if (!this.regions[r].used) { slot = r; break; }
+      if (slot >= 0) {
+        let at = 0;
+        for (;;) {
+          let moved = false;
+          for (const r of this.regions) if (r.used && at < r.off + r.len && r.off < at + n) { at = r.off + r.len; moved = true; }
+          if (!moved) break;
+        }
+        if (at + n <= ARENA_SAMPLES) { const g = this.regions[slot]; g.off = at; g.len = n; g.used = true; return slot; }
+      }
+      if (!this.evictOldest()) return -1;
+    }
+  }
+  dropRedo() {
+    for (let v = 0; v < VERSIONS; v++)
+      if (this.versions[v].used && this.versions[v].undone && v !== this.layerVersion) {
+        const id = this.versions[v].id;
+        this.freeVersion(v); this.versionEvents.push({ type: 'released', id });
+      }
+  }
+  newVersion(kind) {
+    let slot = -1;
+    for (let v = 0; v < VERSIONS; v++) if (!this.versions[v].used) { slot = v; break; }
+    while (slot < 0) {
+      if (!this.evictOldest()) return -1;
+      for (let v = 0; v < VERSIONS; v++) if (!this.versions[v].used) { slot = v; break; }
+    }
+    const ver = this.versions[slot];
+    ver.used = true; ver.undone = false; ver.id = this.nextVersionId++; ver.kind = kind;
+    ver.region = -1; ver.len = 0; ver.follows = false; ver.anchor = 0; ver.base = -1;
+    return slot;
+  }
+  keepTake(kind) {
+    const v = this.newVersion(kind);
+    if (v < 0) return -1;
+    const ver = this.versions[v];
+    if (this.lsrc >= 64 && this.curRegion >= 0) { ver.region = this.curRegion; ver.len = this.lsrc; }
+    else this.freeRegion(this.curRegion);
+    ver.follows = this.takeFollows; ver.anchor = this.anchorPpq;
+    this.curRegion = -1; this.loopBuf = null;
+    return v;
+  }
+  announce(v, autos = []) {
+    if (v < 0) return;
+    this.versionEvents.push({ type: 'added', id: this.versions[v].id, kind: this.versions[v].kind, autos: autos.slice(0, 12) });
+  }
+  keepChunk(cell) {
+    if (this.layerVersion < 0) return;
+    const ver = this.versions[this.layerVersion];
+    const c = Math.floor(cell / CHUNK);
+    if (c < 0 || c >= CHUNKS || ver.dirty[c]) return;
+    ver.dirty[c] = 1;
+    const from = c * CHUNK, to = Math.min(this.lsrc, from + CHUNK);
+    if (ver.region >= 0 && to > from) this.arena.copyWithin(this.regions[ver.region].off + from, this.regions[this.curRegion].off + from, this.regions[this.curRegion].off + to);
+  }
+  setTake(r) { this.curRegion = r; this.loopBuf = r >= 0 ? this.arena.subarray(this.regions[r].off, this.regions[r].off + MAX_LOOP_SAMPLES > ARENA_SAMPLES ? ARENA_SAMPLES : this.regions[r].off + MAX_LOOP_SAMPLES) : null; }
+
+  canOverdub() { return this.loopState === 'play' && this.lsrc >= 64 && this.pendingOp === null && this.p.monitor !== 2 && !this.resampling; }
+  takeFreezeTap() { const t = this.freezeTapped; this.freezeTapped = false; return t; }
+
+  // INPUT MONITOR's target (see brood.h).
+  monTarget() {
+    const m = this.p.monitor;
+    if (m === 1) return 1;
+    if (m === 2) return 0;
+    return this.loopState === 'play' && !this.overdub ? 0 : 1;
+  }
+  // The routing WET has now (see brood.h).
+  routingEffective() {
+    const r = Math.min(3, Math.max(0, this.p.routing | 0));
+    if (r === 1 && this.resampling) return 2;
+    if (r === 1 && (this.loopState !== 'play' || this.overdub)) return 0;
+    return r;
+  }
+  mixTick(aR) {
+    this.routingNow = this.routingEffective();
+    const rn = this.routingNow;
+    this.mon += (this.monTarget() - this.mon) * aR;
+    this.rIn += ((rn === 0 || rn === 1 ? 1 : 0) - this.rIn) * aR;
+    this.rLoop += ((rn === 1 || rn === 2 ? 1 : 0) - this.rLoop) * aR;
+    this.wetMixNow = clamp(this.e.wetMix, 0, 1);
+    this.dGain = Math.min(1, 2 * (1 - this.wetMixNow));
+    this.gGain = Math.min(1, 2 * this.wetMixNow);
+    this.recK = this.rIn * (1 - this.rLoop) * this.mon;
+    // RESAMPLE: the input's way into WET closes in 5 ms, all the way (see brood.h).
+    const step = 1 / (0.005 * this.fs);
+    this.rsFeedIn = this.resampling ? Math.max(0, this.rsFeedIn - step) : Math.min(1, this.rsFeedIn + step);
+  }
+
+  // A new layer: a version that keeps the old side of every chunk it writes (keepChunk).
   beginLayer() {
     if (this.overdub) return;
-    this.undoBuf.set(this.loopBuf.subarray(0, this.lsrc));
-    this.undoLen = this.lsrc; this.undoKind = 3; this.undoRedo = false;
-    this.undoFollows = this.takeFollows; this.undoAnchor = this.anchorPpq;
+    this.dropRedo();
+    const v = this.newVersion(VERSION_KIND.layer);
+    if (v >= 0) {
+      const r = this.allocRegion(this.lsrc);
+      const ver = this.versions[v];
+      ver.region = r; ver.len = this.lsrc; ver.base = this.curRegion; ver.follows = this.takeFollows; ver.anchor = this.anchorPpq;
+      ver.dirty.fill(0);
+      if (r < 0) this.freeVersion(v);
+      else { this.layerVersion = v; this.announce(v); }
+    }
     this.overdub = true;
   }
+  endLayer() { this.layerVersion = -1; }
 
   doClear() {
-    [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
-    this.undoFollows = this.takeFollows; this.undoAnchor = this.anchorPpq; this.takeFollows = false; this.parked = false;
-    this.undoLen = this.lsrc; this.lsrc = 0; this.loopPos = 0;
-    this.undoKind = 2; this.undoRedo = false;
+    this.dropRedo();
+    const v = this.keepTake(VERSION_KIND.clear);
+    this.takeFollows = false; this.parked = false;
+    this.lsrc = 0; this.loopPos = 0;
     this.events.push('loop-wave');
+    this.announce(v);
   }
 
   runOp(op) {
     if (op === 'clear') { this.doClear(); return; }
-    [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
-    [this.lsrc, this.undoLen] = [this.undoLen, this.lsrc];
-    [this.takeFollows, this.undoFollows] = [this.undoFollows, this.takeFollows];   // each take keeps its kind
-    [this.anchorPpq, this.undoAnchor] = [this.undoAnchor, this.anchorPpq];
-    this.undoRedo = !this.undoRedo;
-    if (this.undoKind !== 3) {
+    const v = this.versionIndex(this.pendingSwap);
+    this.pendingSwap = -1;
+    if (v < 0) return;
+    const ver = this.versions[v];
+    this.endLayer();
+    if (ver.kind === VERSION_KIND.layer) {
+      if (ver.base === this.curRegion && ver.region >= 0 && this.curRegion >= 0) {
+        const a = this.arena, liveOff = this.regions[this.curRegion].off, copyOff = this.regions[ver.region].off;
+        for (let c = 0; c < CHUNKS; c++) {
+          if (!ver.dirty[c]) continue;
+          const from = c * CHUNK, to = Math.min(Math.min(this.lsrc, ver.len), from + CHUNK);
+          for (let i = from; i < to; i++) { const t = a[liveOff + i]; a[liveOff + i] = a[copyOff + i]; a[copyOff + i] = t; }
+        }
+      }
+    } else {
+      const r = this.curRegion, len = this.lsrc, fol = this.takeFollows, anc = this.anchorPpq;
+      this.setTake(ver.region); this.lsrc = ver.len; this.takeFollows = ver.follows; this.anchorPpq = ver.anchor;
+      ver.region = r; ver.len = len; ver.follows = fol; ver.anchor = anc;
+      if (this.curRegion < 0) this.lsrc = 0;
       this.loopPos = 0;
       this.grain[0].ph = 0; this.grain[1].ph = 0.5;
       this.grain[0].start = 0; this.grain[1].start = 0;
       this.grain[0].dir = 1; this.grain[1].dir = 1;
-    this.grain[0].off = -1; this.grain[1].off = -1;
-      if (this.lsrc >= 64) this.fitWindow();   // another take: it plays all of itself, as a new one does
+      this.grain[0].off = -1; this.grain[1].off = -1;
     }
+    ver.undone = !ver.undone;
     this.events.push('loop-wave');
   }
 
-  // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
-  // An undone take plays, since a tap with the loop stopped would catch a new one instead;
-  // a transport take with the host stopped parks and waits for play. Undoing a layer keeps
-  // a playing loop playing and a stopped one stopped.
+  // A CLEAR or a swap waiting for the loop to fade out happens now (see brood.h).
   settlePending() {
     if (!this.pendingOp) return;
     const op = this.pendingOp;
     this.pendingOp = null;
-    const layer = this.undoKind === 3;
+    const v = this.versionIndex(this.pendingSwap);
+    const layer = v >= 0 && this.versions[v].kind === VERSION_KIND.layer;
     this.runOp(op);
     this.parked = false;
-    if (op === 'undo' && this.lsrc >= 64 && (!layer || this.resumeAfterOp)) {
+    if (op === 'swap' && this.lsrc >= 64 && (!layer || this.resumeAfterOp)) {
       if (this.takeFollows && !this.p.hostPlaying) this.parked = true;
       else { this.loopState = 'play'; if (this.takeFollows) { this.pendingLock = true; this.lockGain = 0; this.lockShift = NaN; } }
     }
@@ -933,11 +1207,13 @@ class BroodCore {
   capture(n) {
     n = Math.floor(Math.min(n, this.hist.length - 1, this.histCount, this.maxCaptureSamples()));
     if (n < 64) return;
-    // The take this replaces becomes UNDO's copy: a swap, nothing copied.
-    [this.loopBuf, this.undoBuf] = [this.undoBuf, this.loopBuf];
-    this.undoLen = this.lsrc >= 64 ? this.lsrc : 0;
-    this.undoFollows = this.takeFollows; this.undoAnchor = this.anchorPpq;
-    this.undoKind = 1; this.undoRedo = false;
+    // The take this replaces becomes a version UNDO can swap back (see brood.h).
+    this.dropRedo();
+    this.endLayer();
+    const region = this.allocRegion(n);
+    if (region < 0) return;
+    const v = this.keepTake(VERSION_KIND.take);
+    this.setTake(region);
     const N = this.hist.length;
     let r = this.histW - n; if (r < 0) r += N;
     for (let i = 0; i < n; i++) {
@@ -959,6 +1235,8 @@ class BroodCore {
     // its first sample belongs to.
     this.takeFollows = !!this.p.hostPlaying; this.parked = false; this.pendingLock = false; this.lockGain = 1;
     this.anchorPpq = this.songNow() - n / Math.max(1, this.clockRatio * this.fs) * this.p.bpm / 60;
+    const autos = [{ which: AUTO.start, value: 1 }, { which: AUTO.loopEnd, value: 1 }, { which: AUTO.length, value: 1 }];
+    this.announce(v, this.p.loopMode === 1 ? autos : autos.slice(0, 2));
   }
 
   // A new take plays all of itself: END at the end, START out of the way and, in TAPE,
@@ -1106,6 +1384,7 @@ class BroodCore {
     const a = Math.abs(x);
     this.env += (a - this.env) * (a > this.env ? 0.02 : 0.0005);
 
+    this.travelStep = 0;
     const target = this.loopState === 'play' ? 1 : 0;
     this.loopGain += (target - this.loopGain) * 0.003;
     if (this.loopState === 'off' && this.loopGain < 1e-4) {
@@ -1394,6 +1673,7 @@ class BroodCore {
     // the rate it records at, so nothing folds back as aliasing (see brood.h).
     {
       const rate = Math.abs(pos - posAtStart - dubWow);
+      this.travelStep = rate;   // RESAMPLE's length counts this
       if (Math.abs(rate - this.dubAARate) > 0.002 * Math.max(rate, 0.01)) {
         this.dubAARate = rate;
         const fc = Math.max(20, 0.4 * Math.min(1, rate) * CORE_FS);
@@ -1421,11 +1701,12 @@ class BroodCore {
       // pedal's slow decay; 1 lets the new layer replace it completely.
       // IN + LOOP with the wet side on: the old loop comes back through the wet side, so the
       // layer replaces it by that share instead of stacking a second copy (see brood.h).
-      const loss = 1 - 0.97 * (1 - clamp(this.s.fade, 0, 1)) * (1 - this.dubReplace);
+      const loss = 1 - 0.97 * (1 - clamp(this.s.fade, 0, 1));
       const dubF = Math.min(0.004 * fs, dubW / 4);
       const write = (cellQ, v) => {
         const amount = this.dubGain * Math.min(1, cellQ / dubF, (dubW - cellQ) / dubF);
         const wi = Math.min(len - 1, Math.max(0, this.dubStart + cellQ));
+        this.keepChunk(wi);   // the old side, for UNDO, before it's written over
         if (wi < this.dubLo) this.dubLo = wi;
         if (wi > this.dubHi) this.dubHi = wi;
         buf[wi] = buf[wi] * (1 - loss * amount) + v * amount;
@@ -1438,44 +1719,31 @@ class BroodCore {
         for (let k = 1; k <= count; k++) write(((this.dubLast + dir * k) % dubW + dubW) % dubW, this.dubPrev + (rec - this.dubPrev) * k / count);
       }
       this.dubLast = q; this.dubPrev = rec;
-    } else this.dubLast = -1;
+    } else { this.dubLast = -1; if (!this.overdub) this.endLayer(); }   // the layer has faded out: it's done
     if (this.startFade < 1) this.carryA += Math.floor(pos / W) * W;
     this.loopPos = ((pos % W) + W) % W;
     this.heardAt(heard, hpos, hlev, W);
     // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
-    if (this.p.loopDb !== this.loopDbSeen) { this.loopDbSeen = this.p.loopDb; this.loopLevelTarget = Math.pow(10, this.p.loopDb / 20); }
-    this.loopLevel += (this.loopLevelTarget - this.loopLevel) * 0.003;
-    this.loopBare = y * this.loopGain * this.lockGain;
+    this.loopLevel = loopLevelGain(this.e.loopLevel);
+    this.loopBare = y * this.loopGain * this.lockGain * this.rsDip;
     return this.loopBare * this.loopLevel;
   }
 
   coreTick(x) {
     const p = this.p, e = this.e;
-    // ROUTING decides what the wet side hears and what the looper keeps (see brood.h):
-    // IN and IN + LOOP record the wet side with the input; LOOP records only the input,
-    // and the wet side hears only the loop.
-    const recordWet = p.routing !== 2;
-    // IN + LOOP: what an overdub keeps of the wet side follows WET/LOOP, and the layer replaces
-    // the old one by that share times the wet side being on, so a pass can't run away (brood.h).
-    this.routeLoop += ((p.routing === 1 ? 1 : 0) - this.routeLoop) * 0.003;
-    const wetShare = this.routeLoop * Math.min(1, 2 * e.balance);
-    this.dubReplace = wetShare * this.wetIn;
-    // The loop is read before the wet side runs, so an overdub layers the wet side from the
-    // tick before.
-    const loopOut = this.loopTick(x, recordWet ? softClip(x + this.lastWet * (1 - this.routeLoop + wetShare) * (1 - this.routeLoop * (1 - this.dubCeil))) : x);
-    // GAIN sets the loop's level for the wet side too, so turning it down quietens both.
-    const wetSrc = p.routing === 2 ? loopOut : p.routing === 1 ? x + loopOut : x;
-    // The FREEZE switch is the hold gesture without the holding: it brings the wet
-    // side up and freezes it, so a reverb can be left ringing on its own.
-    const held = p.freeze > 0.5;
-    const wetOn = this.wetOn || held;
-    const inT = wetOn ? 1 : 0;
-    const outT = wetOn || p.trails ? 1 : 0;
-    this.wetIn += (inT - this.wetIn) * 0.003;
+    // ROUTING decides what WET hears; what a take or a layer keeps follows (see brood.h).
+    const loopOut = this.loopTick(x, softClip(x * (1 - this.recK * (1 - this.dGain)) + this.recK * this.gGain * this.lastWet));
+    // LOOP LEVEL sets the loop's level for WET too, so turning it down quietens both.
+    const wetSrc = x * this.mon * this.rIn * this.rsFeedIn + loopOut * this.rLoop;
+    // The FREEZE switch holds WET as it is, so a reverb can be left ringing on its own.
+    const frozen = this.freeze || p.freeze > 0.5;
+    // WET's output: on while it's fed or frozen; after ROUTING OFF, as TRAILS says.
+    if (this.ring && p.routing !== this.ringRouting) this.ring = false;   // ROUTING moved since: as TRAILS says again
+    const outT = this.routingNow !== 3 || p.trails || frozen || this.ring ? 1 : 0;
     this.wetOut += (outT - this.wetOut) * 0.003;
     for (let k = 0; k < 4; k++) this.modeGain[k] += ((p.wetMode === k ? 1 : 0) - this.modeGain[k]) * 0.002;
 
-    const freeze = this.freeze || held;
+    const freeze = frozen;
     // WET CLOCK DIVISION: the wet side runs at 1/div of the clock, so every time
     // constant on that side is div times longer.
     const wdiv = divMap(p.wetDiv);
@@ -1483,8 +1751,8 @@ class BroodCore {
     const hiss = p.classic ? (this.rand() * 2 - 1) * (0.0006 + 0.01 * (1 - this.clockRatio)) * clamp(p.wearNoise, 0, 1) : 0;
     // WORN after the loop, with the wet side recorded: hiss fed to the wet side would be
     // recorded with it, so it joins the output after the looper instead.
-    const hissAfter = recordWet && !!p.wearPost;
-    const wIn = wetSrc * this.wetIn + (hissAfter ? 0 : hiss);
+    const hissAfter = !!p.wearPost && (p.routing === 0 || p.routing === 1);
+    const wIn = wetSrc + (hissAfter ? 0 : hiss);
     let wl = 0, wr = 0;
     const fs = CORE_FS;
     if (this.modeGain[0] > 1e-4) {
@@ -1551,17 +1819,11 @@ class BroodCore {
     // left a splice in the buffer, and every extra tap stitched in another one,
     // which is what put clicks inside the next loop. It keeps the wet side too, unless
     // ROUTING is on LOOP.
-    const kept = softClip(x + (recordWet ? (wl + wr) * 0.5 : 0));
-    this.lastWet = (wl + wr) * 0.5;
-    // IN + LOOP's ceiling: the wet side may not give back more than it was fed (brood.h).
-    {
-      // The loop counts at GAIN no higher than 0 dB, so a boost is heard but not re-recorded.
-      const k = 1 / (0.25 * Math.max(1, this.clockRatio * this.fs));
-      const feed = p.routing === 1 ? wIn - (loopOut - this.loopBare * Math.min(1, this.loopLevel)) * this.wetIn : wIn;
-      this.feedPow += (feed * feed - this.feedPow) * k;
-      this.wetPow += (this.lastWet * this.lastWet - this.wetPow) * k;
-      this.dubCeil = this.wetPow > this.feedPow && this.wetPow > 1e-12 ? Math.sqrt(this.feedPow / this.wetPow) : 1;
-    }
+    const wetNow = (wl + wr) * 0.5;
+    const kept = softClip(x * (1 - this.recK * (1 - this.dGain)) + this.recK * this.gGain * wetNow);
+    this.lastWet = wetNow;
+    if (this.resampling) this.resampleTick(loopOut, this.wetSide === 1 ? wr : wl);
+    else if (this.rsDip < 1) this.rsDip = Math.min(1, this.rsDip + 1 / (0.005 * CORE_FS));   // the new take dips in
     this.hist[this.histW] = kept;
     // The strip's picture of it: read only, never heard. (Float32, as the C++ keeps it.)
     const col = Math.floor(this.histW / LIVE_COL_TICKS);
@@ -1577,21 +1839,12 @@ class BroodCore {
       if (written >= this.maxCaptureSamples()) this.closeRecording();
     }
 
-    // WET / LOOP is a blend of two complete worlds, not a ducking contest: the
-    // loop keeps its own level all the way across the knob, and the wet side adds
-    // to it. It used to be ducked against the wet level so the loop would not be
-    // heard twice, but the wet side always returns it late (a reverb tail, an
-    // echo, a grain) — and in SLIP and WEAVE it returns very little — so that duck
-    // simply swallowed the loop in the middle of the travel. Where the wet side
-    // does hand the loop back, it arrives as an effect on top of it, which is what
-    // the blend is for. At 100 % loop the wet side is gone and the loop is whole.
-    // WET/LOOP is how much of the wet side you hear: 0 the loop alone, 1 the wet side alone.
-    const bal = e.balance;
-    const wetLvl = Math.min(1, 2 * bal), loopLvl = Math.min(1, 2 * (1 - bal));
-    const ld = loopOut * loopLvl;
+    // What's heard from the core: the loop, blended away by WET MIX where WET hears it, and WET
+    // at WET MIX's share (see brood.h). The input's share is added at the host's rate.
+    const ld = loopOut * (1 - this.rLoop * (1 - this.dGain));
     for (const ch of this.ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
     const hissOut = hissAfter ? hiss * this.wetOut : 0;
-    let outL = (wl + hissOut) * wetLvl + ld, outR = (wr + hissOut) * wetLvl + ld;
+    let outL = (wl + hissOut) * this.gGain + ld, outR = (wr + hissOut) * this.gGain + ld;
     {
       const fL = this.coreOut[0].run(outL), fR = this.coreOut[1].run(outR);
       if (this.coreW > 0) { outL += (fL - outL) * this.coreW; outR += (fR - outR) * this.coreW; }
@@ -1609,6 +1862,7 @@ class BroodCore {
     const a = 1 - Math.exp(-1 / (0.03 * fs));
     const aClock = 1 - Math.exp(-1 / ((p.smooth ? 1.5 : 0.08) * fs)); // Smooth dip: glide the clock
     const holdN = HOLD_SEC * fs;
+    const aR = 1 - Math.exp(-1 / (0.01 * fs));   // routing and the monitor: 10 ms
     // footswitch hold detection
     const fw = this.fsDown.wet;
     if (fw && !fw.held && this.hostCount - fw.t >= holdN) {
@@ -1618,10 +1872,12 @@ class BroodCore {
     const fl = this.fsDown.loop;
     if (fl && !fl.held && this.hostCount - fl.t >= holdN) {
       fl.held = true;
-      if (fl.playing) this.beginLayer();
+      if (fl.playing) { if (this.p.monitor !== 2) this.beginLayer(); }   // no overdub with the monitor OFF
       // RECORD held: it records from the press for as long as it's held, bars or not.
       else if (this.rec.phase !== 'idle') { this.rec.histIdx = fl.histIdx; this.rec.histCycle = fl.histCycle; this.rec.phase = 'recording'; this.rec.endAt = -1; }
     }
+    // INPUT MONITOR OFF ends a layer under way (keeping it) and refuses a new one.
+    if (this.p.monitor === 2 && (this.overdub || this.dubLatched)) { this.overdub = false; this.dubLatched = false; }
     const latch = !!this.p.overdubLatch;
     if (latch !== this.latchSeen) {
       this.latchSeen = latch;
@@ -1638,11 +1894,11 @@ class BroodCore {
     let pkIn = 0, pkOut = 0;
     for (let i = 0; i < n; i++) {
       s.time += (p.time - s.time) * a;
-      s.mix += (p.mix - s.mix) * a;
+      s.wetMix += (p.wetMix - s.wetMix) * a;
       s.length += (p.length - s.length) * a;
       s.modWet += (p.modWet - s.modWet) * a;
       s.modLoop += (p.modLoop - s.modLoop) * a;
-      s.balance += (p.balance - s.balance) * a;
+      s.loopLevel += (p.loopLevel - s.loopLevel) * a;
       s.clock += (clockTarget(p.clock, p.smooth) - s.clock) * aClock;
       s.tone += (p.tone - s.tone) * a;
       s.fade += (p.fade - s.fade) * a;
@@ -1675,6 +1931,7 @@ class BroodCore {
 
       const dry = input ? input[i] : 0;
       const ad = Math.abs(dry); if (ad > pkIn) pkIn = ad;
+      this.mixTick(aR);
       const xa = this.aa.run(dry);
       const xin = this.xin;
       xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
@@ -1719,23 +1976,19 @@ class BroodCore {
         el = mid + side; er = mid - side;
       }
 
-      // dry stays at unity up to noon, then fades; true unity when nothing is engaged
-      const latchFreeze = p.freeze > 0.5;   // the FREEZE switch, per sample
-      const engagedT = this.wetOn || latchFreeze || this.loopState === 'play' ? 1 : 0;
+      // The input as heard, at the host's rate (see brood.h).
+      const heardIn = this.mon * (1 - this.rIn * (1 - this.dGain));
+      const frozenNow = this.freeze || p.freeze > 0.5;
+      const engagedT = this.loopState === 'play' || frozenNow || (this.gGain > 1e-6 && this.wetOut > 1e-6) || this.mon < 0.9999 ? 1 : 0;
       this.engaged += (engagedT - this.engaged) * 0.001;
-      const dg = 1 - this.engaged * (1 - Math.min(1, 2 * (1 - this.e.mix)));
-      const wg = Math.min(1, 2 * this.e.mix);
-      const keepT = this.soloLoop && this.loopState === 'play' && !this.overdub ? 0 : 1;
-      if (this.dryKeep !== keepT) this.dryKeep = keepT > this.dryKeep ? Math.min(1, this.dryKeep + this.dryStep) : Math.max(0, this.dryKeep - this.dryStep);
-      const dk = dg * this.dryKeep;
-      let l = dry * dk + el * wg;
-      let r = dry * dk + er * wg;
-      // A fully bypassed plugin must be transparent, including signals above 0 dBFS.
-      const fullyBypassed = !p.trails && !this.wetOn && !latchFreeze && this.loopState === 'off' && this.engaged < 1e-4;
+      let l = dry * heardIn + el;
+      let r = dry * heardIn + er;
+      const fullyBypassed = this.engaged < 1e-4 && heardIn > 0.9999;
       if (!fullyBypassed) { l = softLimit(l); r = softLimit(r); }
       outL[i] = l; outR[i] = r;
       const ao = Math.max(Math.abs(l), Math.abs(r)); if (ao > pkOut) pkOut = ao;
       this.hostCount++;
+      if (this.resampling && this.hostCount >= this.rsLimitAt) this.beginHandover(true);   // the 30 s limit, in host time
       // RECORD: the bar line, and the bar count, in host time, so moving CLOCK can't
       // stretch them. Checked every sample, so both engines close on the same one.
       if (this.rec.phase === 'armed') {
@@ -1757,12 +2010,16 @@ class BroodCore {
     // playhead drawn is the playhead heard.
     const win = this.lsrc <= 0 ? { W: 0, start: 0 } : this.p.loopMode === 1 && this.lengthSlew >= 0 ? this.loopWindowAt(this.lengthSlew) : this.loopWindow();
     return {
-      wetOn: this.wetOn || this.p.freeze > 0.5, freeze: this.freeze || this.p.freeze > 0.5, loop,
+      wetFed: this.routingNow !== 3, freeze: this.freeze || this.p.freeze > 0.5, loop,
+      inputHeard: this.monTarget() > 0.5, routingNow: this.routingNow,
+      resampling: this.resampling, resampleLimitHit: this.rsLimitHit, canResample: this.canResample(),
+      resampleSecs: this.resampling ? (this.hostCount - this.rsStartHost) / this.fs : 0,
+      resampleNeed: this.resamplingNeed(),
       mods: this.rampRaw.slice(), lsrc: this.lsrc, winStart: win.start, winLen: win.W, winSpan: this.lsrc > 0 ? this.loopSpan() : 0, pos: this.loopPos,
       head: this.heardPos.slice(), headLevel: this.heardLevel.slice(),
       clockHz: this.clockRatio * this.fs, histCycles: this.histCycles, peakIn: this.peakIn, peakOut: this.peakOut,
       recArmed: this.rec.phase === 'armed',
-      canOverdub: this.canOverdub(), dubLatched: this.dubLatched, undoKind: this.undoKind, undoRedo: this.undoRedo,
+      canOverdub: this.canOverdub(), dubLatched: this.dubLatched,
       follows: this.takeFollows && this.lsrc >= 64, parked: this.parked,
     };
   }
@@ -1842,6 +2099,7 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       super();
       this.left = new BroodCore(sampleRate);
       this.right = new BroodCore(sampleRate);
+      this.right.setSide(1);   // RESAMPLE records each engine's own side of WET
       this.scratchL = new Float32Array(128);
       this.scratchR = new Float32Array(128);
       this.sinceState = 0;
@@ -1852,8 +2110,10 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
           if (m.type === 'param') core.setParam(m.name, m.value);
           else if (m.type === 'fs') core.footswitch(m.which, m.action);
           else if (m.type === 'clear') core.clearLoop();
-          else if (m.type === 'undo') core.undoLoop();
-          else if (m.type === 'soloLoop') core.soloLoop = !!m.value;
+          else if (m.type === 'swap') core.swapVersion(m.id);
+          else if (m.type === 'release') core.releaseVersion(m.id);
+          else if (m.type === 'cancelActive') core.cancelActive();
+          else if (m.type === 'resample') core.resampleKey();
           else if (m.type === 'reset') core.fullReset();
         }
       };
@@ -1875,6 +2135,12 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
       // OVERDUB on with nothing to layer into (or the loop stopped under it): set it back to
       // off, as the plug-in does, so the next press is a fresh switch-on.
       for (const core of [this.left, this.right]) if (core.p.overdubLatch && !core.dubLatched) core.p.overdubLatch = 0;
+      // The UNDO history's news, from the left engine (the right one keeps step with it).
+      for (let ev; (ev = this.left.popVersionEvent());) this.port.postMessage({ type: 'version', ev });
+      this.right.versionEvents.length = 0;
+      // A tap on the FREEZE key: the page flips the FREEZE switch.
+      const tapped = this.left.takeFreezeTap(); this.right.takeFreezeTap();
+      if (tapped) this.port.postMessage({ type: 'freezeTap' });
       // A new take fitted the window: tell the panel, so its START, END (and LENGTH in TAPE) follow.
       const fit = this.left.takeFitted();
       this.right.takeFitted();
@@ -1922,5 +2188,5 @@ function migrateTapeStart(oldStart, length, takeLength) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BroodCore, migrateTapeStart, migrateShape, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES, readFrac };
+  module.exports = { BroodCore, VERSION_KIND, AUTO, migrateTapeStart, migrateShape, speedMap, slipSpeedMap, stretchMap, expMap, clockHz, syncLabel, syncSeconds, syncSecondsRaw, rampDivLabel, rampCycleSeconds, RAMP_DIV_BEATS, divMap, DIV_STEPS, MOD_TARGETS, RAMP_WAVES, rampWaveIndex, rampHz, SYNC_DIVISIONS, CLOCK_STEPS, CORE_FS, LOOP_SAMPLES, CLOCK_MIN_HZ, CLOCK_MAX_HZ, HOLD_SEC, LIVE_COL_TICKS, MAX_LOOP_SAMPLES, readFrac, levelGain, loopLevelGain, inputLevelGain, loopLevelOfDb, inputLevelOfDb };
 }

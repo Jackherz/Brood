@@ -2,9 +2,9 @@
 # layer and keeps playing; redo puts it back. In TAPE with the clock slowed part way.
 rate 48000
 seconds 12
-0 param mix 1
-0 param routing 2
-0 param balance 0
+0 param routing 3   # the old WET switch started off: ROUTING OFF
+0 param routing 3
+0 param wetMix 0
 0 param memory 0.4
 0 param loopMode 1
 300 fs loop down

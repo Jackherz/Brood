@@ -22,6 +22,35 @@ constexpr int kLoopSamples = 64000;        // pedal capacity: CLOCK sets loop le
 // cores (stereo) therefore hold about 33 MB of loop memory.
 constexpr int kMaxLoopSeconds = 32;
 constexpr int kMaxLoopSamples = kLoopSamples * kMaxLoopSeconds;
+// Loop audio lives in one arena per core, room for this many of the longest takes: the take
+// playing, a RESAMPLE being recorded or a layer's undo copy, and the takes UNDO can go back to.
+// Allocated once in prepare(); nothing is allocated on the audio thread.
+constexpr int kArenaTakes = 4;
+constexpr int kArenaSamples = kMaxLoopSamples * kArenaTakes;
+constexpr int kRegions = 8;        // takes and undo copies in the arena at once, at most
+constexpr int kVersions = 6;       // takes (or layers) UNDO and REDO can swap back in
+constexpr int kChunk = 4096;       // a layer copies the take in pieces this long, as it writes them
+constexpr int kChunks = (kMaxLoopSamples + kChunk - 1) / kChunk;
+// What a version holds: the take before a new take, a CLEAR or a RESAMPLE, or the part of the
+// take an overdub layer wrote over.
+enum class VersionKind { None = 0, Take = 1, Clear = 2, Layer = 3, Resample = 4 };
+// Controls Brood moves by itself as part of an action (a new take fits the window; a RESAMPLE
+// resets the player), so the host can move its knobs and UNDO can put them back.
+enum class AutoParam { Start = 0, LoopEnd, Length, LoopMode, ModLoop, LoopDiv, LoopLevel, Routing, Freeze, Mod1On, Mod2On };
+struct AutoChange { AutoParam which; double value; };
+// The core's news for the host's UNDO history: a version made (Added, with any controls the action
+// moved), or let go of by the core (Released: a new action dropped the redo side; Evicted: the
+// arena needed the room, and everything older goes with it). Reset: every version is gone.
+struct VersionEvent {
+    enum Type { Added = 0, Released = 1, Evicted = 2, Reset = 3 } type = Added;
+    int id = 0; VersionKind kind = VersionKind::None;
+    int nAuto = 0; AutoChange autos[12] = {};
+};
+// RESAMPLE records one pass of the loop's window, as long as it is now (START, END, LENGTH).
+constexpr double kResampleMaxSec = 30.0;   // host time: a RESAMPLE never records longer
+// Room for the longest RESAMPLE at the fastest clock, and its seam's overlap.
+constexpr int kResampleCap = static_cast<int>(kResampleMaxSec * 64000) + 1280;
+static_assert(kResampleCap <= kMaxLoopSamples, "a RESAMPLE must fit one take's room");
 // The take strip's live view: a peak for every this many ticks of history, kept as it's written.
 constexpr int kLiveColTicks = 128;
 constexpr int kLiveCols = kMaxLoopSamples / kLiveColTicks;
@@ -71,8 +100,8 @@ inline int divMap(double knob) {
 // RAMP_* helpers in src/brood-worklet.js.
 // What a modulation source can move, in the order of Core::effective().
 constexpr int kModTargets = 7;
-inline const char* const kModTargetIds[kModTargets] = {"time", "mix", "length", "modWet", "clock", "modLoop", "balance"};
-inline const char* const kModTargetNames[kModTargets] = {"TIME", "MIX", "LENGTH", "MODIFY / WET", "CLOCK", "MODIFY / LOOP", "BALANCE"};
+inline const char* const kModTargetIds[kModTargets] = {"time", "wetMix", "length", "modWet", "clock", "modLoop", "loopLevel"};
+inline const char* const kModTargetNames[kModTargets] = {"TIME", "WET MIX", "LENGTH", "MODIFY / WET", "CLOCK", "MODIFY / LOOP", "LOOP LEVEL"};
 constexpr int kRampWaveCount = 6;
 inline const char* const kRampWaves[kRampWaveCount] = {"TRI", "SQR", "SIN", "SAW", "RND", "SMTH"};
 // Index ↔ normalised value. The parameters are plain 0..1 floats with `count`
@@ -90,6 +119,21 @@ inline double rampValueOfIndex(int i, int count) {
 inline int rampWaveIndex(double k) { return rampIndexOfValue(k, kRampWaveCount); }
 inline double rampHertz(double k) { return expMap(clampd(k, 0, 1), 0.05, 8); }   // one cycle every 20 s … eight a second
 inline double jsMod(double a, double n) { return std::fmod(a, n); }   // JS % on doubles
+
+// LOOP LEVEL and INPUT LEVEL are 0..1 faders. Off at the bottom, then dB on a straight line:
+// LOOP LEVEL -48 to +12 dB (0 dB at 0.8), INPUT LEVEL -48 to +24 dB (0 dB at 2/3). The last
+// 5% of travel fades to silence, so pulling a fader down never steps. Mirrors levelGain in
+// src/brood-worklet.js.
+inline double levelGain(double v, double topDb) {
+    v = std::clamp(v, 0.0, 1.0);
+    if (v <= 0.0) return 0.0;
+    const double db = -48.0 + v * (topDb + 48.0);
+    return std::pow(10.0, db / 20.0) * std::min(1.0, v / 0.05);
+}
+inline double loopLevelGain(double v) { return levelGain(v, 12.0); }
+inline double inputLevelGain(double v) { return levelGain(v, 24.0); }
+inline double loopLevelOfDb(double db) { return std::clamp((db + 48.0) / 60.0, 0.0, 1.0); }
+inline double inputLevelOfDb(double db) { return std::clamp((db + 48.0) / 72.0, 0.0, 1.0); }
 
 // Sets saved before START meant the same in every mode stored TAPE's START counted back
 // from the newest audio. The value that puts the window in the same place now, for the
@@ -625,11 +669,17 @@ enum class LoopState { Off, Play };
 enum class LoopLed { Off, Play, Rec, Dub };
 
 struct Params {
-    double time = 0.5, mix = 0.5, length = 0.75, modWet = 0.5, clock = 1, modLoop = 0.5;
-    int wetMode = 0, routing = 0, loopMode = 0;   // reverb/delay/slip/weave, in/in+loop/loop, env/tape/stretch
+    double time = 0.5, wetMix = 0, length = 0.75, modWet = 0.5, clock = 1, modLoop = 0.5;
+    // ROUTING: what WET hears. 0 IN, 1 IN + LOOP, 2 LOOP, 3 OFF (nothing; its tail rings or not
+    // as TRAILS says). LOOP MODE: env/tape/stretch.
+    int wetMode = 0, routing = 0, loopMode = 0;
+    // INPUT MONITOR: 0 AUTO (heard unless a loop is playing and nothing is being recorded),
+    // 1 ON, 2 OFF (never heard, and OVERDUB is unavailable). It decides only what is heard:
+    // the looper always listens.
+    int monitor = 0;
     bool trails = false, smooth = false;
     bool sync = false;
-    double balance = 0.5, bpm = 120.0;
+    double bpm = 120.0;
     double loopEnd = 1, memory = 0;                 // playback trim + capture ceiling
     double start = 1;                                // where the loop's window sits in the take: 0 the oldest audio, 1 the newest
     double tone = 1, fade = 0, width = 0.5;          // hidden: wet hi-cut, overdub decay, stereo width
@@ -665,11 +715,11 @@ struct Params {
     bool envSync = false;                           // ENV slice follows the tempo
     bool envSoft = false;                           // ENV's slices fade in and out instead of cutting
     bool hiQ = false;                               // HI-Q: sinc conversion into and out of the clock
-    double loopDb = 0;                              // GAIN on the loop, -24..+12 dB
+    double loopLevel = 0.8;                         // LOOP LEVEL, a fader (see loopLevelGain): 0.8 is 0 dB
 };
 
 struct State {
-    bool wetOn, freeze; LoopLed loop;
+    bool wetFed, freeze; LoopLed loop;
     int lsrc, winStart, winLen; double pos, clockHz; uint32_t histCycles;
     float peakIn, peakOut;
     bool recArmed;   // RECORD: waiting for the bar line
@@ -679,13 +729,16 @@ struct State {
     double head[2] = {0, 0}; float headLevel[2] = {1, 0};
     // OVERDUB: whether it can be switched on now (a loop is playing), and whether it's latched.
     bool canOverdub = false, dubLatched = false;
-    // UNDO: what it would step back over next (0 nothing, 1 a take, 2 a clear, 3 a layer),
-    // and whether that step has been undone already, so pressing it again redoes.
-    int undoKind = 0;
-    bool undoRedo = false;
     // The take follows the host's transport (it was caught while the host played), and is
     // parked: the host stopped it, and it waits for play.
     bool follows = false, parked = false;
+    // INPUT MONITOR as it stands: whether the input is heard now, and the routing WET has now
+    // (IN + LOOP hears only the input while overdubbing, and counts as IN with no loop playing).
+    bool inputHeard = true; int routingNow = 0;
+    // RESAMPLE: under way, how long it has run and how long it will take at the speed now (host
+    // seconds; -1 FREE, 1e9 not moving), and whether the last one stopped at the 30 s limit.
+    bool resampling = false, resampleLimitHit = false, canResample = false;
+    double resampleSecs = 0, resampleNeed = 0;
 };
 
 class Core {
@@ -694,8 +747,8 @@ public:
 
     void prepare(double sampleRate) {
         fs = sampleRate;
-        s = Smoothed{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance, p.tone, p.fade, p.width, {p.mods[0].rate, p.mods[1].rate}};
-        e = Eff{p.time, p.mix, p.length, p.modWet, p.clock, p.modLoop, p.balance};
+        s = Smoothed{p.time, p.wetMix, p.length, p.modWet, p.clock, p.modLoop, p.loopLevel, p.tone, p.fade, p.width, {p.mods[0].rate, p.mods[1].rate}};
+        e = Eff{p.time, p.wetMix, p.length, p.modWet, p.clock, p.modLoop, p.loopLevel};
         hostCount = 0; phase = 0; clockRatio = 1; filterClock = -1; filterClassic = -1;
         aa = reconL = reconR = aaHi[0] = aaHi[1] = LowPassN{};
         for (auto& ch : ticks) for (auto& t : ch) t = 0;
@@ -704,8 +757,9 @@ public:
         for (auto& ch : ticksHi) for (auto& t : ch) t = 0;
         xinHiW = ticksHiW = 0; hiMix = 0;
         reverb.init(kCoreFs); delay.init(kCoreFs); slip.init(kCoreFs); weave.init(kCoreFs);
-        wetOn = freeze = wetMomentary = false;
-        wetIn = wetOut = 0; lastWet = 0; loopBare = 0; dubReplace = 0; routeLoop = 0; feedPow = wetPow = 0; dubCeil = 1; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
+        freeze = false; freezeTapped = false;
+        wetOut = 0; lastWet = 0; loopBare = 0; modeGain[0] = 1; modeGain[1] = modeGain[2] = modeGain[3] = 0;
+        rIn = rLoop = 0; mon = 1; dGain = 1; gGain = 0; recK = 0; wetMixNow = 0; routingNow = p.routing;
         decor[0].init(static_cast<int>(jsRound(113 * kCoreFs / 48000)), 0.6);
         decor[1].init(static_cast<int>(jsRound(337 * kCoreFs / 48000)), 0.6);
         // The loop survives a re-prepare. A host calls prepareToPlay again for a
@@ -713,14 +767,17 @@ public:
         // take there is why a bounce could come back empty. The loop is measured in
         // core-clock ticks (kCoreFs), not host samples, so it stays valid as it is.
         if (hist.size() != static_cast<size_t>(kMaxLoopSamples)) {
-            hist.assign(kMaxLoopSamples, 0.f); loopBuf.assign(kMaxLoopSamples, 0.f); undoBuf.assign(kMaxLoopSamples, 0.f);
-            undoLen = 0; undoKind = UndoKind::None; undoRedo = false;
+            hist.assign(kMaxLoopSamples, 0.f); arena.assign(static_cast<size_t>(kArenaSamples), 0.f);
+            for (auto& v : versions) v.dirty.assign(static_cast<size_t>(kChunks), 0);
+            for (auto& r : regions) r = Region{};
+            for (auto& v : versions) v.used = false;
+            curRegion = -1; loopBuf = nullptr;
             liveCols.assign(kLiveCols, 0.f); histTotal = 0;
             histW = histCount = 0; lsrc = 0; loopPos = 0; loopState = LoopState::Off;
         }
         histCycles = 0;
         overdub = false;
-        dubLatched = latchSeen = false; pendingOp = LoopOp::None; resumeAfterOp = false;
+        dubLatched = latchSeen = false; pendingOp = LoopOp::None; resumeAfterOp = false; pendingSwap = -1;
         pendingLock = false; lockGain = 1; lastHostPlaying = false; lastBlockN = 0;
         lockShift = std::numeric_limits<double>::quiet_NaN();
         loopGain = 0; tapeSpeed = 1; stretchSpeed = 0;
@@ -739,17 +796,15 @@ public:
     // which: 0 = wet, 1 = loop. Mirrors BroodCore.footswitch.
     void footswitch(int which, bool down) {
         const int64_t now = hostCount;
+        // The FREEZE key: a hold freezes WET for as long as it's held; a tap asks the host to
+        // flip the FREEZE switch (takeFreezeTap), which is a parameter and so is saved.
         if (which == 0) {
-            if (down) {
-                fsWet = FsWet{true, now, false};
-                if (!wetOn) { wetOn = true; wetMomentary = true; } else wetMomentary = false;
-            } else if (fsWet.active) {
+            if (down) fsWet = FsWet{true, now, false};
+            else if (fsWet.active) {
                 const bool held = fsWet.held;
                 fsWet.active = false;
-                if (held) {
-                    freeze = false; if (wetMomentary) wetOn = false;   // a hold freezes only while held
-                } else if (!wetMomentary) { wetOn = false; freeze = false; }
-                wetMomentary = false;
+                if (held) freeze = false;
+                else freezeTapped = true;
             }
             return;
         }
@@ -802,22 +857,63 @@ public:
     void clearLoop() {
         settlePending();
         rec.phase = RecPhase::Idle;
+        if (resampling) cancelResample();
         if (lsrc < 64) return;
         overdub = false; dubLatched = false;
         if (loopState == LoopState::Play || loopGain > 0) { loopState = LoopState::Off; pendingOp = LoopOp::Clear; resumeAfterOp = false; return; }
         doClear();
     }
-    // UNDO: one step back over the last CLEAR, new take or overdub layer; again, it redoes.
-    // Undoing a layer keeps a playing loop playing (it dips while the take is swapped);
-    // undoing a clear or a take leaves the loop stopped, ready for a tap.
-    void undoLoop() {
+    // UNDO and REDO: swap a version back in (the take it holds, or the layer it holds the old
+    // side of); swapping it again goes back. The host's history says which one and when. A layer
+    // keeps a playing loop playing (it dips while the take is swapped); another take plays (or
+    // parks, for a transport take with the host stopped), and an empty one leaves it stopped.
+    void swapVersion(int id) {
         settlePending();
-        if (undoKind == UndoKind::None || rec.phase != RecPhase::Idle) return;
-        resumeAfterOp = loopState == LoopState::Play && undoKind == UndoKind::Dub;
+        const int v = versionIndex(id);
+        if (v < 0) return;
+        resumeAfterOp = loopState == LoopState::Play && versions[v].kind == VersionKind::Layer;
         overdub = false; dubLatched = false;
-        if (loopState == LoopState::Play || loopGain > 0) { loopState = LoopState::Off; pendingOp = LoopOp::Undo; return; }
-        pendingOp = LoopOp::Undo;
+        pendingSwap = id; pendingOp = LoopOp::Swap;
+        if (loopState == LoopState::Play || loopGain > 0) { loopState = LoopState::Off; return; }
         settlePending();
+    }
+    // The host's history has let go of a version (dropped off the end, or the redo side of a
+    // new action): its room in the arena is free again.
+    void releaseVersion(int id) { const int v = versionIndex(id); if (v >= 0) freeVersion(v); }
+    // UNDO while a RECORD take is under way or waiting for the bar line stands it down instead;
+    // true if there was one (the host then leaves its history alone).
+    bool cancelActive() {
+        if (rec.phase != RecPhase::Idle) { rec.phase = RecPhase::Idle; return true; }
+        if (resampling) { cancelResample(); return true; }
+        return false;
+    }
+    // RESAMPLE: a press starts one (a loop playing, nothing being recorded); a press while it
+    // runs ends it there, keeping what it has.
+    void resampleKey() {
+        settlePending();
+        if (resampling) { beginHandover(false); return; }
+        if (!canResample()) return;
+        const int r = allocRegion(kResampleCap);
+        if (r < 0) return;
+        resampling = true; rsHandover = false; rsLimitHit = false; rsRegion = r; rsW = 0; rsTravel = 0; rsInTail = false; rsLen = 0; rsTail = 0; rsWetSeen = false;
+        rsTarget = resampleTarget();
+        rsLimitAt = hostCount + static_cast<int64_t>(std::llround(kResampleMaxSec * fs));
+        rsStartHost = hostCount;
+        rsFollows = takeFollows && p.hostPlaying; rsAnchor = songNow();
+    }
+    // The left engine records the left side of WET, the right engine the right (default left).
+    void setSide(int side) { wetSide = side == 1 ? 1 : 0; }
+    // How long a RESAMPLE would take at the speed now, in host seconds.
+    double resampleEstimate() const {
+        const double rate = std::fabs(loopRate()) * clockRatio * fs;   // take ticks a second
+        const double need = resampleTarget();
+        return rate < 1e-6 ? 1e9 : need / rate;
+    }
+    // The core's news for the history, oldest first; false when there's none.
+    bool popVersionEvent(VersionEvent& out) {
+        if (evTail == evHead) return false;
+        out = events[static_cast<size_t>(evTail)]; evTail = (evTail + 1) % kEventSlots;
+        return true;
     }
     bool overdubLatched() const { return dubLatched; }
     // The take is a transport take, and the song position its first sample belongs to (for saving).
@@ -831,8 +927,8 @@ public:
         return true;
     }
 
-    // Explicit freeze for MIDI CC; footswitch gestures remain momentary/latching.
-    void setFreeze(bool active) { freeze = active && wetOn; }
+    // True once after a tap on the FREEZE key: the host flips the FREEZE switch.
+    bool takeFreezeTap() { const bool t = freezeTapped; freezeTapped = false; return t; }
 
     // in may be null (silence). Mirrors BroodCore.process.
     void process(const float* in, float* outL, float* outR, int n) {
@@ -845,10 +941,13 @@ public:
         }
         if (fsLoop.active && !fsLoop.held && hostCount - fsLoop.t >= holdN) {
             fsLoop.held = true;
-            if (fsLoop.playing) beginLayer();
+            if (fsLoop.playing) { if (p.monitor != 2) beginLayer(); }   // no overdub with the monitor OFF
             // RECORD held: it records from the press for as long as it's held, bars or not.
             else if (rec.phase != RecPhase::Idle) { rec.histIdx = fsLoop.histIdx; rec.histCycle = fsLoop.histCycle; rec.phase = RecPhase::Recording; rec.endAt = -1; }
         }
+        // INPUT MONITOR OFF ends a layer under way (through its write fade, keeping what it laid
+        // down) and refuses a new one; the host sets OVERDUB back to off.
+        if (p.monitor == 2 && (overdub || dubLatched)) { overdub = false; dubLatched = false; }
         if (p.overdubLatch != latchSeen) {
             latchSeen = p.overdubLatch;
             if (latchSeen) { if (canOverdub()) { beginLayer(); dubLatched = true; } }
@@ -862,13 +961,14 @@ public:
         blockStartCount = hostCount;
 
         double pkIn = 0, pkOut = 0;
+        const double aR = 1 - std::exp(-1 / (0.01 * fs));   // routing and the monitor: 10 ms
         for (int i = 0; i < n; ++i) {
             s.time += (p.time - s.time) * a;
-            s.mix += (p.mix - s.mix) * a;
+            s.wetMix += (p.wetMix - s.wetMix) * a;
             s.length += (p.length - s.length) * a;
             s.modWet += (p.modWet - s.modWet) * a;
             s.modLoop += (p.modLoop - s.modLoop) * a;
-            s.balance += (p.balance - s.balance) * a;
+            s.loopLevel += (p.loopLevel - s.loopLevel) * a;
             s.clock += (clockTarget(p.clock, p.smooth) - s.clock) * aClock;
             for (int k = 0; k < 2; ++k) s.modRate[k] += (p.mods[k].rate - s.modRate[k]) * a;
             rampTick();
@@ -903,6 +1003,7 @@ public:
             }
             const double dry = in ? in[i] : 0.0;
             pkIn = std::max(pkIn, std::fabs(dry));
+            mixTick(aR);
             const double xa = aa.run(dry);
             xin[0] = xin[1]; xin[1] = xin[2]; xin[2] = xin[3]; xin[3] = xa;
             // HI-Q's sinc conversion, or always with CLOCK above the host's rate: squeezing the
@@ -948,18 +1049,22 @@ public:
                 const double mid = (el + er) * 0.5, side = (el - er) * 0.5 * (s.width * 2);
                 el = mid + side; er = mid - side;
             }
-            const bool latchFreeze = p.freezeLatch > 0.5;   // the FREEZE switch, per sample
-            const double engagedT = wetOn || latchFreeze || loopState == LoopState::Play ? 1.0 : 0.0;
+            // The input as heard: through INPUT MONITOR, and in IN and IN + LOOP blended away by
+            // WET MIX as WET takes its place. It stays at the host's rate, untouched by CLOCK.
+            const double heardIn = mon * (1 - rIn * (1 - dGain));
+            // Nothing to add (no loop, WET silent or not heard) and the input fully heard: the
+            // input passes exactly as it came, above 0 dBFS too.
+            const bool frozenNow = freeze || p.freezeLatch > 0.5;
+            const double engagedT = loopState == LoopState::Play || frozenNow || (gGain > 1e-6 && wetOut > 1e-6) || mon < 0.9999 ? 1.0 : 0.0;
             engaged += (engagedT - engaged) * 0.001;
-            const double dg = 1 - engaged * (1 - std::min(1.0, 2 * (1 - e.mix)));
-            const double wg = std::min(1.0, 2 * e.mix);
-            double l = dry * dg + el * wg;
-            double r = dry * dg + er * wg;
-            const bool fullyBypassed = !p.trails && !wetOn && !latchFreeze && loopState == LoopState::Off && engaged < 1e-4;
+            double l = dry * heardIn + el;
+            double r = dry * heardIn + er;
+            const bool fullyBypassed = engaged < 1e-4 && heardIn > 0.9999;
             if (!fullyBypassed) { l = softLimit(l); r = softLimit(r); }
             outL[i] = static_cast<float>(l); outR[i] = static_cast<float>(r);
             pkOut = std::max(pkOut, std::max(std::fabs(l), std::fabs(r)));
             ++hostCount;
+            if (resampling && hostCount >= rsLimitAt) beginHandover(true);   // the 30 s limit, in host time
             // RECORD: the bar line, and the bar count, in host time, so moving CLOCK can't
             // stretch them. Checked every sample, so both engines close on the same one.
             if (rec.phase == RecPhase::Armed) {
@@ -979,12 +1084,18 @@ public:
         // playhead drawn is the playhead heard.
         const Window win = lsrc <= 0 ? Window{0, 0} : p.loopMode == 1 && lengthSlew >= 0 ? loopWindowAt(lengthSlew) : loopWindow();
         const bool heldNow = p.freezeLatch > 0.5;
-        State st{wetOn || heldNow, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
+        State st{routingNow != 3, freeze || heldNow, led, lsrc, win.start, win.W, loopPos, clockRatio * fs, histCycles,
                      static_cast<float>(peakIn), static_cast<float>(peakOut), rec.phase == RecPhase::Armed};
         st.canOverdub = canOverdub(); st.dubLatched = dubLatched;
-        st.undoKind = static_cast<int>(undoKind); st.undoRedo = undoRedo;
         st.follows = takeFollows && lsrc >= 64; st.parked = parked;
         for (int k = 0; k < 2; ++k) { st.head[k] = heardPos[k]; st.headLevel[k] = static_cast<float>(heardLevel[k]); }
+        st.inputHeard = monTarget() > 0.5; st.routingNow = routingNow;
+        st.resampling = resampling; st.resampleLimitHit = rsLimitHit; st.canResample = canResample();
+        st.resampleSecs = resampling ? static_cast<double>(hostCount - rsStartHost) / fs : 0.0;
+        if (resampling) {
+            const double rate = std::fabs(loopRate()) * clockRatio * fs;
+            st.resampleNeed = rate < 1e-6 ? 1e9 : st.resampleSecs + std::max(0.0, rsTarget - rsTravel) / rate;
+        } else st.resampleNeed = resampleEstimate();
         return st;
     }
 
@@ -1031,16 +1142,19 @@ public:
     // `follows`: a transport take, with the song position its first sample belongs to. It
     // comes back parked and plays when the host does.
     void restoreLoop(const float* pcm, int n, bool play, bool follows = false, double anchor = 0) {
-        if (pcm == nullptr || n < 64 || n > static_cast<int>(loopBuf.size())) return;
-        loopBuf.assign(loopBuf.size(), 0.f);      // keep the allocation, clear the old take
-        std::copy(pcm, pcm + n, loopBuf.begin());
+        if (pcm == nullptr || n < 64 || n > kMaxLoopSamples || arena.empty()) return;
+        // A reopened set has no undo: every version goes, and the take takes the arena's start.
+        resetVersions();
+        const int r = allocRegion(n);
+        if (r < 0) return;
+        curRegion = r; loopBuf = arena.data() + regions[r].off;
+        std::copy(pcm, pcm + n, loopBuf);
         lsrc = n; loopPos = 0; loopGain = 1;
         loopState = play ? LoopState::Play : LoopState::Off;
         takeFollows = follows; anchorPpq = anchor; pendingLock = false; lockGain = 1;
         if (follows) { loopState = LoopState::Off; loopGain = 0; parked = true; lastHostPlaying = false; }
         else parked = false;
         loopWaveDirty = true;
-        undoKind = UndoKind::None; undoRedo = false; undoLen = 0;   // a reopened set has no undo
         pendingOp = LoopOp::None; overdub = dubLatched = false;
     }
     LoopState loopLedState() const { return loopState; }
@@ -1095,12 +1209,12 @@ public:
     // Raw generator output (0..1), for the UI and the ramp tests.
     double rampValue(int which) const { return rampRaw[which & 1]; }
     // What the DSP is using right now (knob + any ramp), in RAMP_KEYS order:
-    // 0 time, 1 mix, 2 length, 3 wet modify, 4 clock, 5 loop modify, 6 balance.
+    // 0 time, 1 wet mix, 2 length, 3 wet modify, 4 clock, 5 loop modify, 6 loop level.
     double effective(int which) const {
         switch (which) {
-            case 0: return e.time; case 1: return e.mix; case 2: return e.length;
+            case 0: return e.time; case 1: return e.wetMix; case 2: return e.length;
             case 3: return e.modWet; case 4: return e.clock; case 5: return e.modLoop;
-            default: return e.balance;
+            default: return e.loopLevel;
         }
     }
     bool envGateOpen() const { return envGate; }
@@ -1116,9 +1230,9 @@ public:
 
 
 private:
-    struct Smoothed { double time, mix, length, modWet, clock, modLoop, balance, tone, fade, width, modRate[2]; };
+    struct Smoothed { double time, wetMix, length, modWet, clock, modLoop, loopLevel, tone, fade, width, modRate[2]; };
     // What the DSP reads: the smoothed knobs plus whatever a ramp is moving.
-    struct Eff { double time, mix, length, modWet, clock, modLoop, balance; };
+    struct Eff { double time, wetMix, length, modWet, clock, modLoop, loopLevel; };
     struct Ramp { double ph = 0, prev = 0.5, next = 0.5; uint32_t rng = 0; };
     struct FsWet { bool active = false; int64_t t = 0; bool held = false; };
     struct FsLoop { bool active = false; int64_t t = 0; bool held = false; int histIdx = 0; uint32_t histCycle = 0; bool playing = false; };
@@ -1150,24 +1264,51 @@ private:
     double hiMix = 0;               // HI-Q, faded in and out so switching it doesn't click
 
     Reverb reverb; Delay delay; Slip slip; Weave weave;
-    bool wetOn = false, freeze = false, wetMomentary = false;
-    double wetIn = 0, wetOut = 0, modeGain[4] = {1, 0, 0, 0};
+    bool freeze = false, freezeTapped = false;
+    double wetOut = 0, modeGain[4] = {1, 0, 0, 0};
+    // The mix as it stands (mixTick): the monitor gate, what WET hears of the input and the
+    // loop, WET MIX's gains for the source and for WET, and the share of WET a take keeps.
+    double mon = 1, rIn = 0, rLoop = 0, dGain = 1, gGain = 0, recK = 0, wetMixNow = 0;
+    int routingNow = 0;
     double lastWet = 0;   // the wet side's last tick, for an overdub to layer
-    double loopBare = 0;  // the loop's last tick before GAIN, for IN + LOOP's ceiling
-    double routeLoop = 0; // 1 in IN + LOOP, faded across a ROUTING change
-    double dubReplace = 0;   // how much of the old layer an overdub replaces (IN + LOOP, wet on)
-    double feedPow = 0, wetPow = 0, dubCeil = 1;   // IN + LOOP's ceiling on the re-recorded wet side
+    double loopBare = 0;  // the loop's last tick before LOOP LEVEL
     Allpass decor[2];
 
-    std::vector<float> hist, loopBuf, liveCols;
+    std::vector<float> hist, liveCols, arena;
+    float* loopBuf = nullptr;   // the take playing: its region of the arena
     // UNDO's copy: the take before the last CLEAR, new take or overdub layer (or after it,
     // once undone). Swapped with loopBuf, never copied, except when a layer begins.
-    std::vector<float> undoBuf;
-    int undoLen = 0;
-    enum class UndoKind { None = 0, Take = 1, Clear = 2, Dub = 3 };
-    UndoKind undoKind = UndoKind::None;
-    bool undoRedo = false;
-    enum class LoopOp { None, Clear, Undo };
+    // The arena's regions, and the versions UNDO and REDO can swap in (see VersionKind).
+    struct Region { int off = 0, len = 0; bool used = false; };
+    Region regions[kRegions];
+    int curRegion = -1;
+    struct Version {
+        bool used = false, undone = false;
+        int id = 0; VersionKind kind = VersionKind::None;
+        int region = -1, len = 0;            // the take it holds (a layer: the old side of its chunks)
+        bool follows = false; double anchor = 0;
+        int base = -1;                       // a layer: the take region it was laid into
+        std::vector<uint8_t> dirty;          // a layer: the chunks it has copied
+    };
+    Version versions[kVersions];
+    int nextVersionId = 1, layerVersion = -1, pendingSwap = -1;
+    static constexpr int kEventSlots = 32;
+    VersionEvent events[kEventSlots];
+    int evHead = 0, evTail = 0;
+    enum class LoopOp { None, Clear, Swap };
+    // RESAMPLE under way: its region, ticks written, take ticks travelled and the travel it
+    // stops at, the seam's overlap, and where the host's clock says it must stop.
+    bool resampling = false, rsInTail = false, rsWetSeen = false, rsLimitHit = false, rsFollows = false;
+    int rsRegion = -1, rsW = 0, rsLen = 0, rsTail = 0, wetSide = 0;
+    double rsTravel = 0, rsTarget = 0, rsAnchor = 0, travelStep = 0, rsFeedIn = 1;
+    // The handover: once the take is recorded, the old loop dips out over 5 ms, the takes swap in
+    // the silence, and the new one dips in where it should be by then, so nothing clicks and the
+    // rhythm doesn't slip. rsDip is that dip (1 is no dip).
+    bool rsHandover = false, rsHandLimit = false;
+    int rsSinceEnd = 0;
+    double rsDip = 1;
+    int64_t rsLimitAt = 0, rsStartHost = 0;
+    bool ring = false; int ringRouting = -1;   // after RESAMPLE moved ROUTING: the old tail rings out
     LoopOp pendingOp = LoopOp::None;   // waiting for the loop to fade out
     bool resumeAfterOp = false;
     bool dubLatched = false, latchSeen = false;
@@ -1178,8 +1319,8 @@ private:
     double sliceS = -1, sliceIn = 1;                    // synced: the length the slice plays at; a fade-in after a jump
     // Transport takes: caught while the host played, anchored at the song position of their
     // first sample. The undo copy keeps its own.
-    bool takeFollows = false, undoFollows = false, parked = false;
-    double anchorPpq = 0, undoAnchor = 0;
+    bool takeFollows = false, parked = false;
+    double anchorPpq = 0;
     bool lastHostPlaying = false;
     double lastPpq = 0;
     int lastBlockN = 0;
@@ -1194,7 +1335,7 @@ private:
     bool overdub = false;
     double dubGain = 0, dubPrev = 0, dubPos = 0;
     int dubW = 64, dubStart = 0;
-    double loopDbSeen = 0, loopLevelTarget = 1, loopLevel = 1;
+    double loopLevel = 1;
     int dubLast = -1;
     int dubLo = std::numeric_limits<int>::max(), dubHi = -1;   // cells written since the strip looked
     double loopGain = 0, loopPos = 0, tapeSpeed = 1, stretchSpeed = 0;
@@ -1281,9 +1422,9 @@ private:
     // Rebuild the effective controls from the smoothed knobs, then let each source push
     // what it's routed to, around where the knob sits.
     void applyRamps(double a) {
-        e.time = s.time; e.mix = s.mix; e.length = s.length; e.modWet = s.modWet;
-        e.clock = s.clock; e.modLoop = s.modLoop; e.balance = s.balance;
-        double* field[kModTargets] = {&e.time, &e.mix, &e.length, &e.modWet, &e.clock, &e.modLoop, &e.balance};
+        e.time = s.time; e.wetMix = s.wetMix; e.length = s.length; e.modWet = s.modWet;
+        e.clock = s.clock; e.modLoop = s.modLoop; e.loopLevel = s.loopLevel;
+        double* field[kModTargets] = {&e.time, &e.wetMix, &e.length, &e.modWet, &e.clock, &e.modLoop, &e.loopLevel};
         for (int k = 0; k < 2; ++k) {
             const Params::ModSource& m = p.mods[k];
             rampVal[k] += (rampRaw[k] - rampVal[k]) * a;
@@ -1323,45 +1464,278 @@ private:
         rec.phase = RecPhase::Recording;
         rec.endAt = p.recBars > 0 ? hostCount + static_cast<int64_t>(std::llround(p.recBars * std::max(0.25, p.barQuarters) * 60.0 / std::max(5.0, p.bpm) * fs)) : -1;
     }
-    bool canOverdub() const { return loopState == LoopState::Play && lsrc >= 64 && pendingOp == LoopOp::None; }
+    bool canOverdub() const { return loopState == LoopState::Play && lsrc >= 64 && pendingOp == LoopOp::None && p.monitor != 2 && !resampling; }
+    bool canResample() const { return loopState == LoopState::Play && lsrc >= 64 && pendingOp == LoopOp::None && !overdub && dubGain < 1e-4 && rec.phase == RecPhase::Idle; }
+
+    // ── the arena and its versions ──
+    void pushEvent(const VersionEvent& ev) {
+        const int next = (evHead + 1) % kEventSlots;
+        if (next == evTail) evTail = (evTail + 1) % kEventSlots;   // the host hasn't looked: drop the oldest
+        events[static_cast<size_t>(evHead)] = ev; evHead = next;
+    }
+    int versionIndex(int id) const {
+        for (int v = 0; v < kVersions; ++v) if (versions[v].used && versions[v].id == id) return v;
+        return -1;
+    }
+    void freeRegion(int r) { if (r >= 0) regions[r] = Region{}; }
+    void freeVersion(int v) {
+        Version& ver = versions[v];
+        if (!ver.used) return;
+        freeRegion(ver.region);
+        if (layerVersion == v) layerVersion = -1;
+        ver.used = false; ver.region = -1;
+    }
+    void resetVersions() {
+        for (int v = 0; v < kVersions; ++v) freeVersion(v);
+        for (auto& r : regions) r = Region{};
+        curRegion = -1; loopBuf = nullptr; layerVersion = -1; pendingSwap = -1;
+        VersionEvent ev; ev.type = VersionEvent::Reset; pushEvent(ev);
+    }
+    // The oldest version goes, and all older ones with it (UNDO can't reach past it).
+    bool evictOldest() {
+        int oldest = -1;
+        for (int v = 0; v < kVersions; ++v)
+            if (versions[v].used && v != layerVersion && (oldest < 0 || versions[v].id < versions[oldest].id)) oldest = v;
+        if (oldest < 0) return false;
+        VersionEvent ev; ev.type = VersionEvent::Evicted; ev.id = versions[oldest].id;
+        freeVersion(oldest);
+        pushEvent(ev);
+        return true;
+    }
+    // A free stretch of the arena n long: first fit between the regions in use, evicting the
+    // oldest versions until one fits. -1 if even that can't (it can: see kArenaTakes).
+    int allocRegion(int n) {
+        n = (n + kChunk - 1) / kChunk * kChunk;   // whole chunks, so takes of nearly the same length share room
+        for (;;) {
+            int slot = -1;
+            for (int r = 0; r < kRegions; ++r) if (!regions[r].used) { slot = r; break; }
+            if (slot >= 0) {
+                int at = 0;
+                for (;;) {
+                    bool moved = false;
+                    for (const auto& r : regions)
+                        if (r.used && at < r.off + r.len && r.off < at + n) { at = r.off + r.len; moved = true; }
+                    if (!moved) break;
+                }
+                if (at + n <= kArenaSamples) { regions[slot] = Region{at, n, true}; return slot; }
+            }
+            if (!evictOldest()) return -1;
+        }
+    }
+    // A new action drops the redo side: versions already undone can't come back.
+    void dropRedo() {
+        for (int v = 0; v < kVersions; ++v)
+            if (versions[v].used && versions[v].undone && v != layerVersion) {
+                VersionEvent ev; ev.type = VersionEvent::Released; ev.id = versions[v].id;
+                freeVersion(v); pushEvent(ev);
+            }
+    }
+    int newVersion(VersionKind kind) {
+        int slot = -1;
+        for (int v = 0; v < kVersions; ++v) if (!versions[v].used) { slot = v; break; }
+        while (slot < 0) {
+            if (!evictOldest()) return -1;
+            for (int v = 0; v < kVersions; ++v) if (!versions[v].used) { slot = v; break; }
+        }
+        Version& ver = versions[slot];
+        ver.used = true; ver.undone = false; ver.id = nextVersionId++; ver.kind = kind;
+        ver.region = -1; ver.len = 0; ver.follows = false; ver.anchor = 0; ver.base = -1;
+        return slot;
+    }
+    // The take as it stands becomes a version (the region moves to it; nothing is copied).
+    int keepTake(VersionKind kind) {
+        const int v = newVersion(kind);
+        if (v < 0) return -1;
+        Version& ver = versions[v];
+        if (lsrc >= 64 && curRegion >= 0) { ver.region = curRegion; ver.len = lsrc; }
+        else freeRegion(curRegion);
+        ver.follows = takeFollows; ver.anchor = anchorPpq;
+        curRegion = -1; loopBuf = nullptr;
+        return v;
+    }
+    void announce(int v, const AutoChange* autos = nullptr, int nAuto = 0) {
+        if (v < 0) return;
+        VersionEvent ev; ev.type = VersionEvent::Added; ev.id = versions[v].id; ev.kind = versions[v].kind;
+        ev.nAuto = std::min(nAuto, 12);
+        for (int i = 0; i < ev.nAuto; ++i) ev.autos[i] = autos[i];
+        pushEvent(ev);
+    }
+    // A layer copies each chunk of the take the first time it writes to it.
+    void keepChunk(int cell) {
+        if (layerVersion < 0) return;
+        Version& ver = versions[layerVersion];
+        const int c = cell / kChunk;
+        if (c < 0 || c >= kChunks || ver.dirty[static_cast<size_t>(c)]) return;
+        ver.dirty[static_cast<size_t>(c)] = 1;
+        const int from = c * kChunk, to = std::min(lsrc, from + kChunk);
+        if (ver.region >= 0 && to > from) std::copy(loopBuf + from, loopBuf + to, arena.data() + regions[ver.region].off + from);
+    }
+
+    // INPUT MONITOR's target: ON heard, OFF not, AUTO heard unless a loop plays and nothing is
+    // being laid into it.
+    double monTarget() const {
+        if (p.monitor == 1) return 1.0;
+        if (p.monitor == 2) return 0.0;
+        return loopState == LoopState::Play && !overdub ? 0.0 : 1.0;
+    }
+    // The routing WET has now. IN + LOOP hears only the input while a layer is laid down (so the
+    // loop's own WET isn't written back into it), and with no loop playing it is IN.
+    int routingEffective() const {
+        const int r = std::clamp(p.routing, 0, 3);
+        // RESAMPLE: IN + LOOP hears only the loop, so no new input reaches the take through WET.
+        if (r == 1 && resampling) return 2;
+        if (r == 1 && (loopState != LoopState::Play || overdub)) return 0;
+        return r;
+    }
+    // Once a host sample: the monitor gate, what WET hears (rIn, rLoop) and WET MIX's two gains,
+    // all smoothed at the host's rate so CLOCK can't slow a change down.
+    void mixTick(double aR) {
+        routingNow = routingEffective();
+        mon += (monTarget() - mon) * aR;
+        rIn += ((routingNow == 0 || routingNow == 1 ? 1.0 : 0.0) - rIn) * aR;
+        rLoop += ((routingNow == 1 || routingNow == 2 ? 1.0 : 0.0) - rLoop) * aR;
+        wetMixNow = clampd(e.wetMix, 0, 1);
+        dGain = std::min(1.0, 2 * (1 - wetMixNow));
+        gGain = std::min(1.0, 2 * wetMixNow);
+        // What's recorded takes WET's blend only while WET hears the input alone.
+        recK = rIn * (1 - rLoop) * mon;
+        // RESAMPLE: the input's way into WET closes in 5 ms, all the way, so no new input
+        // reaches the take through WET (only a tail already ringing can).
+        const double step = 1 / (0.005 * fs);
+        rsFeedIn = resampling ? std::max(0.0, rsFeedIn - step) : std::min(1.0, rsFeedIn + step);
+    }
     // A new overdub layer: the take as it stands becomes UNDO's copy first.
+    // A new layer: a version that keeps the old side of every chunk it writes (keepChunk).
     void beginLayer() {
         if (overdub) return;
-        std::copy(loopBuf.begin(), loopBuf.begin() + lsrc, undoBuf.begin());
-        undoLen = lsrc; undoKind = UndoKind::Dub; undoRedo = false;
-        undoFollows = takeFollows; undoAnchor = anchorPpq;
+        dropRedo();
+        const int v = newVersion(VersionKind::Layer);
+        if (v >= 0) {
+            const int r = allocRegion(lsrc);
+            Version& ver = versions[v];
+            ver.region = r; ver.len = lsrc; ver.base = curRegion; ver.follows = takeFollows; ver.anchor = anchorPpq;
+            std::fill(ver.dirty.begin(), ver.dirty.end(), static_cast<uint8_t>(0));
+            if (r < 0) freeVersion(v);   // no room even after evicting: this layer can't be undone
+            else { layerVersion = v; announce(v); }
+        }
         overdub = true;
     }
+    void endLayer() { layerVersion = -1; }
+    // Take ticks RESAMPLE travels: one pass of the window as it is now.
+    double resampleTarget() const {
+        return lsrc < 64 ? 0.0 : (p.loopMode == 1 && lengthSlew >= 0 ? loopWindowAt(lengthSlew) : loopWindow()).W;
+    }
+    void cancelResample() { if (!resampling) return; resampling = false; rsHandover = false; freeRegion(rsRegion); rsRegion = -1; }
+    // The take is recorded: from here the old loop dips out (see rsDip), then finishResample swaps.
+    void beginHandover(bool limit) {
+        if (!resampling || rsHandover) return;
+        rsHandover = true; rsHandLimit = limit; rsSinceEnd = 0;
+    }
+    // The take this RESAMPLE recorded replaces the one playing, as one undoable action with every
+    // control it moves: the window full, TAPE at 1x, LOOP DIV 1x, LOOP LEVEL 0 dB, and (when it
+    // recorded the loop's WET) ROUTING off the loop and FREEZE released, so nothing is heard
+    // twice. Modulation that moves only the loop's playback pauses (its moves are in the take).
+    void finishResample(bool limit) {
+        if (!resampling) return;
+        resampling = false; rsHandover = false;
+        float* buf = arena.data() + regions[rsRegion].off;
+        int main = rsInTail ? rsLen : rsW;
+        int F = rsInTail ? rsW - rsLen : 0;
+        if (F <= 0) {
+            // No overlap recorded (stopped early): the end crossfades into the start instead.
+            F = std::min(static_cast<int>(std::lround(0.01 * clockRatio * fs)), main / 4);
+            main -= F;
+        }
+        if (main < 64) { freeRegion(rsRegion); rsRegion = -1; return; }
+        for (int i = 0; i < F; ++i) {
+            const double w = static_cast<double>(i) / F;
+            buf[i] = static_cast<float>(buf[i] * w + buf[main + i] * (1 - w));
+        }
+        dropRedo(); endLayer();
+        const int v = keepTake(VersionKind::Resample);
+        curRegion = rsRegion; rsRegion = -1; regions[curRegion].len = (main + kChunk - 1) / kChunk * kChunk;
+        loopBuf = arena.data() + regions[curRegion].off;
+        // Where the new take should be by now: its end is its start, so the ticks recorded past
+        // main, and those that passed in the dip.
+        lsrc = main; loopPos = jsMod(static_cast<double>(rsW - main + rsSinceEnd), static_cast<double>(main));
+        grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
+        takeFollows = rsFollows; anchorPpq = rsAnchor; parked = false; pendingLock = false; lockGain = 1;
+        loopState = LoopState::Play; loopWaveDirty = true;
+        rsLimitHit = limit;
+        AutoChange autos[12]; int n = 0;
+        fitWindow();
+        autos[n++] = {AutoParam::Start, 1}; autos[n++] = {AutoParam::LoopEnd, 1}; autos[n++] = {AutoParam::Length, 1};
+        p.length = 1; s.length = 1;
+        p.loopMode = 1; autos[n++] = {AutoParam::LoopMode, 1};
+        p.modLoop = 0.66; s.modLoop = 0.66; tapeSpeed = 1; autos[n++] = {AutoParam::ModLoop, 0.66};
+        p.loopDiv = 0; autos[n++] = {AutoParam::LoopDiv, 0};
+        p.loopLevel = 0.8; s.loopLevel = 0.8; autos[n++] = {AutoParam::LoopLevel, 0.8};
+        if (rsWetSeen && (p.routing == 1 || p.routing == 2)) {
+            p.routing = p.routing == 2 ? 3 : 0; autos[n++] = {AutoParam::Routing, static_cast<double>(p.routing)};
+            ring = true; ringRouting = p.routing;
+            if (p.freezeLatch > 0.5) { p.freezeLatch = 0; autos[n++] = {AutoParam::Freeze, 0}; }
+            freeze = false;
+        }
+        for (int k = 0; k < 2; ++k) {
+            const auto& m = p.mods[k];
+            bool loopOnly = m.on, any = false;
+            for (int t2 = 0; t2 < kModTargets; ++t2) {
+                if (std::fabs(m.depth[t2]) < 1e-6) continue;
+                any = true;
+                if (t2 != 2 && t2 != 5 && t2 != 6) loopOnly = false;
+            }
+            if (loopOnly && any) { p.mods[k].on = false; autos[n++] = {k == 0 ? AutoParam::Mod1On : AutoParam::Mod2On, 0}; }
+        }
+        announce(v, autos, n);
+    }
     void doClear() {
-        std::swap(loopBuf, undoBuf);
-        undoFollows = takeFollows; undoAnchor = anchorPpq; takeFollows = false; parked = false;
-        undoLen = lsrc; lsrc = 0; loopPos = 0;
-        undoKind = UndoKind::Clear; undoRedo = false;
+        dropRedo();
+        const int v = keepTake(VersionKind::Clear);
+        takeFollows = false; parked = false;
+        lsrc = 0; loopPos = 0;
         loopWaveDirty = true;
+        announce(v);
     }
     void runOp(LoopOp op) {
         if (op == LoopOp::Clear) { doClear(); return; }
-        std::swap(loopBuf, undoBuf); std::swap(lsrc, undoLen);
-        std::swap(takeFollows, undoFollows); std::swap(anchorPpq, undoAnchor);   // each take keeps its kind
-        undoRedo = !undoRedo;
-        if (undoKind != UndoKind::Dub) {
+        const int v = versionIndex(pendingSwap);
+        pendingSwap = -1;
+        if (v < 0) return;
+        Version& ver = versions[v];
+        endLayer();
+        if (ver.kind == VersionKind::Layer) {
+            // The chunks the layer wrote, swapped between the take and the copy.
+            if (ver.base == curRegion && ver.region >= 0 && curRegion >= 0) {
+                float* copy = arena.data() + regions[ver.region].off;
+                for (int c = 0; c < kChunks; ++c) {
+                    if (!ver.dirty[static_cast<size_t>(c)]) continue;
+                    const int from = c * kChunk, to = std::min(std::min(lsrc, ver.len), from + kChunk);
+                    if (to > from) std::swap_ranges(loopBuf + from, loopBuf + to, copy + from);
+                }
+            }
+        } else {
+            std::swap(curRegion, ver.region); std::swap(lsrc, ver.len);
+            std::swap(takeFollows, ver.follows); std::swap(anchorPpq, ver.anchor);   // each take keeps its kind
+            loopBuf = curRegion >= 0 ? arena.data() + regions[curRegion].off : nullptr;
+            if (curRegion < 0) lsrc = 0;
             loopPos = 0; grain[0] = {0, 0, 1}; grain[1] = {0.5, 0, 1};
-            if (lsrc >= 64) fitWindow();   // another take: it plays all of itself, as a new one does
         }
+        ver.undone = !ver.undone;
         loopWaveDirty = true;
     }
-    // A CLEAR or UNDO waiting for the loop to fade out happens now; a layer's undo plays on.
-    // An undone take plays, since a tap with the loop stopped would catch a new one instead;
-    // a transport take with the host stopped parks and waits for play. Undoing a layer keeps
-    // a playing loop playing and a stopped one stopped.
+    // A CLEAR or a swap waiting for the loop to fade out happens now; a layer's swap plays on.
+    // Another take plays, since a tap with the loop stopped would catch a new one instead; a
+    // transport take with the host stopped parks and waits for play. Swapping a layer keeps a
+    // playing loop playing and a stopped one stopped.
     void settlePending() {
         if (pendingOp == LoopOp::None) return;
         const LoopOp op = pendingOp;
         pendingOp = LoopOp::None;
-        const bool layer = undoKind == UndoKind::Dub;
+        const int v = versionIndex(pendingSwap);
+        const bool layer = v >= 0 && versions[v].kind == VersionKind::Layer;
         runOp(op);
         parked = false;
-        if (op == LoopOp::Undo && lsrc >= 64 && (!layer || resumeAfterOp)) {
+        if (op == LoopOp::Swap && lsrc >= 64 && (!layer || resumeAfterOp)) {
             if (takeFollows && !p.hostPlaying) parked = true;
             else { loopState = LoopState::Play; if (takeFollows) { pendingLock = true; lockGain = 0; lockShift = std::numeric_limits<double>::quiet_NaN(); } }
         }
@@ -1423,10 +1797,16 @@ private:
         n = std::min({n, static_cast<int>(hist.size()) - 1, histCount, maxCaptureSamples()});
         if (n < 64) return;
         const int N = static_cast<int>(hist.size());
-        // The take this replaces becomes UNDO's copy: a swap, nothing copied.
-        std::swap(loopBuf, undoBuf); undoLen = lsrc >= 64 ? lsrc : 0;
-        undoFollows = takeFollows; undoAnchor = anchorPpq;
-        undoKind = UndoKind::Take; undoRedo = false;
+        // The take this replaces becomes a version UNDO can swap back: its region moves, nothing
+        // is copied. The new take gets its own region.
+        dropRedo();
+        endLayer();
+        const int keep = curRegion;
+        if (keep >= 0) regions[keep].used = true;   // held while the new region is found
+        const int region = allocRegion(n);
+        if (region < 0) return;
+        const int v = keepTake(VersionKind::Take);
+        curRegion = region; loopBuf = arena.data() + regions[region].off;
         int r = histW - n; if (r < 0) r += N;
         for (int i = 0; i < n; ++i) { loopBuf[static_cast<size_t>(i)] = hist[static_cast<size_t>(r)]; if (++r >= N) r = 0; }
         lsrc = n; loopPos = 0;
@@ -1440,6 +1820,8 @@ private:
         // its first sample belongs to.
         takeFollows = p.hostPlaying; parked = false; pendingLock = false; lockGain = 1;
         anchorPpq = songNow() - n / std::max(1.0, clockRatio * fs) * p.bpm / 60.0;
+        AutoChange autos[3] = {{AutoParam::Start, 1}, {AutoParam::LoopEnd, 1}, {AutoParam::Length, 1}};
+        announce(v, autos, p.loopMode == 1 ? 3 : 2);
     }
 
     // A new take plays all of itself: END at the end, START out of the way and, in TAPE,
@@ -1501,6 +1883,7 @@ private:
         const double ax = std::fabs(x);
         env += (ax - env) * (ax > env ? 0.02 : 0.0005);
 
+        travelStep = 0;
         const double target = loopState == LoopState::Play ? 1.0 : 0.0;
         loopGain += (target - loopGain) * 0.003;
         if (loopState == LoopState::Off && loopGain < 1e-4) {
@@ -1802,6 +2185,7 @@ private:
         // what's laid down is filtered first, just under that rate; at 1x and faster, untouched.
         {
             const double rate = std::fabs(pos - posAtStart - dubWow);   // cells the write head crosses a tick
+            travelStep = rate;   // RESAMPLE's length counts this
             if (std::fabs(rate - dubAARate) > 0.002 * std::max(rate, 0.01)) {
                 dubAARate = rate;
                 // Two 6th-order sections at 40% of the rate it records at: steep enough that a
@@ -1828,13 +2212,12 @@ private:
             const int q = std::min(dubW - 1, static_cast<int>(std::floor(dubPos)));
             // FADE: how much of the old loop survives each overdub pass. 0 keeps
             // the pedal's slow decay; 1 lets the new layer replace it completely.
-            // IN + LOOP with the wet side on: the old loop comes back in through the wet side, so
-            // the layer replaces it by that share instead of stacking a second copy on top.
-            const double loss = 1 - 0.97 * (1 - clampd(s.fade, 0, 1)) * (1 - dubReplace);
+            const double loss = 1 - 0.97 * (1 - clampd(s.fade, 0, 1));
             const double dubF = std::min(0.004 * kCoreFs, dubW / 4.0);
             auto write = [&](int cellQ, double v) {
                 const double amount = dubGain * std::min({1.0, cellQ / dubF, (dubW - cellQ) / dubF});
                 const int wi = std::min(len - 1, std::max(0, dubStart + cellQ));
+                keepChunk(wi);   // the old side, for UNDO, before it's written over
                 dubLo = std::min(dubLo, wi); dubHi = std::max(dubHi, wi);   // for the strip's redraw
                 float& cell = loopBuf[static_cast<size_t>(wi)];
                 cell = static_cast<float>(cell * (1 - loss * amount) + v * amount);
@@ -1848,45 +2231,57 @@ private:
                     write(((dubLast + dir * k) % dubW + dubW) % dubW, dubPrev + (rec - dubPrev) * k / count);
             }
             dubLast = q; dubPrev = rec;
-        } else dubLast = -1;
+        } else { dubLast = -1; if (!overdub) endLayer(); }   // the layer has faded out: it's done
         if (startFade < 1) carryA += std::floor(pos / Wd) * Wd;
         loopPos = jsMod(jsMod(pos, Wd) + Wd, Wd);
         heardAt(heard, hpos, hlev, Wd);
-        // GAIN: the loop's own level, in dB, smoothed so a move doesn't click.
-        if (p.loopDb != loopDbSeen) { loopDbSeen = p.loopDb; loopLevelTarget = std::pow(10.0, p.loopDb / 20.0); }
-        loopLevel += (loopLevelTarget - loopLevel) * 0.003;
-        loopBare = y * loopGain * lockGain;
+        // LOOP LEVEL: smoothed (and perhaps modulated) at the host's rate already.
+        loopLevel = loopLevelGain(e.loopLevel);
+        loopBare = y * loopGain * lockGain * rsDip;
         return loopBare * loopLevel;
     }
 
+    // RESAMPLE, a tick: the loop as heard, with WET's share while WET hears the loop alone, and
+    // never the live input. The length counts take ticks travelled, so it follows the speed.
+    void resampleTick(double loopOut, double wetHere) {
+        if (loopState != LoopState::Play) { finishResample(false); return; }   // stopped under it: keep what it has
+        if (rsHandover) {
+            ++rsSinceEnd;
+            rsDip = std::max(0.0, rsDip - 1.0 / (0.005 * kCoreFs));
+            if (rsDip <= 0) finishResample(rsHandLimit);
+            return;
+        }
+        const double rl = rLoop * (1 - rIn);
+        if (rl * gGain > 1e-3) rsWetSeen = true;
+        float* buf = arena.data() + regions[rsRegion].off;
+        buf[rsW++] = static_cast<float>(softClip(loopOut * (1 - rl * (1 - dGain)) + rl * gGain * wetHere));
+        if (!rsInTail) {
+            rsTravel += travelStep;
+            if (rsTravel >= rsTarget) {
+                rsInTail = true; rsLen = rsW;
+                rsTail = std::max(1, std::min(static_cast<int>(std::lround(0.01 * clockRatio * fs)), rsLen / 4));
+            }
+        }
+        if (rsInTail && rsW - rsLen >= rsTail) { beginHandover(false); return; }
+        if (rsW >= kResampleCap) beginHandover(true);
+    }
+
     void coreTick(double x) {
-        // ROUTING decides what the wet side hears and what the looper keeps.
-        //   IN:        the wet side hears the input;            the looper keeps input + wet.
-        //   IN + LOOP: the wet side hears the input and loop;   the looper keeps input + wet.
-        //   LOOP:      the wet side hears only the loop;        the looper keeps the input.
-        // In LOOP the wet side isn't recorded, so the loop is never fed back to itself through
-        // it, and the live input reaches the output only as the dry signal (MIX).
-        const bool recordWet = p.routing != 2;
-        // IN + LOOP: the wet side hears the loop, so what an overdub keeps of the wet side follows
-        // WET/LOOP (what you hear of it), and the layer replaces the old one by that share times
-        // the wet side being on. A pass then brings the loop back at most at the wet side's own
-        // gain, where stacking it on 97% of the old layer ran away. Faded across a ROUTING change.
-        routeLoop += ((p.routing == 1 ? 1.0 : 0.0) - routeLoop) * 0.003;
-        const double wetShare = routeLoop * std::min(1.0, 2 * e.balance);
-        dubReplace = wetShare * wetIn;
-        // The loop is read before the wet side runs, so an overdub layers the wet side from the
-        // tick before (1/64000 s at most: inaudible).
-        double loopOut = loopTick(x, recordWet ? softClip(x + lastWet * (1 - routeLoop + wetShare) * (1 - routeLoop * (1 - dubCeil))) : x);
-        // GAIN sets the loop's level for the wet side too, so turning it down quietens both.
-        const double wetSrc = p.routing == 2 ? loopOut : p.routing == 1 ? x + loopOut : x;
-        // The FREEZE switch is the hold gesture without the holding: it brings the
-        // wet side up and freezes it, so a reverb can be left ringing on its own.
-        const bool held = p.freezeLatch > 0.5;
-        const bool wet = wetOn || held;
-        const bool frozen = freeze || held;
-        const double inT = wet ? 1.0 : 0.0;
-        const double outT = wet || p.trails ? 1.0 : 0.0;
-        wetIn += (inT - wetIn) * 0.003;
+        // ROUTING decides what WET hears (see mixTick for the routing it has now):
+        //   IN: the input. IN + LOOP: the input and the loop. LOOP: the loop. OFF: nothing.
+        // The input reaches WET only through INPUT MONITOR: what isn't heard isn't processed.
+        // What a new take or a layer keeps is the input, blended with WET by WET MIX while WET
+        // hears the input alone (recK), so you keep what you hear of it; otherwise the plain input.
+        // The loop is read before WET runs, so a layer takes WET from the tick before
+        // (1/64000 s at most: inaudible).
+        double loopOut = loopTick(x, softClip(x * (1 - recK * (1 - dGain)) + recK * gGain * lastWet));
+        // LOOP LEVEL sets the loop's level for WET too, so turning it down quietens both.
+        const double wetSrc = x * mon * rIn * rsFeedIn + loopOut * rLoop;
+        // The FREEZE switch holds WET as it is, so a reverb can be left ringing on its own.
+        const bool frozen = freeze || p.freezeLatch > 0.5;
+        // WET's output: on while it's fed or frozen; after ROUTING OFF, as TRAILS says.
+        if (ring && p.routing != ringRouting) ring = false;   // ROUTING moved since: as TRAILS says again
+        const double outT = routingNow != 3 || p.trails || frozen || ring ? 1.0 : 0.0;
         wetOut += (outT - wetOut) * 0.003;
         for (int k = 0; k < 4; ++k) modeGain[k] += ((p.wetMode == k ? 1.0 : 0.0) - modeGain[k]) * 0.002;
 
@@ -1897,8 +2292,8 @@ private:
         const double hiss = p.classic ? (rand01() * 2 - 1) * (0.0006 + 0.01 * (1 - clockRatio)) * clampd(p.wearNoise, 0, 1) : 0.0;
         // WORN after the loop, with the wet side recorded: hiss fed to the wet side would be
         // recorded with it, so it joins the output after the looper instead.
-        const bool hissAfter = recordWet && p.wearPost;
-        const double wIn = wetSrc * wetIn + (hissAfter ? 0.0 : hiss);
+        const bool hissAfter = p.wearPost && (p.routing == 0 || p.routing == 1);
+        const double wIn = wetSrc + (hissAfter ? 0.0 : hiss);
         double wl = 0, wr = 0;
         if (modeGain[0] > 1e-4) {
             // CLASSIC: the MK I reverb rings far longer than the MK II's.
@@ -1961,22 +2356,12 @@ private:
 
         // The history always advances, whether or not a loop is playing: pausing it
         // left a splice in the buffer and every extra tap stitched in another one,
-        // which is what put clicks inside the next loop. It keeps the wet side too, unless
-        // ROUTING is on LOOP.
-        const float kept = static_cast<float>(softClip(x + (recordWet ? (wl + wr) * 0.5 : 0)));
-        lastWet = (wl + wr) * 0.5;
-        // IN + LOOP's ceiling: over a quarter second, what the wet side gives back may not be
-        // louder than what it was fed, so a wet mode that builds on itself (a delay near full
-        // FEEDBACK) can't grow the loop pass after pass. Lossy wet modes never reach it.
-        {
-            // The loop counts at GAIN no higher than 0 dB: a boost is heard on both sides, but
-            // what an overdub re-records of it stays at the loop's own level.
-            const double k = 1 / (0.25 * std::max(1.0, clockRatio * fs));
-            const double feed = p.routing == 1 ? wIn - (loopOut - loopBare * std::min(1.0, loopLevel)) * wetIn : wIn;
-            feedPow += (feed * feed - feedPow) * k;
-            wetPow += (lastWet * lastWet - wetPow) * k;
-            dubCeil = wetPow > feedPow && wetPow > 1e-12 ? std::sqrt(feedPow / wetPow) : 1.0;
-        }
+        // which is what put clicks inside the next loop. It keeps what a layer would (above).
+        const double wetNow = (wl + wr) * 0.5;
+        const float kept = static_cast<float>(softClip(x * (1 - recK * (1 - dGain)) + recK * gGain * wetNow));
+        lastWet = wetNow;
+        if (resampling) resampleTick(loopOut, wetSide == 1 ? wr : wl);
+        else if (rsDip < 1) rsDip = std::min(1.0, rsDip + 1.0 / (0.005 * kCoreFs));   // the new take dips in
         hist[static_cast<size_t>(histW)] = kept;
         // The strip's picture of it: read only, never heard.
         float& col = liveCols[static_cast<size_t>(histW / kLiveColTicks)];
@@ -1992,19 +2377,14 @@ private:
             if (written >= maxCaptureSamples()) closeRecording();
         }
 
-        // WET / LOOP blends two complete worlds: the loop keeps its own level
-        // across the whole knob and the wet side adds to it. It used to be ducked
-        // against the wet level so the loop was not heard twice, but the wet side
-        // always returns it late — and in SLIP and WEAVE it returns very little —
-        // so the duck swallowed the loop in the middle of the travel. Mirrors
-        // coreTick() in src/brood-worklet.js.
-        // WET/LOOP is how much of the wet side you hear: 0 the loop alone, 1 the wet side alone.
-        const double bal = e.balance;
-        const double wetLvl = std::min(1.0, 2 * bal), loopLvl = std::min(1.0, 2 * (1 - bal));
-        const double ld = loopOut * loopLvl;
+        // What's heard from the core: the loop, blended away by WET MIX where WET hears it
+        // (IN + LOOP and LOOP), and WET at WET MIX's share. Both full at the middle, as MIX was.
+        // The input's share is added at the host's rate (process). Mirrors coreTick() in
+        // src/brood-worklet.js.
+        const double ld = loopOut * (1 - rLoop * (1 - dGain));
         for (auto& ch : ticks) { ch[0] = ch[1]; ch[1] = ch[2]; ch[2] = ch[3]; }
         const double hissOut = hissAfter ? hiss * wetOut : 0.0;
-        double outL = (wl + hissOut) * wetLvl + ld, outR = (wr + hissOut) * wetLvl + ld;
+        double outL = (wl + hissOut) * gGain + ld, outR = (wr + hissOut) * gGain + ld;
         {
             const double fL = coreOut[0].run(outL), fR = coreOut[1].run(outR);
             if (coreW > 0) { outL += (fL - outL) * coreW; outR += (fR - outR) * coreW; }

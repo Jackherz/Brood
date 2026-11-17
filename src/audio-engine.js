@@ -117,10 +117,6 @@ export class AudioEngine {
       this.analyser = analyser;
       this.output = output;
       this.setParams(params);
-      // On this page a playing loop is heard alone: the worklet fades the dry side out under
-      // it (30 ms) and back in when it stops. Done there, after the looper has heard the
-      // input, so Brood keeps listening and the next catch still has something to keep.
-      node.port.postMessage({ type: 'soloLoop', value: 1 });
     } catch (error) {
       await context.close().catch(() => {});
       throw error;
@@ -155,7 +151,12 @@ export class AudioEngine {
   // OVERDUB latches (it isn't one of the saved settings); CLEAR and UNDO act once.
   overdub(on) { this.node?.port.postMessage({ type: 'param', name: 'overdubLatch', value: on ? 1 : 0 }); }
   clearLoop() { this.node?.port.postMessage({ type: 'clear' }); }
-  undoLoop() { this.node?.port.postMessage({ type: 'undo' }); }
+  // UNDO and REDO: the page's history says which version of the take to swap in (or to let go of).
+  swapVersion(id) { this.node?.port.postMessage({ type: 'swap', id }); }
+  releaseVersion(id) { this.node?.port.postMessage({ type: 'release', id }); }
+  // UNDO while a RECORD take or a RESAMPLE runs stands it down.
+  cancelActive() { this.node?.port.postMessage({ type: 'cancelActive' }); }
+  resample() { this.node?.port.postMessage({ type: 'resample' }); }
   // RESET: the wet side off, the take cleared with nothing left to undo. Safe before audio starts.
   resetAll() { this.node?.port.postMessage({ type: 'reset' }); }
   setInputLevel(value) {

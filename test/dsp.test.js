@@ -22,6 +22,31 @@ function render(core, seconds, src, at = {}) {
 }
 
 const blk = (sec) => Math.round((sec * FS) / BLOCK);
+// WET is fed whenever ROUTING isn't OFF (there's no WET switch now): on keeps or brings back a
+// routing, off is ROUTING OFF.
+const wetOn = (core) => { if (core.p.routing === 3) core.setParam('routing', core.lastRouting ?? 0); };
+const wetOff = (core) => { if (core.p.routing !== 3) { core.lastRouting = core.p.routing; core.setParam('routing', 3); } };
+// The page's UNDO history, as small as it can be (as in tests/parity/render.js).
+function historyOf(core) {
+  const h = { undo: [], redo: [] };
+  h.drain = () => {
+    for (let ev; (ev = core.popVersionEvent());) {
+      if (ev.type === 'added') { h.undo.push(ev.id); h.redo = []; }
+      else if (ev.type === 'released') { h.undo = h.undo.filter((i) => i !== ev.id); h.redo = h.redo.filter((i) => i !== ev.id); }
+      else if (ev.type === 'evicted') { h.undo = h.undo.filter((i) => i > ev.id); h.redo = h.redo.filter((i) => i !== ev.id); }
+      else { h.undo = []; h.redo = []; }
+    }
+    while (h.undo.length > 4) core.releaseVersion(h.undo.shift());
+  };
+  h.step = (back) => {
+    h.drain();
+    if (back && core.cancelActive()) return;
+    const from = back ? h.undo : h.redo, to = back ? h.redo : h.undo;
+    if (!from.length) return;
+    const id = from.pop(); core.swapVersion(id); to.push(id);
+  };
+  return h;
+}
 const rms = (a, s, e) => { let acc = 0; const i0 = Math.floor(s * FS), i1 = Math.floor(e * FS); for (let i = i0; i < i1; i++) acc += a[i] * a[i]; return Math.sqrt(acc / (i1 - i0)); };
 const finite = (a) => a.every(Number.isFinite);
 const click = (t) => (t < 0.002 ? 0.8 : 0);
@@ -54,11 +79,11 @@ test('bypass remains transparent above nominal full scale', () => {
 test('delay repeats at the TIME setting, and half clock doubles it', () => {
   const measure = (clock) => {
     const core = new BroodCore(FS);
-    core.setParam('wetMode', 1); core.setParam('mix', 1);
+    core.setParam('wetMode', 1); core.setParam('wetMix', 1);
     core.setParam('modWet', 0.3); core.setParam('clock', clock);
-    core.s.clock = clock; core.s.mix = 1; core.modeGain = [0, 1, 0];
+    core.s.clock = clock; core.s.wetMix = 1; core.modeGain = [0, 1, 0];
     // time 0.5 → expMap(0.5, 0.02s, 2s) = 0.2 s at full clock
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     const { L } = render(core, 1.6, (t) => (t > 0.1 && t < 0.102 ? 0.8 : 0));
     return peakTime(L, 0.12, 1.5) - 0.1;
   };
@@ -84,9 +109,9 @@ test('delay time changes crossfade between fixed read heads', () => {
 test('delay timing is stable at 44.1 and 96 kHz host rates', () => {
   for (const rate of [44100, 96000]) {
     const core = new BroodCore(rate);
-    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('clock', 1);
-    core.s.clock = 1; core.s.mix = 1; core.modeGain = [0, 1, 0];
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    core.setParam('wetMode', 1); core.setParam('wetMix', 1); core.setParam('clock', 1);
+    core.s.clock = 1; core.s.wetMix = 1; core.modeGain = [0, 1, 0];
+    wetOn(core);
     const input = new Float32Array(BLOCK), left = new Float32Array(BLOCK), right = new Float32Array(BLOCK);
     let best = 0, at = 0;
     for (let block = 0; block < Math.ceil(rate * 0.55 / BLOCK); block++) {
@@ -108,7 +133,7 @@ test('reverb tail decays and stays finite in every Modify position', () => {
   for (const m of [0, 0.5, 1]) {
     const core = new BroodCore(FS);
     core.setParam('wetMode', 0); core.setParam('modWet', m); core.setParam('time', 0.4);
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    core.setParam('wetMix', 0.5); wetOn(core);
     const { L, R } = render(core, 4, click);
     assert.ok(finite(L) && finite(R));
     const early = rms(L, 0.1, 0.4), late = rms(L, 3.5, 4);
@@ -133,7 +158,7 @@ test('reverb time changes the delay-network size as well as decay', () => {
 test('reverb freeze holds the tail', () => {
   const core = new BroodCore(FS);
   core.setParam('time', 0.2);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  core.setParam('wetMix', 0.5); wetOn(core);
   const { L } = render(core, 3, tone(330, 0.5), {
     [blk(0.6)]: (c) => c.footswitch('wet', 'down'),
   });
@@ -145,7 +170,7 @@ test('reverb freeze holds the tail', () => {
 test('maximum delay feedback stays bounded', () => {
   const core = new BroodCore(FS);
   core.setParam('wetMode', 1); core.setParam('modWet', 1); core.setParam('time', 0.2);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  wetOn(core);
   const { L } = render(core, 6, tone(440, 0.3));
   assert.ok(finite(L));
   assert.ok(L.every((v) => Math.abs(v) <= 1));
@@ -154,8 +179,8 @@ test('maximum delay feedback stays bounded', () => {
 test('slip produces pitch-shifted slices in all directions', () => {
   for (const m of [0, 0.15, 0.4, 1]) {
     const core = new BroodCore(FS);
-    core.setParam('wetMode', 2); core.setParam('modWet', m); core.setParam('mix', 1);
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    core.setParam('wetMode', 2); core.setParam('modWet', m); core.setParam('wetMix', 1);
+    wetOn(core);
     const { L } = render(core, 2, tone(220, 2));
     assert.ok(finite(L));
     assert.ok(rms(L, 1, 2) > 0.02, `slip output m=${m}`);
@@ -164,7 +189,7 @@ test('slip produces pitch-shifted slices in all directions', () => {
 
 test('tapping the loop switch captures what was just played', () => {
   const core = new BroodCore(FS);
-  core.setParam('mix', 1);
+  core.setParam('wetMix', 1);
   // play a tone for 1 s, then silence; tap at 1.0 s
   const { L } = render(core, 3, tone(330, 1), {
     [blk(1.0)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); },
@@ -214,7 +239,7 @@ test('every loop mode and routing stays finite', () => {
   for (const loopMode of [0, 1, 2]) for (const routing of [0, 1, 2]) for (const wetMode of [0, 1, 2]) {
     const core = new BroodCore(FS);
     Object.entries({ loopMode, routing, wetMode, modLoop: 0.1, clock: 0.3 }).forEach(([k, v]) => core.setParam(k, v));
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     const { L, R } = render(core, 2, (t) => 0.3 * Math.sin(2 * Math.PI * 196 * t) * Math.exp(-3 * (t % 0.5)), {
       [blk(1.0)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); },
     });
@@ -236,7 +261,7 @@ test('loop buffer length is set by the clock (fixed sample count)', () => {
 test('ENV mode: playing interrupts the loop with a repeating slice', () => {
   const core = new BroodCore(FS);
   core.setParam('loopMode', 0); core.setParam('modLoop', 0.8); core.setParam('length', 0.2);
-  core.setParam('mix', 1);
+  core.setParam('wetMix', 1);
   // record a 220 Hz loop, then play a loud 880 Hz note: the output should keep
   // repeating loop material (not 880 Hz, since dry is killed) and stay finite
   const src = (t) => (t < 1 ? 0.3 * Math.sin(2 * Math.PI * 220 * t) : t > 1.5 && t < 2.2 ? 0.5 * Math.sin(2 * Math.PI * 880 * t) : 0);
@@ -268,23 +293,48 @@ test('clock is stepped by default and continuously variable with Smooth', () => 
   assert.notStrictEqual(clockHz(0.51, true), clockHz(0.5, true));
 });
 
-test('ROUTING on LOOP with MIX all FX: no live input reaches the output, loop or none', () => {
-  // The user's case: dry 0, ROUTING on LOOP. The wet side hears only the loop, so with no
-  // loop caught there's nothing to hear (it used to fall back to the input).
+test('INPUT MONITOR: OFF lets no live input out (nor through WET); ON and AUTO with no loop do', () => {
+  const heard = (monitor, routing) => {
+    const core = new BroodCore(FS);
+    core.setParam('wetMode', 1); core.setParam('routing', routing); core.setParam('wetMix', 0.7); core.setParam('time', 0.15);
+    core.setParam('monitor', monitor);
+    const { L } = render(core, 1.5, tone(220, 1.5));
+    return rms(L, 0.5, 1.5);
+  };
+  for (const routing of [0, 1, 2, 3]) {
+    assert.ok(heard(2, routing) < 1e-6, `OFF, routing ${routing}: silent (rms ${heard(2, routing)})`);
+    assert.ok(heard(1, routing) > 0.05, `ON, routing ${routing}: heard`);
+    assert.ok(heard(0, routing) > 0.05, `AUTO with no loop, routing ${routing}: heard`);
+  }
+});
+
+test('INPUT MONITOR AUTO: the loop replaces the input, and a layer opens it again', () => {
   const core = new BroodCore(FS);
-  core.setParam('wetMode', 1); core.setParam('routing', 2); core.setParam('mix', 1);
-  core.setParam('time', 0.15);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
-  const { L } = render(core, 1.5, tone(220, 1.5));
-  assert.ok(rms(L, 0.5, 1.5) < 1e-6, `silent with no loop (rms ${rms(L, 0.5, 1.5)})`);
+  for (const [k, v] of Object.entries({ routing: 2, loopMode: 1, memory: 0.3, monitor: 0 })) core.setParam(k, v);
+  const inputOnly = (c) => { const st = c.state(); return st.inputHeard; };
+  render(core, 1.5, tone(220, 3));
+  assert.ok(inputOnly(core), 'no loop: heard');
+  core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+  render(core, 0.2, tone(220, 3));
+  assert.ok(!inputOnly(core), 'a loop playing: not heard');
+  core.setParam('overdubLatch', 1); render(core, 0.2, tone(220, 3));
+  assert.ok(inputOnly(core), 'overdubbing: heard');
+  core.setParam('monitor', 2); render(core, 0.2, tone(220, 3));
+  assert.equal(core.state().loop, 'play', 'OFF ends the layer');
+  assert.equal(core.state().canOverdub, false, 'and OVERDUB is unavailable');
+  core.setParam('overdubLatch', 0); render(core, 0.05, () => 0);
+  core.setParam('overdubLatch', 1); render(core, 0.2, () => 0);
+  assert.equal(core.state().dubLatched, false, 'switching it on in OFF does nothing');
+  core.footswitch('loop', 'down'); render(core, 0.6, () => 0); core.footswitch('loop', 'up');
+  assert.equal(core.state().loop, 'play', 'and a hold does not overdub either');
 });
 
 test('the looper keeps the wet side on ROUTING IN and IN + LOOP, and only the input on LOOP', () => {
   const run = (routing) => {
     const core = new BroodCore(FS);
     core.setParam('wetMode', 1); core.setParam('time', 0.2); core.setParam('modWet', 0.9);
-    core.setParam('routing', routing);
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    core.setParam('routing', routing); core.setParam('wetMix', 0.5);
+    wetOn(core);
     render(core, 1.0, tone(330, 0.15));
     let energy = 0;
     // Recent history after the dry tone has stopped holds only the wet repeats.
@@ -299,9 +349,9 @@ test('the looper keeps the wet side on ROUTING IN and IN + LOOP, and only the in
 test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => {
   const run = (time, modify) => {
     const core = new BroodCore(FS);
-    core.setParam('wetMode', 3); core.setParam('mix', 1);
+    core.setParam('wetMode', 3); core.setParam('wetMix', 1);
     core.setParam('time', time); core.setParam('modWet', modify);
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     // A gated tone keeps the memory fresh, like a guitarist playing.
     const { L } = render(core, 3, (t) => (t % 1 < 0.75 ? 0.35 * Math.sin(2 * Math.PI * 330 * t) : 0));
     return rms(L, 1.5, 3);
@@ -315,9 +365,9 @@ test('WEAVE keeps three threads audible, repeatable and knob-responsive', () => 
 
 test('WEAVE stays bounded at the extremes', () => {
   const core = new BroodCore(FS);
-  core.setParam('wetMode', 3); core.setParam('mix', 1); core.setParam('modWet', 1);
+  core.setParam('wetMode', 3); core.setParam('wetMix', 1); core.setParam('modWet', 1);
   core.setParam('time', 1); core.setParam('clock', 0); core.setParam('width', 1);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  wetOn(core);
   const { L, R } = render(core, 2, tone(196, 5));
   for (let i = 0; i < L.length; i++) {
     assert.ok(Number.isFinite(L[i]) && Number.isFinite(R[i]), 'finite');
@@ -328,9 +378,9 @@ test('WEAVE stays bounded at the extremes', () => {
 test('tempo sync puts the delay on the musical division, at any clock', () => {
   const echoAt = (time, bpm, clock) => {
     const core = new BroodCore(FS);
-    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.5);
+    core.setParam('wetMode', 1); core.setParam('wetMix', 1); core.setParam('modWet', 0.5);
     core.setParam('sync', 1); core.setParam('bpm', bpm); core.setParam('time', time); core.setParam('clock', clock);
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     const n = FS * 3;
     const click = new Float32Array(n); click[FS] = 0.8;
     const L = new Float32Array(n), R = new Float32Array(n);
@@ -350,9 +400,9 @@ test('tempo sync puts the delay on the musical division, at any clock', () => {
 
 test('sync off leaves TIME as a free time', () => {
   const core = new BroodCore(FS);
-  core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.5);
+  core.setParam('wetMode', 1); core.setParam('wetMix', 1); core.setParam('modWet', 0.5);
   core.setParam('sync', 0);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  wetOn(core);
   const n = FS * 2, click = new Float32Array(n); click[FS] = 0.8;
   const L = new Float32Array(n), R = new Float32Array(n);
   core.process(click, L, R, n);
@@ -364,10 +414,10 @@ test('sync off leaves TIME as a free time', () => {
 test('balance at LOOP always returns the loop, whatever the routing', () => {
   for (const routing of [0, 1, 2]) {
     const core = new BroodCore(FS);
-    core.setParam('routing', routing); core.setParam('balance', 0); core.setParam('mix', 1); core.setParam('loopMode', 1);
+    core.setParam('routing', routing); core.setParam('balance', 0); core.setParam('wetMix', 1); core.setParam('loopMode', 1);
     render(core, 1.2, tone(220, 5));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     const { L } = render(core, 1, () => 0);
     // Silent input, loop playing, wet engaged, balance fully to LOOP: must be audible.
     assert.ok(rms(L, 0.2, 0.9) > 0.05, `routing ${routing}: loop silent at balance 100% (rms ${rms(L, 0.2, 0.9)})`);
@@ -475,10 +525,10 @@ test('a source\'s SYNC hands its rate to the tempo and free mode takes it back',
 test('the wet SYNC and the ENV switch are separate', () => {
   const play = (loopMode, wetMode, extra) => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ loopMode, wetMode, bpm: 120, clock: 1, time: 0.5, length: 0.5, mix: 0.6, modWet: 0.6, routing: 1, ...extra })) core.setParam(k, v);
+    for (const [k, v] of Object.entries({ loopMode, wetMode, bpm: 120, clock: 1, time: 0.5, length: 0.5, wetMix: 0.6, modWet: 0.6, routing: 1, ...extra })) core.setParam(k, v);
     render(core, 1.2, tone(330, 5));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     return render(core, 2, tone(330, 5)).L;
   };
   const diff = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) diff; return a.reduce((acc, v, i) => acc + Math.abs(v - b[i]), 0); };
@@ -641,7 +691,7 @@ test('moving START crossfades instead of jumping', () => {
   core.setParam('loopMode', 2);
   core.setParam('length', 0.5);
   core.setParam('loopEnd', 0.4);
-  core.setParam('mix', 1);
+  core.setParam('wetMix', 1);
   render(core, 3, (t) => 0.35 * Math.sin(2 * Math.PI * 140 * t) + 0.2 * Math.sin(2 * Math.PI * 523 * t));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
   core.setParam('balance', 0);                      // the loop on its own
@@ -678,8 +728,8 @@ const crossings = (a, from, to) => { let n = 0; for (let i = Math.floor(from * F
 const wetCore = (patch) => {
   const core = new BroodCore(FS);
   for (const [k, v] of Object.entries(patch)) { core.setParam(k, v); }
-  core.wetOn = true;
-  core.s.mix = patch.mix ?? core.p.mix;
+  
+  core.s.wetMix = patch.wetMix ?? core.p.wetMix;
   return core;
 };
 
@@ -690,7 +740,7 @@ test('clock divisions are stepped 1x, 2x, 4x', () => {
 
 test('TONE is a hi-cut on the wet bus; fully open is bit-transparent', () => {
   const hf = (value) => {
-    const core = wetCore({ wetMode: 0, mix: 1, time: 0.7, tone: value });
+    const core = wetCore({ wetMode: 0, wetMix: 1, time: 0.7, tone: value });
     core.s.tone = value;
     const { L } = render(core, 3, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t) + 0.2 * Math.sin(2 * Math.PI * 7000 * t));
     return hfEnergy(L, 1, 3);
@@ -699,18 +749,18 @@ test('TONE is a hi-cut on the wet bus; fully open is bit-transparent', () => {
   assert.ok(shut < open * 0.8, `closed ${shut.toFixed(4)} should be darker than open ${open.toFixed(4)}`);
 
   const plain = new BroodCore(FS);
-  plain.setParam('wetMode', 0); plain.setParam('mix', 1); plain.wetOn = true; plain.s.mix = 1;
+  plain.setParam('wetMode', 0); plain.setParam('wetMix', 1);  plain.s.wetMix = 1;
   const a = render(plain, 1, tone(220, 1));
   const openCore = new BroodCore(FS);
-  openCore.setParam('wetMode', 0); openCore.setParam('mix', 1); openCore.setParam('tone', 1);
-  openCore.wetOn = true; openCore.s.mix = 1; openCore.s.tone = 1;
+  openCore.setParam('wetMode', 0); openCore.setParam('wetMix', 1); openCore.setParam('tone', 1);
+   openCore.s.wetMix = 1; openCore.s.tone = 1;
   const b = render(openCore, 1, tone(220, 1));
   assert.deepStrictEqual(Array.from(a.L), Array.from(b.L), 'tone fully open must not filter');
 });
 
 test('STEREO WIDTH keeps 0.5 as built, folds to mono at 0 and doubles at 1', () => {
   const image = (width) => {
-    const core = wetCore({ wetMode: 0, mix: 1, time: 0.7, width });
+    const core = wetCore({ wetMode: 0, wetMix: 1, time: 0.7, width });
     core.s.width = width;
     const { L, R } = render(core, 2.5, (t) => 0.3 * Math.sin(2 * Math.PI * 220 * t) + 0.1 * Math.sin(2 * Math.PI * 3100 * t));
     return sideEnergy(L.slice(FS), R.slice(FS));
@@ -722,11 +772,11 @@ test('STEREO WIDTH keeps 0.5 as built, folds to mono at 0 and doubles at 1', () 
 
   // The neutral setting must be exactly the old behaviour, not just close.
   const plain = new BroodCore(FS);
-  plain.setParam('wetMode', 0); plain.setParam('mix', 1); plain.wetOn = true; plain.s.mix = 1;
+  plain.setParam('wetMode', 0); plain.setParam('wetMix', 1);  plain.s.wetMix = 1;
   const a = render(plain, 1, tone(220, 1));
   const withWidth = new BroodCore(FS);
-  withWidth.setParam('wetMode', 0); withWidth.setParam('mix', 1); withWidth.setParam('width', 0.5);
-  withWidth.wetOn = true; withWidth.s.mix = 1;
+  withWidth.setParam('wetMode', 0); withWidth.setParam('wetMix', 1); withWidth.setParam('width', 0.5);
+   withWidth.s.wetMix = 1;
   const b = render(withWidth, 1, tone(220, 1));
   assert.deepStrictEqual(Array.from(a.L), Array.from(b.L), 'width 0.5 must be the built image');
 });
@@ -734,9 +784,9 @@ test('STEREO WIDTH keeps 0.5 as built, folds to mono at 0 and doubles at 1', () 
 test('WET CLOCK DIVISION stretches the wet side only', () => {
   const echoGap = (wetDiv) => {
     const core = new BroodCore(FS);
-    core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.3);
+    core.setParam('wetMode', 1); core.setParam('wetMix', 1); core.setParam('modWet', 0.3);
     core.setParam('time', 0.3); core.setParam('wetDiv', wetDiv);
-    core.wetOn = true; core.s.mix = 1; core.s.time = 0.3; core.s.modWet = 0.3; core.modeGain = [0, 1, 0, 0];
+     core.s.wetMix = 1; core.s.time = 0.3; core.s.modWet = 0.3; core.modeGain = [0, 1, 0, 0];
     const { L } = render(core, 4, click);
     return peakTime(L, 0.02, 3.9);
   };
@@ -751,9 +801,9 @@ test('the input is read at each core tick, so a captured loop is smooth', () => 
   // times slower the stairs are easy to measure, as roughness (mean |second
   // difference| over mean |signal|) far above what a clean sine at that pitch has.
   const core = new BroodCore(FS);
-  core.setParam('loopMode', 1); core.setParam('mix', 1); core.setParam('loopDiv', 1);
+  core.setParam('loopMode', 1); core.setParam('wetMix', 1); core.setParam('loopDiv', 1);
   core.setParam('clock', 1); core.setParam('modLoop', 0.75);
-  core.s.mix = 1;
+  core.s.wetMix = 1;
   const { L } = render(core, 3, (t) => 0.35 * Math.sin(2 * Math.PI * 220 * t), {
     [blk(0.1)]: (c) => { c.footswitch('loop', 'down'); },
     [blk(0.6)]: (c) => { c.footswitch('loop', 'up'); },
@@ -773,9 +823,9 @@ test('the input is read at each core tick, so a captured loop is smooth', () => 
 test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
   const pitch = (loopDiv, loopMode) => {
     const core = new BroodCore(FS);
-    core.setParam('loopMode', loopMode); core.setParam('mix', 1); core.setParam('loopDiv', loopDiv);
+    core.setParam('loopMode', loopMode); core.setParam('wetMix', 1); core.setParam('loopDiv', loopDiv);
     core.setParam('clock', 1); core.setParam('time', 0.5);
-    core.s.mix = 1;
+    core.s.wetMix = 1;
     const { L } = render(core, 6, (t) => 0.35 * Math.sin(2 * Math.PI * 220 * t), {
       [blk(0.1)]: (c) => { c.footswitch('loop', 'down'); },
       [blk(0.3)]: (c) => { c.footswitch('loop', 'up'); },
@@ -797,8 +847,8 @@ test('LOOP CLOCK DIVISION halves and quarters the loop pitch', () => {
 test('FADE decides how much of the old loop survives an overdub', () => {
   const levelAfterOverdub = (fade) => {
     const core = new BroodCore(FS);
-    core.setParam('loopMode', 1); core.setParam('mix', 0.6); core.setParam('clock', 1); core.setParam('fade', fade);
-    core.s.mix = 0.6; core.s.fade = fade;
+    core.setParam('loopMode', 1); core.setParam('wetMix', 0.6); core.setParam('clock', 1); core.setParam('fade', fade);
+    core.s.wetMix = 0.6; core.s.fade = fade;
     let src = (t) => 0.3 * Math.sin(2 * Math.PI * 200 * t);
     render(core, 0.4, src, { [blk(0.1)]: (c) => c.footswitch('loop', 'down'), [blk(0.3)]: (c) => c.footswitch('loop', 'up') });
     // Two passes of silence through the overdub head.
@@ -812,7 +862,7 @@ test('FADE decides how much of the old loop survives an overdub', () => {
 
 test('CLASSIC makes the slow clock noisy and the reverb ring', () => {
   const noiseFloor = (classic, wearNoise = 1) => {
-    const core = wetCore({ wetMode: 0, mix: 1, time: 0.6, clock: 0, classic: classic ? 1 : 0, wearNoise });
+    const core = wetCore({ wetMode: 0, wetMix: 1, time: 0.6, clock: 0, classic: classic ? 1 : 0, wearNoise });
     const { L } = render(core, 2, () => 0);
     return rms(L, 1, 2);
   };
@@ -825,14 +875,19 @@ test('CLASSIC makes the slow clock noisy and the reverb ring', () => {
 });
 
 test('WORN after the loop keeps the take clean, and is still heard', () => {
-  const tap = (core, which) => { core.footswitch(which, 'down'); core.footswitch(which, 'up'); };
-  const worn = { wetMode: 0, mix: 1, time: 0.6, clock: 0, classic: 1, routing: 0 };
+  // The old WET switch's tap, as ROUTING: a first tap leaves WET fed, a second turns it OFF.
+  const tap = (core, which) => {
+    if (which === 'wet') { core.wetTaps = (core.wetTaps || 0) + 1; if (core.wetTaps % 2 === 0) wetOff(core); else wetOn(core); return; }
+    core.footswitch(which, 'down'); core.footswitch(which, 'up');
+  };
+  const worn = { wetMode: 0, wetMix: 1, time: 0.6, clock: 0, classic: 1, routing: 0 };
   const kept = (post) => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ ...worn, wearPost: post ? 1 : 0, balance: 0, loopMode: 1 })) core.setParam(k, v);
+    // WET (and its hiss) is recorded at WET MIX's share; then only the loop is left to hear.
+    for (const [k, v] of Object.entries({ ...worn, wearPost: post ? 1 : 0, wetMix: 0.5, loopMode: 1 })) core.setParam(k, v);
     tap(core, 'wet'); tap(core, 'loop');
     render(core, 3, () => 0, { [blk(2.0)]: (c) => tap(c, 'loop') });
-    core.setParam('classic', 0); tap(core, 'wet');   // wear off and wet off: only the loop is left to hear
+    core.setParam('classic', 0); core.setParam('wetMix', 0); tap(core, 'wet');   // wear off and WET off
     const { L } = render(core, 3, () => 0);
     return rms(L, 1, 3);
   };
@@ -848,7 +903,7 @@ test('WORN after the loop keeps the take clean, and is still heard', () => {
 
 test('TAPE: deep, fast LENGTH modulation keeps the playhead moving through the window', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.5, mix: 1, balance: 0, routing: 2, modLoop: 0.66 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.5, wetMix: 0, routing: 2, modLoop: 0.66 })) core.setParam(k, v);
   render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
   for (const [k, v] of Object.entries({ mod1On: 1, mod1Rate: 1, mod1Wave: 0.2, mod1_length: 1 })) core.setParam(k, v);   // square, 8 Hz, full depth
@@ -871,7 +926,7 @@ test('TAPE: deep, fast LENGTH modulation keeps the playhead moving through the w
 
 test('START means the same in every loop mode', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ loopMode: 0, clock: 1, memory: 0.6, mix: 1, balance: 0, routing: 2 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ loopMode: 0, clock: 1, memory: 0.6, wetMix: 0, routing: 2 })) core.setParam(k, v);
   render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
   for (const [k, v] of Object.entries({ length: 0.5, loopEnd: 0.5, start: 0.3 })) core.setParam(k, v);   // trimmed once caught
@@ -885,7 +940,7 @@ test('switching loop mode keeps the playhead where it is in the take', () => {
   let lo = 0.5, hi = 1;
   for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (speedMap(mid, 0.04) < 1) lo = mid; else hi = mid; }
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.6, loopEnd: 0.6, start: 0.2, modLoop: lo, mix: 1, balance: 0, routing: 2 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ loopMode: 1, clock: 1, memory: 0.6, length: 0.6, loopEnd: 0.6, start: 0.2, modLoop: lo, wetMix: 0, routing: 2 })) core.setParam(k, v);
   render(core, 4, (t) => 0.4 * Math.sin(2 * Math.PI * 220 * t));
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
   render(core, 1.3, () => 0);
@@ -915,7 +970,7 @@ test('RECORD: the loop switch records what is played after it', () => {
   const tap = (core) => { core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); };
   const fresh = (extra = {}) => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ recMode: 1, clock: 1, memory: 1, mix: 1, balance: 0, routing: 2, ...extra })) core.setParam(k, v);
+    for (const [k, v] of Object.entries({ recMode: 1, clock: 1, memory: 1, wetMix: 0, routing: 2, ...extra })) core.setParam(k, v);
     return core;
   };
   const seconds = (core) => core.state().lsrc / core.state().clockHz;
@@ -972,7 +1027,7 @@ test('RECORD: the loop switch records what is played after it', () => {
 });
 
 test('TAPE ECHO: a TIME sweep bends the pitch, and a long freeze holds', () => {
-  const echo = () => wetCore({ wetMode: 1, mix: 1, modWet: 0.5, time: 0.3, clock: 1, routing: 0, tapeDelay: 1 });
+  const echo = () => wetCore({ wetMode: 1, wetMix: 1, modWet: 0.5, time: 0.3, clock: 1, routing: 0, tapeDelay: 1 });
   const tone = (t) => 0.3 * Math.sin(2 * Math.PI * 1000 * t);
   const sweep = {};
   for (let b = 0; b < blk(4); b++) { const t = (b * BLOCK) / FS; if (t > 1.5 && t < 2.5) sweep[b] = (c) => c.setParam('time', 0.3 + 0.4 * (t - 1.5)); }
@@ -1026,7 +1081,7 @@ const wrapsIn = (seconds, speed) => {
 };
 
 test('the modulation targets and shapes are the documented lists', () => {
-  assert.deepStrictEqual(MOD_TARGETS, ['time', 'mix', 'length', 'modWet', 'clock', 'modLoop', 'balance']);
+  assert.deepStrictEqual(MOD_TARGETS, ['time', 'wetMix', 'length', 'modWet', 'clock', 'modLoop', 'loopLevel']);
   assert.deepStrictEqual(RAMP_WAVES, ['TRI', 'SQR', 'SIN', 'SAW', 'RND', 'SMTH']);
   RAMP_WAVES.forEach((_, i) => assert.strictEqual(rampWaveIndex(i / (RAMP_WAVES.length - 1)), i));
   assert.strictEqual(rampWaveIndex(-4), 0);
@@ -1035,11 +1090,11 @@ test('the modulation targets and shapes are the documented lists', () => {
 
 test('one source moves several controls by its own depth, and a negative depth inverts', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ time: 0.5, mix: 0.5, length: 0.5, mod1_time: 0.4, mod1_mix: -0.4, mod1_length: 0.1, mod1Wave: 0.4 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ time: 0.5, wetMix: 0.5, length: 0.5, mod1_time: 0.4, mod1_wetMix: -0.4, mod1_length: 0.1, mod1Wave: 0.4 })) core.setParam(k, v);
   const L = new Float32Array(BLOCK), R = new Float32Array(BLOCK), inp = new Float32Array(BLOCK);
   for (let b = 0; b < Math.ceil((1 * FS) / BLOCK); b++) core.process(inp, L, R);   // the knobs settle
   const t = [], m = [], l = [];
-  for (let b = 0; b < Math.ceil((5 * FS) / BLOCK); b++) { core.process(inp, L, R); t.push(core.e.time); m.push(core.e.mix); l.push(core.e.length); }
+  for (let b = 0; b < Math.ceil((5 * FS) / BLOCK); b++) { core.process(inp, L, R); t.push(core.e.time); m.push(core.e.wetMix); l.push(core.e.length); }
   const spread = (a) => Math.max(...a) - Math.min(...a);
   assert.ok(Math.abs(spread(t) - 0.8) < 0.05, `depth 0.4 swings 0.8 (${spread(t).toFixed(3)})`);
   assert.ok(Math.abs(spread(l) - 0.2) < 0.03, `depth 0.1 swings 0.2 (${spread(l).toFixed(3)})`);
@@ -1179,10 +1234,10 @@ test('the two generators are independent, and MODIFY means this channel', () => 
 
 test('with every ramp off the audio is bit-identical to before the engine existed', () => {
   const a = new BroodCore(FS);
-  a.setParam('wetMode', 0); a.setParam('mix', 0.8); a.wetOn = true; a.s.mix = 0.8;
+  a.setParam('wetMode', 0); a.setParam('wetMix', 0.8);  a.s.wetMix = 0.8;
   const one = render(a, 1, tone(220, 1));
   const b = new BroodCore(FS);
-  b.setParam('wetMode', 0); b.setParam('mix', 0.8); b.wetOn = true; b.s.mix = 0.8;
+  b.setParam('wetMode', 0); b.setParam('wetMix', 0.8);  b.s.wetMix = 0.8;
   b.setParam('mod1Rate', 1);
   const two = render(b, 1, tone(220, 1));
   assert.deepStrictEqual(Array.from(one.L), Array.from(two.L));
@@ -1190,9 +1245,9 @@ test('with every ramp off the audio is bit-identical to before the engine existe
 
 test('a TIME ramp makes the echo breathe', () => {
   const core = new BroodCore(FS);
-  core.setParam('wetMode', 1); core.setParam('mix', 1); core.setParam('modWet', 0.55);
+  core.setParam('wetMode', 1); core.setParam('wetMix', 1); core.setParam('modWet', 0.55);
   core.setParam('time', 0.4); core.setParam('mod1_time', 0.5); core.setParam('mod1Rate', 0.35);
-  core.wetOn = true; core.s.mix = 1; core.modeGain = [0, 1, 0, 0];
+   core.s.wetMix = 1; core.modeGain = [0, 1, 0, 0];
   const { L } = render(core, 4, click);
   assert.ok(finite(L), 'stays finite while the ramp moves the delay');
   const a = peakTime(L, 0.02, 1.2), b = peakTime(L, 1.6, 3.6);
@@ -1228,7 +1283,7 @@ test('re-taking a loop many times never splices a click in', () => {
   const slope = 0.4 * 2 * Math.PI * 100 / FS; // the natural step of a 100 Hz tone
   const take = (taps) => {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { clock: 1, memory: 0.5, loopMode: 1, mix: 1, wetMode: 0, modLoop: 0.5, length: 0.8 });
+    Object.assign(core.p, { clock: 1, memory: 0.5, loopMode: 1, wetMix: 1, wetMode: 0, modLoop: 0.5, length: 0.8 });
     let t = 0;
     const step = (sec) => {
       const n = Math.ceil((sec * FS) / BLOCK);
@@ -1264,7 +1319,7 @@ test('MEMORY window on a long listen is a whole number of samples', () => {
   // memory window elapsed.
   for (const memory of [0.15, 0.4, 0.5, 0.85]) {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { loopMode: 2, memory, mix: 0.7, modWet: 0.6 });
+    Object.assign(core.p, { loopMode: 2, memory, wetMix: 0.7, modWet: 0.6 });
     render(core, 9, tone(120, 99), { [blk(0)]: (c) => c.footswitch('loop', 'down'), [blk(0.05)]: (c) => c.footswitch('loop', 'up') });
     assert.ok(Number.isInteger(core.maxCaptureSamples()), `MEMORY ${memory}: whole samples`);
     assert.ok(Number.isInteger(core.lsrc), `MEMORY ${memory}: capture is a whole number of samples`);
@@ -1275,8 +1330,8 @@ test('MEMORY window on a long listen is a whole number of samples', () => {
 test('FREEZE holds the wet tail without a held footswitch', () => {
   const run = (freeze) => {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { wetMode: 0, time: 0.7, mix: 1, modWet: 0.8, clock: 0.9 });
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    Object.assign(core.p, { wetMode: 0, time: 0.7, wetMix: 1, modWet: 0.8, clock: 0.9 });
+    wetOn(core);
     render(core, 3, tone(300, 99));
     if (freeze) core.setParam('freeze', 1);
     const tail = render(core, 5, () => 0);
@@ -1285,12 +1340,12 @@ test('FREEZE holds the wet tail without a held footswitch', () => {
   const off = run(false), on = run(true);
   const late = (o) => rms(o.tail.L, 3.5, 4.9);
   assert.ok(late(on) > 20 * late(off), `FREEZE keeps ringing (${late(on).toFixed(4)} vs ${late(off).toFixed(4)})`);
-  assert.ok(on.state.freeze && on.state.wetOn, 'the state says the wet side is held');
+  assert.ok(on.state.freeze && on.state.wetFed, 'the state says the wet side is held');
   assert.ok(!off.state.freeze, 'and it is not held when the switch is down');
   // Releasing the switch lets the tail go again.
   const core = new BroodCore(FS);
-  Object.assign(core.p, { wetMode: 0, time: 0.7, mix: 1, modWet: 0.8, clock: 0.9 });
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  Object.assign(core.p, { wetMode: 0, time: 0.7, wetMix: 1, modWet: 0.8, clock: 0.9 });
+  wetOn(core);
   render(core, 3, tone(300, 99));
   core.setParam('freeze', 1);
   const held = render(core, 2, () => 0);
@@ -1299,7 +1354,7 @@ test('FREEZE holds the wet tail without a held footswitch', () => {
   assert.ok(rms(held.L, 1.5, 1.9) > 5 * rms(freed.L, 3.5, 3.9), 'releasing FREEZE lets the tail decay');
 });
 
-test('the wet/loop balance never swallows the loop in the middle', () => {
+test('WET MIX never swallows the loop in the middle', () => {
   // The direct loop used to be ducked against the wet level, so at the middle of
   // the travel the wet side was all you heard — and a mode that returns very
   // little of the loop (WEAVE) left no loop at all until the knob reached LOOP.
@@ -1308,11 +1363,12 @@ test('the wet/loop balance never swallows the loop in the middle', () => {
     + Math.sin(2 * Math.PI * 517 * t) + Math.sin(2 * Math.PI * 733 * t));
   const level = (wetMode, balance) => {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, mix: 0.6, wetMode, routing: 1, modWet: 0.5, time: 0.5, balance });
+    // Caught dry (WET MIX 0 keeps WET out of the take), then WET MIX set for listening.
+    Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, wetMix: 0, wetMode, routing: 1, modWet: 0.5, time: 0.5 });
     render(core, 2, broad);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    core.setParam('wetMix', balance);
     render(core, 0.4, () => 0);
-    if (balance > 0) { core.footswitch('wet', 'down'); core.footswitch('wet', 'up'); }   // 0 is the loop alone
     render(core, 1.2, () => 0);
     const { L } = render(core, 1, () => 0);
     return rms(L, 0.2, 0.9);
@@ -1331,7 +1387,7 @@ test('holding LOOP overdubs, and FADE decides what the old take keeps', () => {
   // gesture FADE depends on — hold the LOOP footswitch while a loop plays.
   const take = (fade) => {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, mix: 0.5, fade });
+    Object.assign(core.p, { loopMode: 0, clock: 0.6, memory: 0, wetMix: 0.5, fade });
     render(core, 2, tone(220, 9));
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
     const win = core.state();
@@ -1362,8 +1418,8 @@ test('WIDTH does what SPREAD used to: 0 is mono, the middle is as built, above i
   // turning WIDTH to zero is the same as that switch being off.
   const run = (width, pan) => {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { wetMode: 1, mix: 1, modWet: 0.6, time: 0.35, clock: 1, width });
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    Object.assign(core.p, { wetMode: 1, wetMix: 1, modWet: 0.6, time: 0.35, clock: 1, width });
+    wetOn(core);
     const src = pan === 0 ? tone(440, 9) : (t) => ((t % 1) < 0.05 ? 0.9 : 0);   // clicks pan nothing, but excite the room
     const { L, R } = render(core, 1.5, src);
     let side = 0, mid = 0;
@@ -1379,13 +1435,13 @@ test('WIDTH does what SPREAD used to: 0 is mono, the middle is as built, above i
   assert.ok(wide.mid > 0.2 * centre.mid, 'and keeps the middle of the signal');
 });
 
-test('MIX alone takes the dry away, so DRY KILL is not needed', () => {
-  // At the top of its travel MIX fades the dry signal out completely once the
-  // pedal is engaged; the DRY KILL switch used to duplicate that.
+test('WET MIX at the top takes the input away (ROUTING IN), so DRY KILL is not needed', () => {
+  // At the top of its travel WET MIX fades the unprocessed input out completely; the DRY KILL
+  // switch used to duplicate that.
   const dryLeft = (mix) => {
     const core = new BroodCore(FS);
-    Object.assign(core.p, { wetMode: 0, mix, modWet: 0.5, time: 0.5 });
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    Object.assign(core.p, { wetMode: 0, wetMix: mix, modWet: 0.5, time: 0.5 });
+    wetOn(core);
     render(core, 0.5, () => 0);                       // let "engaged" settle
     const { L } = render(core, 0.4, () => 0.5);       // a DC input: nothing else can be 0.5
     return L[L.length - 1];
@@ -1398,8 +1454,8 @@ test('a hold on the wet footswitch freezes only while it is held', () => {
   // There is no LATCH switch any more: the FREEZE switch is how a freeze is left
   // standing, and a held foot is momentary.
   const core = new BroodCore(FS);
-  Object.assign(core.p, { wetMode: 0, time: 0.8, modWet: 0.9, mix: 1 });
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  Object.assign(core.p, { wetMode: 0, time: 0.8, modWet: 0.9, wetMix: 1 });
+  wetOn(core);
   render(core, 1, tone(300, 9));
   core.footswitch('wet', 'down');
   render(core, 0.6, () => 0);
@@ -1409,13 +1465,14 @@ test('a hold on the wet footswitch freezes only while it is held', () => {
   assert.ok(!core.state().freeze, 'letting go lets go');
 });
 
-test('ROUTING IN records the wet side while a loop plays; on LOOP it stays out', () => {
+test('ROUTING IN records WET (at WET MIX) while a loop plays and the input is heard; on LOOP it stays out', () => {
   const tail = (wetPre) => {   // 1: ROUTING IN (the wet side recorded), 0: ROUTING LOOP
     const core = new BroodCore(FS);
     core.setParam('wetMode', 1);
     core.setParam('time', 0.3);
     core.setParam('modWet', 0.7);
     core.setParam('routing', wetPre ? 0 : 2);
+    core.setParam('monitor', 1); core.setParam('wetMix', 0.5);
     const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
     const run = (seconds, level) => {
       for (let b = 0; b < Math.ceil((seconds * FS) / BLOCK); b++) {
@@ -1423,7 +1480,7 @@ test('ROUTING IN records the wet side while a loop plays; on LOOP it stays out',
         core.process(inp, oL, oR);
       }
     };
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    wetOn(core);
     run(0.5, 0.4);
     core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
     run(0.05, 0.4);
@@ -1447,7 +1504,7 @@ test('envSoft rounds off the corners ENV cuts into the loop; off stays the sharp
     core.setParam('loopMode', 0);
     core.setParam('modLoop', 0.7);
     core.setParam('length', 0.3);
-    core.setParam('mix', 1);     // the wet and loop side only: the dry path isn't what's being measured
+    core.setParam('wetMix', 1);     // the wet and loop side only: the dry path isn't what's being measured
     core.setParam('envSoft', envSoft);
     const inp = new Float32Array(BLOCK), oL = new Float32Array(BLOCK), oR = new Float32Array(BLOCK);
     let t = 0, worst = 0, a = 0, b = 0, seen = 0;
@@ -1506,10 +1563,11 @@ test('overdub leaves no step in the take, at any tape speed', () => {
   }
 });
 
-test('GAIN sets the loop level in dB and leaves the dry side alone', () => {
-  const level = (loopDb) => {
+test('LOOP LEVEL sets the loop level in dB', () => {
+  const { loopLevelOfDb } = require('../src/brood-worklet.js');
+  const level = (db) => {
     const core = new BroodCore(FS);
-    core.setParam('loopMode', 1); core.setParam('balance', 0); core.setParam('modLoop', 0.66); core.setParam('loopDb', loopDb);
+    core.setParam('loopMode', 1); core.setParam('modLoop', 0.66); core.setParam('loopLevel', db === null ? 0 : loopLevelOfDb(db));
     const { L } = render(core, 3, tone(220, 1), { [blk(1)]: (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); } });
     return rms(L, 2, 3);
   };
@@ -1517,6 +1575,7 @@ test('GAIN sets the loop level in dB and leaves the dry side alone', () => {
   assert.ok(flat > 0.01, 'the loop plays');
   assert.ok(Math.abs(level(-6) / flat - 0.501) < 0.03, '-6 dB is half');
   assert.ok(level(-24) < flat * 0.1, '-24 dB nearly gone');
+  assert.ok(level(null) < 1e-6, 'off is silent');
 });
 
 test('overdub leaves no seams in the take while LENGTH is modulated', () => {
@@ -1548,8 +1607,8 @@ test('HI-Q stops the images and keeps more of the top, and off changes nothing',
   const FS2 = FS;
   const measure = (hiQ, f, at) => {
     const core = new BroodCore(FS2);
-    for (const [k, v] of Object.entries({ wetMode: 1, mix: 1, time: 0.2, modWet: 0, clock: 0.5, hiQ })) core.setParam(k, v);
-    core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+    for (const [k, v] of Object.entries({ wetMode: 1, wetMix: 1, time: 0.2, modWet: 0, clock: 0.5, hiQ })) core.setParam(k, v);
+    wetOn(core);
     const { L } = render(core, 2.2, (t) => 0.3 * Math.sin(2 * Math.PI * f * t));
     let c = 0, s = 0;
     for (let i = FS2; i < L.length; i++) { const p = 2 * Math.PI * at * i / FS2; c += L[i] * Math.cos(p); s += L[i] * Math.sin(p); }
@@ -1564,7 +1623,7 @@ test('HI-Q stops the images and keeps more of the top, and off changes nothing',
 test('STRETCH does not click as MODIFY passes through the middle', () => {
   const worstCorner = (depth) => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ loopMode: 2, mix: 1, balance: 0, modLoop: 0.5, mod1_modLoop: depth, mod1Rate: 0.6, mod1Wave: 0.4, length: 0.5 })) core.setParam(k, v);
+    for (const [k, v] of Object.entries({ loopMode: 2, wetMix: 0, modLoop: 0.5, mod1_modLoop: depth, mod1Rate: 0.6, mod1Wave: 0.4, length: 0.5 })) core.setParam(k, v);
     const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
     let t = 0, worst = 0, a = 0, b = 0, seen = 0;
     const run = (seconds, level, measure) => {
@@ -1586,8 +1645,8 @@ test('STRETCH does not click as MODIFY passes through the middle', () => {
 
 test('SLIP does not click when MODIFY swings its speed', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ wetMode: 2, mix: 1, modWet: 0.5, mod1_modWet: 0.5, mod1Rate: 0.6, mod1Wave: 0.4 })) core.setParam(k, v);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  for (const [k, v] of Object.entries({ wetMode: 2, wetMix: 1, modWet: 0.5, mod1_modWet: 0.5, mod1Rate: 0.6, mod1Wave: 0.4 })) core.setParam(k, v);
+  wetOn(core);
   const inp = new Float32Array(BLOCK), L = new Float32Array(BLOCK), R = new Float32Array(BLOCK);
   let t = 0, worst = 0, a = 0, b = 0, seen = 0;
   for (let n = 0; n < Math.ceil((5.5 * FS) / BLOCK); n++) {
@@ -1625,8 +1684,8 @@ test('the strip\'s live view: peaks of the history as it is written, read only',
   }
   {
     const tail = (pre) => {
-      const core = make({ routing: pre ? 0 : 2, wetMode: 0, mix: 1, time: 0.8 });
-      core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+      const core = make({ routing: pre ? 0 : 2, wetMode: 0, wetMix: 1, time: 0.8 });
+      wetOn(core);
       render(core, 0.3, sine);
       render(core, 0.6, silence);
       return colAgo(core, 0.2);
@@ -1678,7 +1737,10 @@ test('OVERDUB latched, CLEAR and UNDO', () => {
   const silence = () => 0;
   const fresh = () => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ clock: 1, memory: 0.3, mix: 1, balance: 0, routing: 2 })) core.setParam(k, v);
+    for (const [k, v] of Object.entries({ clock: 1, memory: 0.3, wetMix: 0, routing: 2 })) core.setParam(k, v);
+    core.history = historyOf(core);
+    core.undoLoop = () => core.history.step(true);
+    core.redoLoop = () => core.history.step(false);
     return core;
   };
   const tapLoop = (core) => { core.footswitch('loop', 'down'); core.footswitch('loop', 'up'); };
@@ -1712,12 +1774,11 @@ test('OVERDUB latched, CLEAR and UNDO', () => {
     const kept = take(core);
     core.clearLoop(); render(core, 0.5, silence);
     assert.equal(core.lsrc, 0, 'CLEAR empties the take');
-    assert.equal(core.state().undoKind, 2);
     core.undoLoop();
     assert.deepStrictEqual(take(core), kept, 'UNDO brings the cleared take back');
     assert.equal(core.state().loop, 'play', 'and plays it (a tap would catch a new take)');
-    core.undoLoop(); render(core, 0.3, silence);   // playing: it fades out first
-    assert.equal(core.lsrc, 0, 'UNDO again clears again');
+    core.redoLoop(); render(core, 0.3, silence);   // playing: it fades out first
+    assert.equal(core.lsrc, 0, 'REDO clears again');
   }
   {
     const core = fresh(); caught(core, sine);
@@ -1737,8 +1798,8 @@ test('OVERDUB latched, CLEAR and UNDO', () => {
     core.undoLoop(); render(core, 0.3, silence);
     assert.deepStrictEqual(take(core), before, 'UNDO takes the layer off');
     assert.equal(core.state().loop, 'play', 'and the loop plays on');
-    core.undoLoop(); render(core, 0.3, silence);
-    assert.deepStrictEqual(take(core), layered, 'again puts it back');
+    core.redoLoop(); render(core, 0.3, silence);
+    assert.deepStrictEqual(take(core), layered, 'REDO puts it back');
   }
   {
     const core = fresh(); render(core, 0.5, sine);
@@ -1782,7 +1843,7 @@ test('transport loops: a take caught while the host plays follows its transport'
   };
   const off = (got, want) => Math.abs(((got - want + 6) % 4) - 2);
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ clock: 1, loopMode: 1, modLoop: 0.66, mix: 1, balance: 0, routing: 2, bpm: 120, recMode: 1, recBars: 2, recAtTap: 1, hostPlaying: 1 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ clock: 1, loopMode: 1, modLoop: 0.66, wetMix: 0, routing: 2, bpm: 120, recMode: 1, recBars: 2, recAtTap: 1, hostPlaying: 1 })) core.setParam(k, v);
   run(core, 0.5, sine);
   core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
   run(core, 4.2, sine);
@@ -1805,7 +1866,7 @@ test('transport loops: a take caught while the host plays follows its transport'
 test('ENV synced with the host playing: slices land on the host grid', () => {
   const { syncSecondsRaw } = require('../src/brood-worklet.js');
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ clock: 1, loopMode: 0, envSync: 1, modLoop: 1, memory: 0.3, mix: 1, balance: 0, routing: 2, bpm: 120, hostPlaying: 1, length: 0.5 })) core.setParam(k, v);
+  for (const [k, v] of Object.entries({ clock: 1, loopMode: 0, envSync: 1, modLoop: 1, memory: 0.3, wetMix: 0, routing: 2, bpm: 120, hostPlaying: 1, length: 0.5 })) core.setParam(k, v);
   const S = syncSecondsRaw(120, 0.5), gateAt = 2.537, at = {};
   const n = Math.ceil(5 * FS / BLOCK);
   for (let b = 0; b < n; b++) at[b] = (c) => { c.p.ppq = (b * BLOCK) / FS * 2; if (b === blk(2)) { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); } };
@@ -1833,8 +1894,8 @@ test('readFrac a hair below zero reads the first sample, not past the end (a NaN
 
 test('SLIP at 2x with WET DIV 4x and a low CLOCK never goes quiet, and stays finite', () => {
   const core = new BroodCore(FS);
-  for (const [k, v] of Object.entries({ wetMode: 2, modWet: 1, time: 1, clock: 0.7, smooth: 1, wetDiv: 1, routing: 0, balance: 1, mix: 1, mod1On: 0, mod2On: 0 })) core.setParam(k, v);
-  core.footswitch('wet', 'down'); core.footswitch('wet', 'up');
+  for (const [k, v] of Object.entries({ wetMode: 2, modWet: 1, time: 1, clock: 0.7, smooth: 1, wetDiv: 1, routing: 0, wetMix: 1, mod1On: 0, mod2On: 0 })) core.setParam(k, v);
+  wetOn(core);
   const { L } = render(core, 30, (t) => 0.3 * Math.sin(2 * Math.PI * 220 * t));
   assert.ok(L.every(Number.isFinite), 'finite');
   let run = 0, longest = 0;
@@ -1853,7 +1914,7 @@ test('CLOCK above the host rate, and slow overdubs, leave no aliases', () => {
   };
   const make = (extra) => {
     const core = new BroodCore(FS);
-    for (const [k, v] of Object.entries({ loopMode: 1, routing: 2, balance: 0, mix: 1, memory: 0.3, clock: 1, modLoop: 0.66, mod1On: 0, mod2On: 0, ...extra })) core.setParam(k, v);
+    for (const [k, v] of Object.entries({ loopMode: 1, routing: 2, wetMix: 0, memory: 0.3, clock: 1, modLoop: 0.66, mod1On: 0, mod2On: 0, ...extra })) core.setParam(k, v);
     return core;
   };
   const tapLoop = (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); };
@@ -1869,5 +1930,179 @@ test('CLOCK above the host rate, and slow overdubs, leave no aliases', () => {
     const { L } = render(core, 9, (t) => (t < 2 ? 0.001 * Math.sin(2 * Math.PI * 300 * t) : t > 2.5 && t < 5.5 ? 0.3 * Math.sin(2 * Math.PI * 18000 * t) : 0), at);
     const alias = toneAt(L, 14000, 6.5, 9);
     assert.ok(alias < 0.003, `overdub at TAPE 0.5x: no fold back to 14 kHz (${alias.toFixed(5)})`);
+  }
+});
+
+// ───── monitoring, RESAMPLE and the four-step UNDO ─────
+const { VERSION_KIND, AUTO } = require('../src/brood-worklet.js');
+const tapLoopKey = (c) => { c.footswitch('loop', 'down'); c.footswitch('loop', 'up'); };
+// A core with a take of `secs` playing (TAPE, ROUTING LOOP unless told), its history attached.
+function playing(secs, extra = {}) {
+  const core = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ loopMode: 1, modLoop: 0.66, routing: 2, recMode: 1, recBars: 0, wetMix: 0, ...extra })) core.setParam(k, v);
+  core.history = historyOf(core);
+  const sine = (t) => 0.3 * Math.sin(2 * Math.PI * 330 * t);
+  render(core, 0.2, sine);
+  tapLoopKey(core); render(core, secs, sine); tapLoopKey(core);   // RECORD: from tap to tap
+  render(core, 0.05, () => 0);
+  core.history.drain();
+  return core;
+}
+const settleResample = (core, maxSecs) => {
+  const step = 0.05;
+  for (let t = 0; t < maxSecs && core.state().resampling; t += step) render(core, step, () => 0);
+};
+
+test('RESAMPLE of one pass replaces the take, at the length of the window', () => {
+  const core = playing(2.0);
+  const before = core.lsrc;
+  assert.equal(core.state().canResample, true);
+  core.resampleKey();
+  assert.equal(core.state().resampling, true);
+  settleResample(core, 5);
+  assert.equal(core.state().resampling, false, 'it finished on its own');
+  assert.ok(Math.abs(core.lsrc - before) < 64, `one pass at 1x is the take's length (${core.lsrc} vs ${before})`);
+  core.history.drain();
+  assert.equal(core.history.undo.length, 2, 'a step for the take, a step for the RESAMPLE');
+  const resampled = Array.from(core.loopBuf.subarray(0, core.lsrc));
+  core.history.step(true); render(core, 0.3, () => 0);
+  assert.equal(core.lsrc, before, 'UNDO brings the old take back');
+  core.history.step(false); render(core, 0.3, () => 0);
+  assert.deepStrictEqual(Array.from(core.loopBuf.subarray(0, core.lsrc)), resampled, 'REDO the new one');
+});
+
+test("RESAMPLE's length follows the speed: a pass at 2x takes half the time", () => {
+  const time = (modLoop) => {
+    const core = playing(2.0, { modLoop });
+    render(core, 0.5, () => 0);   // TAPE settles at its speed
+    const t0 = core.hostCount;
+    core.resampleKey();
+    settleResample(core, 10);
+    return { secs: (core.hostCount - t0) / FS, len: core.lsrc };
+  };
+  const one = time(0.66), two = time(0.8);   // TAPE 1x and 2x
+  assert.ok(Math.abs(one.secs - 2) < 0.15, `a 2 s take at 1x takes 2 s (${one.secs.toFixed(2)})`);
+  assert.ok(Math.abs(two.secs - 1) < 0.15, `at 2x, 1 s (${two.secs.toFixed(2)})`);
+  assert.ok(Math.abs(two.len / one.len - 0.5) < 0.05, 'and the take is half as long');
+});
+
+for (const [name, extra] of [['TAPE with END moved in', { loopMode: 1, loopEnd: 0.6 }], ['TAPE with START and END moved in', { loopMode: 1, start: 0.25, loopEnd: 0.7 }]]) {
+  test(`RESAMPLE records one pass of the window as it is: ${name}`, () => {
+    const core = playing(2.0);
+    for (const [k, v] of Object.entries(extra)) core.setParam(k, v);
+    render(core, 1.0, () => 0);   // the window settles where it was moved
+    const win = core.state().winLen;
+    assert.ok(win < core.lsrc * 0.8, `the window is shorter than the take (${win} of ${core.lsrc})`);
+    core.resampleKey();
+    settleResample(core, 5);
+    assert.equal(core.state().resampling, false, 'it finished on its own');
+    assert.ok(Math.abs(core.lsrc - win) < 64, `the new take is the window's length (${core.lsrc} vs ${win})`);
+  });
+}
+
+test('RESAMPLE stops at the 30 s limit, keeps what it has, and says so', () => {
+  const core = playing(1.0, { loopMode: 2, modLoop: 0.5 });   // STRETCH, stopped: travels nowhere
+  render(core, 0.1, () => 0);
+  assert.ok(core.state().resampleNeed > 30, 'the estimate says it will not fit');
+  const t0 = core.hostCount;
+  core.resampleKey();
+  settleResample(core, 32);
+  const secs = (core.hostCount - t0) / FS;
+  assert.ok(secs <= 30.05 && secs > 29.9, `stopped at 30 s of host time (${secs.toFixed(2)})`);
+  assert.equal(core.state().resampleLimitHit, true, 'and it says the limit was reached');
+  assert.ok(core.lsrc > 64, 'the take is kept');
+});
+
+test('RESAMPLE with the loop WET: ROUTING leaves the loop, the tail rings, the player resets', () => {
+  const core = playing(2.0, { routing: 1, wetMix: 0.6, monitor: 1, loopMode: 2, modLoop: 0.95, loopDiv: 0.5, loopLevel: 0.7, mod1_modLoop: 0.4, mod2_time: 0.3, mod2_length: 0.2 });
+  core.resampleKey(); render(core, 0.01, () => 0);
+  assert.equal(core.state().routingNow, 2, 'IN + LOOP hears only the loop while it runs');
+  settleResample(core, 20);
+  const ev = core.versionEvents.find((e) => e.type === 'added' && e.kind === VERSION_KIND.resample);
+  assert.ok(ev, 'one undoable action');
+  const auto = Object.fromEntries(ev.autos.map((a) => [a.which, a.value]));
+  assert.equal(auto[AUTO.routing], 0, 'IN + LOOP becomes IN');
+  assert.equal(auto[AUTO.loopMode], 1, 'TAPE');
+  assert.equal(auto[AUTO.modLoop], 0.66, 'at 1x');
+  assert.equal(auto[AUTO.loopDiv], 0, 'LOOP DIV 1x');
+  assert.equal(auto[AUTO.loopLevel], 0.8, 'LOOP LEVEL 0 dB');
+  assert.equal(auto[AUTO.mod1On], 0, 'a source moving only SPEED pauses');
+  assert.equal(auto[AUTO.mod2On], undefined, 'one that moves TIME too keeps running');
+  assert.equal(core.ring, true, 'the old tail rings out');
+  const routingLoop = playing(2.0, { routing: 2, wetMix: 0.6 });
+  routingLoop.resampleKey(); settleResample(routingLoop, 10);
+  assert.equal(routingLoop.p.routing, 3, 'LOOP becomes OFF');
+  const routingIn = playing(2.0, { routing: 0, wetMix: 0.6 });
+  routingIn.resampleKey(); settleResample(routingIn, 10);
+  assert.equal(routingIn.p.routing, 0, 'IN is left alone');
+});
+
+test('RESAMPLE records no live input, ON or not', () => {
+  // Two takes the same but for the input played while each was recorded: any difference is input.
+  const take = (monitor, loudness) => {
+    const core = playing(1.0, { routing: 1, wetMix: 0.5, monitor });
+    const loud = (t) => loudness * Math.sin(2 * Math.PI * 1234 * t);
+    core.setParam('loopLevel', 0);   // the loop silent: anything in the take is the input
+    render(core, 1.0, () => 0);   // the WET tail of the loop dies away
+    core.resampleKey();
+    render(core, 0.006, () => 0);   // the input's way into WET closes in 5 ms
+    for (let i = 0; i < 40 && core.state().resampling; i++) render(core, 0.05, loud);
+    return Array.from(core.loopBuf.subarray(0, core.lsrc));
+  };
+  for (const monitor of [1, 0]) {
+    const quiet = take(monitor, 0), loud = take(monitor, 0.5);
+    let d = 0; for (let i = 0; i < Math.min(quiet.length, loud.length); i++) d = Math.max(d, Math.abs(quiet[i] - loud[i]));
+    assert.ok(d < 1e-6, `monitor ${monitor}: the input is in no take (${d})`);
+  }
+});
+
+test('IN + LOOP overdub: WET hears only the input, and the loop comes back after', () => {
+  const core = playing(1.0, { routing: 1, wetMix: 0.5, monitor: 1 });
+  assert.equal(core.state().routingNow, 1);
+  core.setParam('overdubLatch', 1); render(core, 0.1, () => 0);
+  assert.equal(core.state().routingNow, 0, 'IN while laying a layer down');
+  core.setParam('overdubLatch', 0); render(core, 0.1, () => 0);
+  assert.equal(core.state().routingNow, 1, 'IN + LOOP again after');
+});
+
+test('four steps of UNDO, and the arena gives way to the newest', () => {
+  const core = playing(1.0, { memory: 1 });
+  const h = core.history;
+  for (let i = 0; i < 3; i++) { core.setParam('overdubLatch', 1); render(core, 0.3, tone(500, 9)); core.setParam('overdubLatch', 0); render(core, 0.2, () => 0); }
+  h.drain();
+  assert.equal(h.undo.length, 4, 'a take and three layers');
+  for (let i = 0; i < 6; i++) { core.setParam('overdubLatch', 1); render(core, 0.2, tone(500, 9)); core.setParam('overdubLatch', 0); render(core, 0.2, () => 0); }
+  h.drain();
+  assert.equal(h.undo.length, 4, 'never more than four');
+  const used = core.versions.filter((v) => v.used).length;
+  assert.ok(used <= 4, `the core keeps only what the history can reach (${used})`);
+  // Long takes: the arena holds the one playing and four more of the longest; past that the
+  // oldest go, and the history is shorter (and says so) rather than the arena growing.
+  const big = new BroodCore(FS);
+  for (const [k, v] of Object.entries({ recMode: 1, clock: 1, loopMode: 1, modLoop: 0.66 })) big.setParam(k, v);
+  const hb = historyOf(big);
+  for (let i = 0; i < 5; i++) {
+    if (big.loopState === 'play') { tapLoopKey(big); render(big, 0.2, () => 0); }
+    tapLoopKey(big); render(big, 31, tone(300, 999)); tapLoopKey(big); render(big, 0.1, () => 0);
+    hb.drain();
+  }
+  assert.equal(hb.undo.length, 3, `with 31 s takes, three steps back (${hb.undo.length})`);
+});
+
+test('RESAMPLE hands over without a click: the old loop dips out, the new take dips in where it should be', () => {
+  for (const extra of [{}, { modLoop: 0.8 }, { loopMode: 2, modLoop: 0.9 }, { loopEnd: 0.6 }]) {
+    const core = new BroodCore(FS);
+    for (const [k, v] of Object.entries({ loopMode: 1, modLoop: 0.66, routing: 2, wetMix: 0.5, memory: 0.3, ...extra })) core.setParam(k, v);
+    const tone = (t) => 0.3 * Math.sin(2 * Math.PI * 220 * t) + 0.15 * Math.sin(2 * Math.PI * 331 * t);
+    render(core, 2, tone);
+    core.footswitch('loop', 'down'); core.footswitch('loop', 'up');
+    const { L: old } = render(core, 1, () => 0);
+    let normal = 0; for (let i = FS * 0.2; i < old.length; i++) normal = Math.max(normal, Math.abs(old[i] - old[i - 1]));
+    core.resampleKey();
+    const out = [];
+    while (core.resampling) out.push(...render(core, 0.01, () => 0).L);
+    out.push(...render(core, 0.05, () => 0).L);
+    let around = 0; for (let i = Math.max(1, out.length - 0.08 * FS); i < out.length; i++) around = Math.max(around, Math.abs(out[i] - out[i - 1]));
+    assert.ok(around < normal * 2, `${JSON.stringify(extra)}: the takeover steps ${around.toFixed(4)}, the loop itself ${normal.toFixed(4)}`);
   }
 });

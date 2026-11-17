@@ -2,6 +2,7 @@
 //   brood_render <scenario.txt> <out.f32> [heads.f32]
 // heads.f32, per block: the window's length, then each heard head's position and level.
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -13,13 +14,13 @@
 struct Event { bool isParam; std::string a, b; double value; bool isOp = false; };
 
 static void setParam(brood::Params& p, const std::string& n, double v) {
-    if (n == "time") p.time = v; else if (n == "mix") p.mix = v; else if (n == "length") p.length = v;
+    if (n == "time") p.time = v; else if (n == "wetMix") p.wetMix = v; else if (n == "length") p.length = v;
     else if (n == "modWet") p.modWet = v; else if (n == "clock") p.clock = v; else if (n == "modLoop") p.modLoop = v;
     else if (n == "wetMode") p.wetMode = static_cast<int>(v); else if (n == "routing") p.routing = static_cast<int>(v);
     else if (n == "loopMode") p.loopMode = static_cast<int>(v);
-    // DRY KILL / LATCH / SPREAD retired in round 11: MIX, the FREEZE switch and
-    // WIDTH cover them. The old names are rejected so a stale scenario fails loudly.
-    else if (n == "trails") p.trails = v != 0; else if (n == "smooth") p.smooth = v != 0; else if (n == "balance") p.balance = v;
+    // Retired names (mix, balance, loopDb, DRY KILL, LATCH, SPREAD) are rejected, so a stale
+    // scenario fails loudly.
+    else if (n == "trails") p.trails = v != 0; else if (n == "smooth") p.smooth = v != 0; else if (n == "monitor") p.monitor = static_cast<int>(v);
     else if (n == "sync") p.sync = v != 0; else if (n == "bpm") p.bpm = v;
     else if (n == "loopEnd") p.loopEnd = v; else if (n == "start") p.start = v;
     else if (n == "memory") p.memory = v;
@@ -36,7 +37,7 @@ static void setParam(brood::Params& p, const std::string& n, double v) {
         else if (f == "Sync") m.sync = v != 0; else if (f == "Hold") m.hold = v != 0;
         else for (int t = 0; t < brood::kModTargets; ++t) if (f == std::string("_") + brood::kModTargetIds[t]) m.depth[t] = v;
     }
-    else if (n == "loopDb") p.loopDb = v;
+    else if (n == "loopLevel") p.loopLevel = v;
     else if (n == "hiQ") p.hiQ = v != 0;
     else if (n == "envSoft") p.envSoft = v != 0;
     else if (n == "envSync") p.envSync = v != 0;
@@ -54,6 +55,31 @@ static float input(long n, double rate) {   // same formula as scenario.js
     const double tt = t - k * 0.75;
     return static_cast<float>(0.35 * std::sin(2 * brood::kPi * fr[k % 4] * t) * std::exp(-4 * tt));
 }
+
+// The host's UNDO history, as small as it can be: the versions the core announces, newest last,
+// at most four; UNDO swaps the newest back and REDO swaps it again. Same as render.js.
+struct History {
+    std::vector<int> undo, redo;
+    void drain(brood::Core& core) {
+        brood::VersionEvent ev;
+        while (core.popVersionEvent(ev)) {
+            auto drop = [&](std::vector<int>& v, int id) { v.erase(std::remove(v.begin(), v.end(), id), v.end()); };
+            if (ev.type == brood::VersionEvent::Added) { undo.push_back(ev.id); redo.clear(); }
+            else if (ev.type == brood::VersionEvent::Released) { drop(undo, ev.id); drop(redo, ev.id); }
+            else if (ev.type == brood::VersionEvent::Evicted) { undo.erase(std::remove_if(undo.begin(), undo.end(), [&](int id) { return id <= ev.id; }), undo.end()); drop(redo, ev.id); }
+            else { undo.clear(); redo.clear(); }
+        }
+        while (undo.size() > 4) { core.releaseVersion(undo.front()); undo.erase(undo.begin()); }
+    }
+    void step(brood::Core& core, bool back) {
+        drain(core);
+        if (back && core.cancelActive()) return;
+        auto& from = back ? undo : redo; auto& to = back ? redo : undo;
+        if (from.empty()) return;
+        const int id = from.back(); from.pop_back();
+        core.swapVersion(id); to.push_back(id);
+    }
+};
 
 int main(int argc, char** argv) {
     if (argc < 3) { std::fprintf(stderr, "usage: brood_render <scenario.txt> <out.f32>\n"); return 2; }
@@ -73,6 +99,7 @@ int main(int argc, char** argv) {
     }
     constexpr int B = 128;
     brood::Core core; core.prepare(rate);
+    History history;
     const long nBlocks = static_cast<long>(std::ceil(seconds * rate / B));
     std::vector<float> out(static_cast<size_t>(nBlocks * B * 2));
     std::vector<float> heads;
@@ -86,7 +113,12 @@ int main(int argc, char** argv) {
                 if (e.isParam && e.a == "songStart") songStart = static_cast<long>(e.value);   // the song restarts from bar 1 here
                 else if (e.isParam && e.a == "inputGain") inputGain = e.value;
                 else if (e.isParam) setParam(core.p, e.a, e.value);
-                else if (e.isOp) { if (e.a == "clear") core.clearLoop(); else if (e.a == "undo") core.undoLoop(); }
+                else if (e.isOp) {
+                    if (e.a == "clear") core.clearLoop();
+                    else if (e.a == "resample") core.resampleKey();
+                    else if (e.a == "undo" || e.a == "redo") history.step(core, e.a == "undo");
+                    history.drain(core);
+                }
                 else core.footswitch(e.a == "wet" ? 0 : 1, e.b == "down");
             }
         // A host transport running from the start at the scenario's tempo, for RECORD's bar line.
@@ -97,6 +129,7 @@ int main(int argc, char** argv) {
         }
         for (int i = 0; i < B; ++i) x[i] = static_cast<float>(input(b * B + i, rate) * inputGain);
         core.process(x, L, R, B);
+        history.drain(core);
         for (int i = 0; i < B; ++i) { out[static_cast<size_t>(2 * (b * B + i))] = L[i]; out[static_cast<size_t>(2 * (b * B + i) + 1)] = R[i]; }
         if (argc > 3) {
             const auto st = core.state();
