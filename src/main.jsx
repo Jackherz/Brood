@@ -447,7 +447,7 @@ function helpTable(p, modOpen, L) {
   add(L.src.tempo, 'TEMPO', 'The beat SYNC and RECORD\'s bars count in. A host sets it in the plug-in; here you do.');
   add(L.reset, 'RESET', 'Every control back to A LITTLE DAYDREAM, LEVEL to 0 dB, no MOD routes. WET goes off and the loop is cleared, with nothing to UNDO. TEMPO and your sound stay.');
   add(L.src.tour, 'TOUR', 'A few steps through Brood, opening the panel a part at a time. The sound and every setting carry on as they are.');
-  add(L.src.plugin, 'IN THE PLUG-IN', 'What the plug-in does that this page does not.');
+  add(L.src.plugin, 'IN THE PLUG-IN', 'How the plug-in and this page differ: what each does that the other does not.');
   add(L.src.start, 'AUDIO', 'Starts and stops the sound on this page. Nothing plays until you press it.');
   // The knobs say what they do in the current mode. Last, so a switch beside a knob explains itself first.
   // MIX adds what only this page does: a playing loop mutes the dry sound.
@@ -1190,24 +1190,35 @@ function RouteList({ L, params, onChange, close, openMenu }) {
   </div>;
 }
 
-// What the plug-in has that this page doesn't, in one place over the main sheet.
+// How the plug-in and this page differ, both ways round, in one place over the main sheet. An
+// entry with no text is a heading.
 const PLUGIN_ONLY = [
+  ['ONLY IN THE PLUG-IN', ''],
   ['LEVEL', 'Past the middle, the input is driven into old tape: rounder, duller, a little hiss. Here LEVEL only sets how loud the input reaches Brood.'],
   ['THE TAKE STRIP', 'With nothing caught, the input scrolls past, newest at the right, over the window a tap would keep, so you can see what a tap will catch. Here the strip says what the looper is doing instead.'],
   ['AT TAP', 'Beside BARS in RECORD. Off: a bar count starts on the next bar line while the host plays, so loops land on the grid. On: it starts the moment you tap. Here there is no host, so a bar count always starts at the tap.'],
-  ['TEMPO', 'Follows the host. Here you set it under the panel.'],
-  ['MIX', 'Your dry sound plays on under a playing loop, at MIX\'s dry share. Here it is muted while a loop plays, and comes back when the loop stops or while you overdub.'],
+  ['TEMPO', 'Follows the host, as do every SYNC and RECORD\'s bars. Here you set it under the panel.'],
+  ['THE SONG', 'A loop caught while the host plays stops when the host stops, and plays on in time when it starts again. Here a loop plays until you stop it.'],
+  ['MIX', 'Your dry sound plays on under a playing loop. Here it is muted while a loop plays, and comes back when the loop stops or while you overdub.'],
+  ['DROP A FILE', 'An audio file dropped on the window becomes the loop. Here LOAD FILE plays a file in as the input.'],
   ['THE BENCH', 'Passes takes between Brood and Silt in a DAW: SEND the loop or a few bars of the output, TAKE one back as the loop.'],
+  ['AUTOMATION', 'The host can move every control, CLEAR and UNDO included, and keeps them with the session.'],
+  ['MIDI', 'Control changes reach the knobs, modes, switches and MODs; CC 102 and 103 tap LOOP and WET. Here there is no MIDI.'],
+  ['PRESETS', 'Kept as files that every host sees. Here they stay in this browser.'],
+  ['ONLY ON THIS PAGE', ''],
+  ['SOURCE', 'DEMO, FILE and MIC choose what Brood hears, and START AUDIO starts it. The plug-in hears its track.'],
+  ['RESET', 'A LITTLE DAYDREAM with the loop cleared, in one press. In the plug-in, choose A LITTLE DAYDREAM and press CLEAR.'],
+  ['THE TOUR', 'A few steps through the panel. The plug-in has its help, but no tour.'],
 ];
 function PluginOnly({ L, close }) {
   const r = L.overlay;
   return <div className="abs overlay sheet" style={at(r)} role="dialog" aria-label="In the plug-in">
-    <div className="panel-head"><i className="sc" style={sf(16)}>+</i><span className="nm" style={nf(16)}>IN THE PLUG-IN</span><b/><span className="vl" style={{ ...vf(16), color: MUTED }}>NOT ON THIS PAGE</span></div>
+    <div className="panel-head"><i className="sc" style={sf(16)}>+</i><span className="nm" style={nf(16)}>IN THE PLUG-IN</span><b/><span className="vl" style={{ ...vf(16), color: MUTED }}>HOW THIS PAGE DIFFERS</span></div>
     <dl className={`abs plugin-list ${L.phone ? 'narrow' : ''}`} style={at([14, 38, r[2] - 28, r[3] - 38 - 52])}>
-      {PLUGIN_ONLY.map(([name, text]) => <React.Fragment key={name}>
-        <dt className="nm" style={nf(19)}>{name}</dt>
-        <dd className="vl" style={vf(17)}>{text}</dd>
-      </React.Fragment>)}
+      {PLUGIN_ONLY.map(([name, text]) => (text ? <React.Fragment key={name}>
+        <dt className="nm" style={nf(L.phone ? 19 : 16)}>{name}</dt>
+        <dd className="vl" style={vf(L.phone ? 17 : 15)}>{text}</dd>
+      </React.Fragment> : <dt key={name} className="nm plugin-head" style={nf(15)}>{name}</dt>))}
     </dl>
     <Key r={[r[2] - 14 - 90, r[3] - 10 - 32, 90, 32]} onClick={close}>CLOSE</Key>
   </div>;
@@ -1320,8 +1331,8 @@ const TOUR = [
       { target: (L) => L.rampRate, done: (now, was) => Math.abs(now.rate - was.rate) >= 0.03 },
       { target: (L) => L.rampWave, done: (now, was) => now.wave !== was.wave }] },
   { title: 'ALL OF BROOD', all: true,
-    body: 'That is the whole panel. Point at anything and the screen says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
-    bodyPhone: 'That is the whole panel. Tap anything and this bar says what it does. IN THE PLUG-IN lists what only the plug-in can do.',
+    body: 'That is the whole panel. Point at anything and the screen says what it does. IN THE PLUG-IN lists how the plug-in and this page differ.',
+    bodyPhone: 'That is the whole panel. Tap anything and this bar says what it does. IN THE PLUG-IN lists how the plug-in and this page differ.',
     try: 'SAVE keeps a sound on this device. TOUR, under the panel, brings the tour back.' },
 ];
 // The open parts of a step, a little larger than the controls; null for the whole panel.

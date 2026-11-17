@@ -151,10 +151,14 @@ html.pointer-input :focus-visible { outline: none; }
 .fit { display: inline-block; white-space: nowrap; }
 .screen-line .fit { white-space: inherit; max-width: 100%; }
 .plugin-text { margin: 0; color: var(--muted); line-height: 1.4; }
-.plugin-list { margin: 0; overflow-y: auto; display: grid; grid-template-columns: 186px 1fr; gap: 18px 0; align-content: start; }
+.plugin-list { margin: 0; overflow-y: auto; display: grid; grid-template-columns: 150px 1fr; gap: 6px 0; align-content: start; }
 .plugin-list dt { color: var(--ink); padding-top: 2px; }
-.plugin-list dd { margin: 0; color: var(--muted); line-height: 1.4; }
+.plugin-list dd { margin: 0; color: var(--muted); line-height: 1.3; }
+.plugin-list.narrow dd { line-height: 1.4; }
 .plugin-list.narrow { grid-template-columns: 1fr; gap: 4px; }
+.plugin-list .plugin-head { grid-column: 1 / -1; color: var(--accent); letter-spacing: .08em; padding-top: 6px; }
+.plugin-list .plugin-head:first-child { padding-top: 0; }
+.plugin-list.narrow .plugin-head { margin-bottom: 6px; }
 .plugin-list.narrow dd { margin-bottom: 14px; }
 .preset-list.narrow li { grid-template-columns: 30px 1fr 30px; }
 .preset-list.narrow li > span:not(:last-child) { display: none; }
