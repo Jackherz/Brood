@@ -10,6 +10,8 @@
 // the UI thread on high-DPI screens.
 class BroodEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
 public:
+    // For editor_snapshot: show this control's help on the screen as if the mouse rested on it.
+    bool showHelpFor(const juce::String& label);
     // An audio file dropped anywhere on the window becomes the loop.
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void fileDragEnter(const juce::StringArray&, int, int) override;
@@ -43,6 +45,10 @@ public:
         float depthAtStart = 0;
         int depthSource = -1, hoverSource = -1;
         bool settingDepth = false, menuPress = false;
+        // A linear one (BALANCE) is a handle too: the first few pixels of a drag decide
+        // between moving it (sideways) and its swing (up or down); a click sets it.
+        bool deciding = false;
+        int sourceForDepth() const;
     };
     // One source: its colour and number, its shape moving live, its route count and ON.
     // Click selects it, drag it onto a control to route it, right-click to clear it.

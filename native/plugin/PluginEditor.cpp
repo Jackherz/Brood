@@ -87,10 +87,10 @@ constexpr int W = 1200, H = 820;
 const char* kWhisper[6][4] = {
     {"how long the room keeps breathing", "how far back the echo remembers",
      "how wide a slice of time is borrowed", "how far back the threads reach"},
-    {"your dry sound against the room and the loop. left is dry alone, right is Brood alone, the middle is both in full",
-     "your dry sound against the echoes and the loop. left is dry alone, right is Brood alone, the middle is both in full",
-     "your dry sound against the slipped slices and the loop. left is dry alone, right is Brood alone, the middle is both in full",
-     "your dry sound against the threads and the loop. left is dry alone, right is Brood alone, the middle is both in full"},
+    {"your dry sound against Brood: the loop and the room. left is dry alone, right is Brood alone, the middle both in full",
+     "your dry sound against Brood: the loop and the echoes. left is dry alone, right is Brood alone, the middle both in full",
+     "your dry sound against Brood: the loop and the slipped slices. left is dry alone, right is Brood alone, the middle both in full",
+     "your dry sound against Brood: the loop and the threads. left is dry alone, right is Brood alone, the middle both in full"},
     {"how much of the moment gets caught", "the size of the window that repeats",
      "how wide each grain is stretched", "how much of the moment gets caught"},
     {"how much the surface smears", "how much the echo wants to stay",
@@ -183,6 +183,13 @@ int BroodEditor::ModSlider::sourceAtRing(juce::Point<float> p) const {
     if (routed(0) != routed(1) && editor->selectedSource() != (routed(0) ? 0 : 1)) return editor->selectedSource();
     return routed(0) ? 0 : routed(1) ? 1 : editor->selectedSource();
 }
+// The source an up-or-down drag on a linear control works on: the one already on it if only one
+// is, otherwise the selected one (as a knob's ring picks).
+int BroodEditor::ModSlider::sourceForDepth() const {
+    auto routed = [&](int k) { return std::fabs(editor->depthParam(k, target)->convertFrom0to1(editor->depthParam(k, target)->getValue())) >= 0.005f; };
+    if (routed(0) != routed(1)) return routed(0) ? 0 : 1;
+    return editor->selectedSource();
+}
 void BroodEditor::ModSlider::mouseMove(const juce::MouseEvent& e) {
     const int at = sourceAtRing(e.position);
     if (at != hoverSource) {
@@ -210,10 +217,28 @@ void BroodEditor::ModSlider::mouseDown(const juce::MouseEvent& e) {
         editor->showDepth(depthSource, target);
         return;
     }
+    // BALANCE: wait for the drag to say which it is.
+    deciding = target >= 0 && editor != nullptr && isHorizontal();
+    if (deciding) return;
     juce::Slider::mouseDown(e);
 }
 void BroodEditor::ModSlider::mouseDrag(const juce::MouseEvent& e) {
     if (menuPress) return;
+    if (deciding) {
+        const auto moved = e.getOffsetFromDragStart();
+        if (moved.getDistanceFromOrigin() < 6) return;
+        deciding = false;
+        if (std::abs(moved.y) > std::abs(moved.x)) {
+            settingDepth = true;
+            depthSource = sourceForDepth();
+            auto* prm = editor->depthParam(depthSource, target);
+            depthAtStart = prm->convertFrom0to1(prm->getValue());
+            prm->beginChangeGesture();
+            editor->selectSource(depthSource);
+        } else {
+            juce::Slider::mouseDown(e);   // the value goes to the mouse, then follows it
+        }
+    }
     if (settingDepth) {
         auto* prm = editor->depthParam(depthSource, target);
         prm->setValueNotifyingHost(prm->convertTo0to1(juce::jlimit(-1.f, 1.f, depthAtStart - static_cast<float>(e.getDistanceFromDragStartY()) / (e.mods.isShiftDown() ? 600.f : 150.f))));
@@ -225,6 +250,12 @@ void BroodEditor::ModSlider::mouseDrag(const juce::MouseEvent& e) {
 }
 void BroodEditor::ModSlider::mouseUp(const juce::MouseEvent& e) {
     if (menuPress) { menuPress = false; return; }
+    if (deciding) {   // a click that never moved: the value goes there
+        deciding = false;
+        juce::Slider::mouseDown(e);
+        juce::Slider::mouseUp(e);
+        return;
+    }
     if (settingDepth) { editor->depthParam(depthSource, target)->endChangeGesture(); settingDepth = false; return; }
     juce::Slider::mouseUp(e);
 }
@@ -1542,23 +1573,23 @@ void BroodEditor::rebuildHoverHelp() {
         "the hold gesture without the holding: the wet side comes up frozen and rings on its own.",
     };
     static const char* dipNames[] = {"TRAILS", "SMOOTH", "FREEZE"};
-    add(characterDesign, "WEAR", "one line from clean to worn. clean: fuller top, far fewer artifacts, the wet side a little later. worn: the MK I in the room, a noisy clock, a restless loop and a longer reverb.");
+    add(characterDesign, "WEAR", "clean to worn. clean= fewer artifacts. worn= noise, a loop that warbles and a longer reverb.");
     for (size_t i = 0; i < dips.size(); ++i) if (dips[i].button->isVisible()) add(dipCellDesign[i], dipNames[i], dipText[i]);
     if (wearPost->isVisible())
-        add(wearPostDesign, "PRE / POST LOOP", "where the wear sits. pre: before the loop, so the loop records it worn. post: after the loop, so it's heard worn and the loop keeps a clean take; turning WEAR back gives it back clean.");
+        add(wearPostDesign, "PRE / POST LOOP", "where the wear sits. pre: the loop records it worn. post: you hear it worn, but the loop keeps a clean take.");
     // These two are only in the table while their mode is on, so help never explains
     // a control that is not on the panel.
     if (tapeDelay.isVisible())
-        add(tapeDelayDesign.expanded(4), "TAPE", "a tape echo: turning TIME glides the head, so the echoes bend in pitch, with a little wow and flutter and saturation. off, TIME crossfades and the pitch stays put.");
+        add(tapeDelayDesign.expanded(4), "TAPE", "a tape echo: turning TIME bends the pitch, with wow, flutter and saturation. off, TIME changes the speed of the delay without pitch changes.");
     if (wetSync.isVisible())
-        add(wetSyncDesign.expanded(4), "SYNC", "TIME becomes a division of the beat: in DELAY the echo lands on the grid, in WEAVE so does how far back the threads reach.");
+        add(wetSyncDesign.expanded(4), "SYNC", "TIME becomes a division of the beat, so the echoes or threads land on the grid.");
     if (envSync.isVisible())
         add(envSyncDesign.expanded(4), "SYNC", "the envelope slices by a division of the beat instead of a free length, so the loop stutters in time.");
     if (envSoft.isVisible())
-        add(envSoftDesign.expanded(4), "SOFT", "the slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. a rounder, less percussive stutter.");
+        add(envSoftDesign.expanded(4), "SOFT", "the slices fade in and out instead of cutting: a rounder, softer stutter with no clicks.");
 
-    add(chipDesign[0], "MOD 1", "click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.");
-    add(chipDesign[1], "MOD 2", "click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.");
+    add(chipDesign[0], "MOD 1", "tap for its shape and rate. drag it onto a control, or drag around a knob's edge, to route it. the square is on or off.");
+    add(chipDesign[1], "MOD 2", "tap for its shape and rate. drag it onto a control, or drag around a knob's edge, to route it. the square is on or off.");
     add(routesDesign, "ROUTES", "every route in one list, with its depth.");
     if (modOpen) add(rampWaveDesign, "SHAPE", "click to step the shape: triangle, square, sine, sawtooth, random, smooth random.");
     if (modOpen) add(rampRateDesign, "RATE", "how slowly this source turns. with SYNC on it becomes a span of the beat.");
@@ -1570,23 +1601,23 @@ void BroodEditor::rebuildHoverHelp() {
     static const char* rampSwitchNames[] = {"UNI", "SYNC", "HOLD"};
     if (modOpen) for (int i = 0; i < 3; ++i) add(rampSwitchDesign[i], rampSwitchNames[i], rampSwitchText[i]);
 
-    add(memoryDesign.expanded(0, 2), "MEMORY", "in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal's own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.");
+    add(memoryDesign.expanded(0, 2), "MEMORY", "in CAPTURE mode, MEMORY relates to how much of the input audio is captured all the way left for short loops and all the way right for loops of up to 30 seconds.");
     add(gainDesign, "GAIN", "the loop's own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.");
     // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
     add(clearDesign, "CLEAR", "empties the take. undo brings it back.");
     add(undoDesign, "UNDO", "one step back: a clear, a new take, or the last overdub layer. press again to redo.");
-    add(loopViewDesign, "THE WINDOW", "drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.");
-    add(recModeDesign, "CAPTURE / RECORD", "capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.");
+    add(loopViewDesign, "THE WINDOW", "drag start or end to trim the loop, double-click for the whole take.");
+    add(recModeDesign, "CAPTURE / RECORD", "CAPTURE= a tap keeps what you just played. RECORD= tap to start, tap to play, or hold to overdub.");
     if (recBars->isVisible()) {
         add(recBarsDesign, "BARS", "free records until the next tap. a number records that many bars, then plays.");
-        add(recAtTapDesign, "AT TAP", "off: a bar count starts on the next bar line while the host plays, so loops land on the grid. on: it starts the moment you tap.");
+        add(recAtTapDesign, "AT TAP", "off= a bar count waits for the next bar line, so loops land on the grid. on= it starts the moment you tap.");
     }
-    add(balanceDesign.withTrimmedLeft(-kBalanceEnd).expanded(0, 2), "BALANCE", "the loop against the wet side. left: the loop alone. right: the wet side alone. in the middle, both in full. drop a source here: its bar is the swing, the small tab is where it is now.");
+    add(balanceDesign.withTrimmedLeft(-kBalanceEnd).expanded(0, 2), "BALANCE", "left= just the loop. right= just the wet side. middle: both in full. drag up or down on it to add a MOD swing.");
 
     add(hoodCellDesign[0], "LEVEL", "how hard the input hits the machine. past the middle it's driven into old tape: rounder, duller, a little hiss.");
 
     add(wetModeDesign, "WET MODE", "four ways of treating time: reverb, delay, slip, weave.");
-    add(routingDesign, "ROUTING", "in: the wet side hears the input, and the loop keeps it. in + loop: it hears the input and the loop, and the loop keeps it. loop: it hears only the loop, and the loop keeps only the input.");
+    add(routingDesign, "ROUTING", "What the wet side hears, IN= the input. in + loop= input and loop. loop= just the loop.");
     add(loopModeDesign, "LOOP MODE", "three ways of holding a moment: envelope, tape, stretch.");
 
     add(fsWetDesign, "WET", "tap for the wet side, hold to freeze it where it stands. key A.");
@@ -1781,10 +1812,18 @@ void BroodEditor::paint(juce::Graphics& g) {
     // the last thing you moved.
     const bool helping = hoverText.isNotEmpty();
     juce::String value = helping ? hoverText : lcdValue.toUpperCase();
-    if (!helping && blink) value += "_";
-    kit::drawReadout(g, lcdArea, stock(), helping ? hoverLabel : lcdLabel, helping ? "HELP" : "LIVE", value, helping ? juce::String() : lcdMeta, helping);
+    // The cursor is always measured and only its ink blinks, so a long value squeezed to fit
+    // doesn't change width, and shake, as it blinks.
+    if (!helping) value += "_";
+    kit::drawReadout(g, lcdArea, stock(), helping ? hoverLabel : lcdLabel, helping ? "HELP" : "LIVE", value, helping ? juce::String() : lcdMeta, helping, !helping && !blink);
 }
 
+
+bool BroodEditor::showHelpFor(const juce::String& label) {
+    for (const auto& item : hoverHelp)
+        if (item.label == label) { hoverLabel = item.label; hoverText = item.text; repaintDesign(lcdArea); return true; }
+    return false;
+}
 
 void BroodEditor::timerCallback() {
     auto& ui = proc.ui;

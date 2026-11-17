@@ -99,10 +99,10 @@ const KNOB_MODE = [0, 2, 1, 0, 2, 1];   // 0 = wet modes, 1 = loop modes, 2 = sh
 const WHISPER = [
   ['how long the room keeps breathing', 'how far back the echo remembers',
     'how wide a slice of time is borrowed', 'how far back the threads reach'],
-  ['your dry sound against the room and the loop. left is dry alone, right is Brood alone, the middle is both in full',
-    'your dry sound against the echoes and the loop. left is dry alone, right is Brood alone, the middle is both in full',
-    'your dry sound against the slipped slices and the loop. left is dry alone, right is Brood alone, the middle is both in full',
-    'your dry sound against the threads and the loop. left is dry alone, right is Brood alone, the middle is both in full'],
+  ['your dry sound against Brood: the loop and the room. left is dry alone, right is Brood alone, the middle both in full',
+    'your dry sound against Brood: the loop and the echoes. left is dry alone, right is Brood alone, the middle both in full',
+    'your dry sound against Brood: the loop and the slipped slices. left is dry alone, right is Brood alone, the middle both in full',
+    'your dry sound against Brood: the loop and the threads. left is dry alone, right is Brood alone, the middle both in full'],
   ['how much of the moment gets caught', 'the size of the window that repeats',
     'how wide each grain is stretched', 'how much of the moment gets caught'],
   ['how much the surface smears', 'how much the echo wants to stay',
@@ -161,7 +161,7 @@ function describe(id, p, value) {
     }
     return `refresh ${fmtTime(expMap(v, 0.05, 1.5) * div / c)}`;
   }
-  if (id === 'mix') return `dry ${pct(v > 0.995 ? 0 : Math.min(1, 2 * (1 - v)))} / fx ${pct(Math.min(1, 2 * v))}`;
+  if (id === 'mix') return `dry ${pct(v > 0.995 ? 0 : Math.min(1, 2 * (1 - v)))} / brood ${pct(Math.min(1, 2 * v))}`;
   if (id === 'length') {
     const full = LOOP_SAMPLES / hz;
     if (p.loopMode === 1) return `loop ${fmtTime(full * expMap(v, 0.02, 1))} of ${fmtTime(full)}`;
@@ -389,19 +389,19 @@ function helpTable(p, modOpen, L) {
   const out = [];
   const add = (r, label, text) => { if (r) out.push({ r, label, text }); };
   const wm = p.wetMode, lm = p.loopMode, worn = !!p.classic, record = p.recMode === 1;
-  add(L.character, 'WEAR', 'one line from clean to worn. clean: fuller top, far fewer artifacts, the wet side a little later. worn: the MK I in the room, a noisy clock, a restless loop and a longer reverb.');
+  add(L.character, 'WEAR', 'clean to worn. clean= fewer artifacts. worn= noise, a loop that warbles and a longer reverb.');
   if (wm !== 2) add(L.trails, 'TRAILS', 'the tails keep falling after you switch the wet side off.');
   add(L.smooth, 'SMOOTH', 'the sample rate slides instead of stepping, so CLOCK bends pitch as it turns.');
   add(L.freeze, 'FREEZE', 'the hold gesture without the holding: the wet side comes up frozen and rings on its own.');
-  if (worn) add(L.wearPost, 'PRE / POST LOOP', "where the wear sits. pre: before the loop, so the loop records it worn. post: after the loop, so it's heard worn and the loop keeps a clean take; turning WEAR back gives it back clean.");
-  if (wm === 1) add(grow(L.tapeDelay, 4), 'TAPE', 'a tape echo: turning TIME glides the head, so the echoes bend in pitch, with a little wow and flutter and saturation. off, TIME crossfades and the pitch stays put.');
-  if (wm === 1 || wm === 3) add(grow(L.wetSync, 4), 'SYNC', 'TIME becomes a division of the beat: in DELAY the echo lands on the grid, in WEAVE so does how far back the threads reach.');
+  if (worn) add(L.wearPost, 'PRE / POST LOOP', 'where the wear sits. pre: the loop records it worn. post: you hear it worn, but the loop keeps a clean take.');
+  if (wm === 1) add(grow(L.tapeDelay, 4), 'TAPE', 'a tape echo: turning TIME bends the pitch, with wow, flutter and saturation. off, TIME changes the speed of the delay without pitch changes.');
+  if (wm === 1 || wm === 3) add(grow(L.wetSync, 4), 'SYNC', 'TIME becomes a division of the beat, so the echoes or threads land on the grid.');
   if (lm === 0) {
     add(grow(L.envSync, 4), 'SYNC', 'the envelope slices by a division of the beat instead of a free length, so the loop stutters in time.');
-    add(grow(L.envSoft, 4), 'SOFT', 'the slices fade in and out instead of cutting, and a new one takes over from the last, so nothing clicks. a rounder, less percussive stutter.');
+    add(grow(L.envSoft, 4), 'SOFT', 'the slices fade in and out instead of cutting: a rounder, softer stutter with no clicks.');
   }
-  add(L.chip0, 'MOD 1', 'click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.');
-  add(L.chip1, 'MOD 2', 'click to show its controls. drag it onto any knob or BALANCE, or drag up or down around a knob, to route it. the square turns it on or off.');
+  add(L.chip0, 'MOD 1', 'tap for its shape and rate. drag it onto a control, or drag around a knob\'s edge, to route it. the square is on or off.');
+  add(L.chip1, 'MOD 2', 'tap for its shape and rate. drag it onto a control, or drag around a knob\'s edge, to route it. the square is on or off.');
   add(L.routes, 'ROUTES', 'every route in one list, with its depth.');
   if (modOpen) {
     add(L.rampWave, 'SHAPE', 'click to step the shape: triangle, square, sine, sawtooth, random, smooth random.');
@@ -410,20 +410,20 @@ function helpTable(p, modOpen, L) {
     add(L.rampSwitch[1], 'SYNC', 'the rate becomes a division of the beat: eight bars down to a sixteenth.');
     add(L.rampSwitch[2], 'HOLD', 'this source stops where it is and its knobs stay pushed there. CC 52 holds both.');
   }
-  add(grow(L.memory, 0, 2), 'MEMORY', 'in CAPTURE, how much of the recent past a tap keeps. hard left is the pedal\'s own buffer, which shrinks as CLOCK drops. RECORD ignores it: the bars or your second tap decide, up to 32 s.');
+  add(grow(L.memory, 0, 2), 'MEMORY', 'in CAPTURE mode, MEMORY relates to how much of the input audio is captured all the way left for short loops and all the way right for loops of up to 30 seconds.');
   add(L.gain, 'GAIN', 'the loop\'s own level. drag or scroll, shift for fine. double-click for 0 dB, right-click to normalise.');
   // CLEAR and UNDO sit inside the window, and the first match wins, so they go first.
   add(L.clear, 'CLEAR', 'empties the take. undo brings it back.');
   add(L.undo, 'UNDO', 'one step back: a clear, a new take, or the last overdub layer. press again to redo.');
-  add(L.loopView, 'THE WINDOW', 'drag a marker to trim what plays, or inside to slide the window along the take. double-click opens the whole take. moves crossfade, so they do not click.');
-  add(L.recMode, 'CAPTURE / RECORD', 'capture keeps the recent past when you tap. record starts when you tap and plays when you tap again, or records for as long as you hold.');
+  add(L.loopView, 'THE WINDOW', 'drag start or end to trim the loop, double-click for the whole take.');
+  add(L.recMode, 'CAPTURE / RECORD', 'CAPTURE= a tap keeps what you just played. RECORD= tap to start, tap to play, or hold to overdub.');
   if (record) add(L.recBars, 'BARS', 'free records until the next tap. a number records that many bars, then plays.');
-  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'the loop against the wet side. left: the loop alone. right: the wet side alone. in the middle, both in full. drag up or down on it, or drop a source here, to swing it: the bar is the swing, the tab where it is now.');
+  if (L.balance) add(grow([L.balance[0] - 32, L.balance[1], L.balance[2] + 32, L.balance[3]], 0, 2), 'BALANCE', 'left= just the loop. right= just the wet side. middle: both in full. drag up or down on it to add a MOD swing.');
   // The plug-in's LEVEL drives into old tape past the middle; this one only sets the level
   // (IN THE PLUG-IN says so).
   add(L.hoodCell[0], 'LEVEL', 'how loud the input reaches Brood. the middle is as it comes in.');
   add(L.wetMode, 'WET MODE', 'four ways of treating time: reverb, delay, slip, weave.');
-  add(L.routing, 'ROUTING', 'in: the wet side hears the input, and the loop keeps it. in + loop: it hears the input and the loop, and the loop keeps it. loop: it hears only the loop, and the loop keeps only the input.');
+  add(L.routing, 'ROUTING', 'What the wet side hears, IN= the input. in + loop= input and loop. loop= just the loop.');
   add(L.loopMode, 'LOOP MODE', 'three ways of holding a moment: envelope, tape, stretch.');
   add(L.fsWet, 'WET', 'tap for the wet side, hold to freeze it where it stands. key A.');
   add(L.fsLoop, 'LOOP', 'tap to catch the recent past, tap again to stop, hold to overdub. key L.');
@@ -1841,7 +1841,9 @@ function App() {
           {helping
             ? <HelpText r={[10, 22, lcdW - 20, 84]} text={hover.text}/>
             : <>
-              <Txt fit r={[10, 22, lcdW - 20, 69]} cls="sc" size={sf(28)} color={PAPER}>{lcdValue}{blink ? '_' : ''}</Txt>
+              {/* The cursor is always there to be measured and only its ink blinks, so a long value
+                  squeezed to fit doesn't change width, and shake, as it blinks. */}
+              <Txt fit r={[10, 22, lcdW - 20, 69]} cls="sc" size={sf(28)} color={PAPER}>{lcdValue}<span style={{ visibility: blink ? 'visible' : 'hidden' }}>_</span></Txt>
               <Txt r={[10, 91, lcdW - 20, 15]} cls="sc" size={sf(15)} color="rgba(246,243,234,.75)" style={{ whiteSpace: 'pre' }}>{meta}</Txt>
             </>}
         </div>

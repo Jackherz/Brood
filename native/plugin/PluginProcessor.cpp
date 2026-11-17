@@ -178,7 +178,7 @@ juce::String BroodProcessor::describe(const juce::String& id, float v) const {
         }
         return "refresh " + fmtTime(brood::expMap(v, 0.05, 1.5) * div / c);
     }
-    if (id == "mix") return "dry " + pct(v > 0.995f ? 0.0 : std::min(1.0, 2.0 * (1 - v))) + " / fx " + pct(std::min(1.0, 2.0 * v));
+    if (id == "mix") return "dry " + pct(v > 0.995f ? 0.0 : std::min(1.0, 2.0 * (1 - v))) + " / brood " + pct(std::min(1.0, 2.0 * v));
     if (id == "length") {
         const double full = brood::kLoopSamples / hz;
         if (loopMode == 1) return "loop " + fmtTime(full * brood::expMap(v, 0.02, 1)) + " of " + fmtTime(full);
