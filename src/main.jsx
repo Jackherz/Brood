@@ -161,6 +161,8 @@ function describe(id, p, value) {
     }
     return `refresh ${fmtTime(expMap(v, 0.05, 1.5) * div / c)}`;
   }
+  // On this page a playing loop mutes the dry sound (dryMuted is set while it does; never saved).
+  if (id === 'mix' && p.dryMuted) return `dry muted / brood ${pct(Math.min(1, 2 * v))}`;
   if (id === 'mix') return `dry ${pct(v > 0.995 ? 0 : Math.min(1, 2 * (1 - v)))} / brood ${pct(Math.min(1, 2 * v))}`;
   if (id === 'length') {
     const full = LOOP_SAMPLES / hz;
@@ -344,7 +346,7 @@ const SRC = {
 };
 const DESK = {
   ...R, W, H, phone: false, src: SRC, overlay: R.pedal, knobValueW: 236,
-  presetPrev: [776, 30, 32, 36], presetName: [808, 30, 270, 36], presetNext: [1078, 30, 32, 36], save: [1118, 30, 58, 36],
+  presetPrev: [776, 30, 32, 36], presetName: [808, 30, 270, 36], presetNext: [1078, 30, 32, 36], save: [1118, 30, 58, 36], reset: [650, 30, 66, 36],
   // LEVEL, TONE, FADE, WIDTH, NOISE: five even cells across the bottom strip.
   hoodCell: [0, 1, 2, 3, 4].map((i) => [38 + i * 229, 676, 205, 52]),
 };
@@ -356,7 +358,7 @@ function deskLayout(p) {
 const PW = 390, PH = 1676;
 const PHONE = {
   W: PW, H: PH, phone: true, knobValueW: 176,
-  presetBar: [12, 58, 366, 36], presetPrev: [12, 58, 32, 36], presetName: [48, 58, 214, 36], presetNext: [266, 58, 32, 36], save: [306, 58, 72, 36],
+  presetBar: [12, 58, 366, 36], presetPrev: [12, 58, 32, 36], presetName: [48, 58, 214, 36], presetNext: [266, 58, 32, 36], save: [306, 58, 72, 36], reset: [102, 1591, 82, 32],
   lcd: [12, 112, 366, 112], loopView: [12, 234, 366, 100], gain: [248, 234, 130, 16], undo: [190, 234, 52, 15], clear: [130, 234, 56, 15],
   fsWet: [12, 344, 150, 52], fsLoop: [166, 344, 150, 52], overdub: [320, 344, 58, 49],
   tabs: [12, 406, 366, 36], tabSheet: [12, 450, 366, 306], overlay: [12, 112, 366, 644],
@@ -364,7 +366,7 @@ const PHONE = {
   hoodCell: [0, 1, 2, 3, 4].map((i) => [24, 1169 + i * 44, 342, 44]),
   src: {
     caption: [24, 1407, 120, 22], picker: [12, 1433, 366, 32], demo: [12, 1471, 366, 32], load: [12, 1511, 120, 32], status: [140, 1511, 238, 32],
-    tempoLabel: [24, 1551, 50, 32], tempo: [74, 1551, 106, 32], start: [190, 1551, 188, 32], tour: [12, 1591, 120, 32], plugin: [140, 1591, 238, 32], song: [12, 1633, 366, 28],
+    tempoLabel: [24, 1551, 50, 32], tempo: [74, 1551, 106, 32], start: [190, 1551, 188, 32], tour: [12, 1591, 82, 32], plugin: [192, 1591, 186, 32], song: [12, 1633, 366, 28],
   },
 };
 Object.assign(PHONE, loopRects(PHONE.loopArea), modRects(PHONE.rampArea));
@@ -443,11 +445,13 @@ function helpTable(p, modOpen, L) {
   add(L.src.song, 'SONG', 'Where you are in the song. Drag to jump; LOOP keeps what you just heard.');
   add(L.src.load, 'LOAD FILE', 'Choose an audio file from this computer. It loops into Brood; nothing is uploaded.');
   add(L.src.tempo, 'TEMPO', 'The beat SYNC and RECORD\'s bars count in. A host sets it in the plug-in; here you do.');
-  add(L.src.tour, 'TOUR', 'A few steps through Brood, one part of the panel at a time. The sound and every setting carry on as they are.');
+  add(L.reset, 'RESET', 'Every control back to A LITTLE DAYDREAM, LEVEL to 0 dB, no MOD routes. WET goes off and the loop is cleared, with nothing to UNDO. TEMPO and your sound stay.');
+  add(L.src.tour, 'TOUR', 'A few steps through Brood, opening the panel a part at a time. The sound and every setting carry on as they are.');
   add(L.src.plugin, 'IN THE PLUG-IN', 'What the plug-in does that this page does not.');
   add(L.src.start, 'AUDIO', 'Starts and stops the sound on this page. Nothing plays until you press it.');
   // The knobs say what they do in the current mode. Last, so a switch beside a knob explains itself first.
-  KNOB_IDS.forEach((_, i) => add(L.knob?.[i], knobName(i, p), `${WHISPER[i][KNOB_MODE[i] === 0 ? wm : KNOB_MODE[i] === 1 ? lm : 0]}.`));
+  // MIX adds what only this page does: a playing loop mutes the dry sound.
+  KNOB_IDS.forEach((id, i) => add(L.knob?.[i], knobName(i, p), `${WHISPER[i][KNOB_MODE[i] === 0 ? wm : KNOB_MODE[i] === 1 ? lm : 0]}.${id === 'mix' ? ' Here, the dry sound is muted while a loop plays.' : ''}`));
   return out;
 }
 // ───────── the wordmark ─────────
@@ -1192,6 +1196,7 @@ const PLUGIN_ONLY = [
   ['THE TAKE STRIP', 'With nothing caught, the input scrolls past, newest at the right, over the window a tap would keep, so you can see what a tap will catch. Here the strip says what the looper is doing instead.'],
   ['AT TAP', 'Beside BARS in RECORD. Off: a bar count starts on the next bar line while the host plays, so loops land on the grid. On: it starts the moment you tap. Here there is no host, so a bar count always starts at the tap.'],
   ['TEMPO', 'Follows the host. Here you set it under the panel.'],
+  ['MIX', 'Your dry sound plays on under a playing loop, at MIX\'s dry share. Here it is muted while a loop plays, and comes back when the loop stops or while you overdub.'],
   ['THE BENCH', 'Passes takes between Brood and Silt in a DAW: SEND the loop or a few bars of the output, TAKE one back as the loop.'],
 ];
 function PluginOnly({ L, close }) {
@@ -1248,8 +1253,9 @@ function PresetBrowser({ L, patches, current, favourites, onChoose, onStar, onKe
 // The whole canvas scaled to the window: nothing reflows, and a narrow window gets a small panel.
 // On a phone (700 wide or less) the phone canvas fills the width and the page scrolls.
 // ───────── the tour ─────────
-// A picture book over the real panel: each step leaves a few controls open and veils the rest,
-// so the sound, the source and every setting carry on from step to step. The screen keeps
+// A picture book over the real panel: each step opens a few more controls and veils the rest,
+// so the sound, the source and every setting carry on from step to step. What a step opens
+// stays open in every step after it; the ring marks what this step is about. The screen keeps
 // explaining whatever is pointed at. The last step is the whole panel.
 const TOUR_DESK_H = 140;                       // the tour's strip under the desktop panel
 const TOUR_BAR = [24, H + 4, 1152, 124];
@@ -1284,7 +1290,7 @@ const TOUR = [
     holes: (L) => [L.loopView, L.fsLoop, ...(L.phone ? [L.tabs, L.tabSheet] : [grow(L.knob[2], 10)])],
     tasks: [{ target: (L) => L.loopView, done: (now, was) => !!now.take && (now.start !== was.start || now.loopEnd !== was.loopEnd) }] },
   { title: 'IN BETWEEN', tab: 1,
-    body: 'MIX sets dry against Brood, BALANCE the loop against WET, ROUTING what WET hears. CLOCK is the sample rate.',
+    body: 'MIX sets dry against Brood, BALANCE the loop against WET, ROUTING what WET hears. CLOCK is the sample rate. While a loop plays, the dry sound is muted.',
     try: 'Turn CLOCK down for an old-sampler sound.',
     holes: (L) => (L.phone ? [L.tabs, L.tabSheet, L.loopArea] : [deskColumn(1), [300, 216, 276, 54], L.loopArea]),
     tasks: [{ target: (L) => knobCell(L, 4), done: (now, was) => Math.abs(now.clock - was.clock) >= 0.05 }] },
@@ -1322,7 +1328,8 @@ const TOUR = [
 function tourHoles(step, L, overlayOpen) {
   const s = TOUR[step];
   if (!s || s.all) return null;
-  const out = [L.lcd, L.src.start, ...s.holes(L)];
+  // Everything the steps so far have opened, this one's included.
+  const out = [L.lcd, L.src.start, ...TOUR.slice(0, step + 1).flatMap((t) => (t.holes ? t.holes(L) : []))];
   if (overlayOpen) out.push(L.overlay);
   return out.filter(Boolean).map((r) => grow(r, 6));
 }
@@ -1631,6 +1638,18 @@ function App() {
     const next = favourites.includes(name) ? favourites.filter((n) => n !== name) : [...favourites, name];
     setFavourites(next); safeWrite('brood-favourites-v1', next);
   };
+  // RESET: every setting back to how Brood first opens (TEMPO stays, since it belongs to the
+  // sound playing), both MODs' routes cleared, the wet side off, the take gone, START and END
+  // back at the ends. The sound source carries on.
+  const fullReset = () => {
+    engineRef.current.resetAll();
+    lastLoop.current = 'off';   // the screen says RESET, not that the loop stopped
+    setParams((p) => ({ ...sanitize(BASE), bpm: p.bpm }));
+    setPreset(0); setModSource(0); setModOpen(false); setBrowsing(null); setRoutesOpen(false);
+    setInputGain(1); engineRef.current.setInputLevel(1);
+    setHover(null);
+    showReadout('RESET', 'a little daydream, loop cleared');
+  };
   const startAudio = async () => {
     if (busy) return;
     setBusy(true); setNotice('');
@@ -1694,6 +1713,8 @@ function App() {
     }
     return clamp(v);
   };
+  // What the screen and the knobs describe: the settings, and whether a playing loop mutes the dry sound.
+  const said = running && state?.loop === 'play' ? { ...params, dryMuted: true } : params;
   const routeMask = [0, 1].map((k) => MOD_TARGETS.map((t) => Math.abs(params[`mod${k + 1}_${t}`]) >= 0.005));
   const balanceRouted = routeMask[0][6] || routeMask[1][6];
 
@@ -1749,6 +1770,20 @@ function App() {
     const y = tall > room - 16 ? top - 8 : top + tall / 2 - room / 2;
     box.scrollTo({ top: Math.max(0, y), behavior: reduce ? 'auto' : 'smooth' });
   };
+  // A desktop inside a host page's frame (jackherz.com): bring the whole panel and the tour's
+  // strip into view, in the middle of the window if they fit. If they're taller than the
+  // window, their bottom goes to the window's bottom, where START AUDIO and the strip are.
+  // On its own page Brood already fits the window, and there is nothing to scroll.
+  const showPanel = () => {
+    try {
+      const frame = window.frameElement, host = window.parent;
+      if (!frame || !host || host === window) return;
+      const box = frame.getBoundingClientRect(), room = host.innerHeight;
+      const by = box.height <= room ? box.top - (room - box.height) / 2 : box.bottom - room;
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      if (Math.abs(by) > 2) host.scrollBy({ top: by, behavior: reduce ? 'auto' : 'smooth' });
+    } catch (_) { /* another site's frame: leave it */ }
+  };
   // Ending the tour on a phone hands the panel back to the page, at the same place.
   const endTour = () => {
     const y = phone ? scroller.current?.scrollTop || 0 : 0;
@@ -1758,7 +1793,8 @@ function App() {
   const goTour = (i) => {
     const next = clamp(i, 0, TOUR.length - 1);
     setTour(next); setHover(null); setBarHelp(null);
-    if (!phone) return;
+    // Opening the tour on a desktop: once the strip has drawn and the frame has grown to hold it.
+    if (!phone) { if (tour < 0) setTimeout(showPanel, 160); return; }
     const onTab = TOUR[next].tab ?? tab;
     if (TOUR[next].tab != null) { setTab(TOUR[next].tab); setActiveKnob(-1); }
     // After the new step (and its tab) has drawn and the bar has its new height.
@@ -1798,6 +1834,8 @@ function App() {
     if (openedAt.current) return;
     openedAt.current = true;
     if (phone && tour === 0) goTour(0);
+    // A desktop that opens in the tour (a first visit) does the same, once the host has sized the frame.
+    else if (!phone && tour >= 0) setTimeout(showPanel, 600);
   }, []);
   // On a phone the key that opens a sheet can be far down the page: bring the sheet into view.
   useEffect(() => {
@@ -1864,7 +1902,7 @@ function App() {
   // The readout: help while the mouse rests on something; otherwise the last thing moved.
   const helping = !!hover && !menu;
   const lcdLabel = lcd.follows ? (lcd.knob >= 0 ? knobName(lcd.knob, params) : lcd.label) : lcd.label;
-  const lcdValue = (lcd.follows ? describe(lcd.follows, params) : lcd.value).toUpperCase();
+  const lcdValue = (lcd.follows ? describe(lcd.follows, said) : lcd.value).toUpperCase();
   const lsrc = state?.lsrc || 0;
   const meta = `${((state?.clockHz ?? clockHz(params.clock, params.smooth)) / 1000).toFixed(1)} kHz    ${lsrc > 0 && state ? `loop ${(state.winLen / state.clockHz).toFixed(2)} s` : 'no loop'}`;
 
@@ -1923,6 +1961,7 @@ function App() {
         <Key r={L.presetName} label={`Browse presets: ${currentPatch.name}`} pressed={!!browsing} onClick={() => (browsing ? setBrowsing(null) : openBrowser())}>{currentPatch.name}</Key>
         <Key r={L.presetNext} label="Next preset" onClick={() => loadPatch(preset + 1)}><ArrowGlyph dir={1}/></Key>
         <Key r={L.save} onClick={saveCurrent}>SAVE</Key>
+        <Key r={L.reset} label="Reset: every control back to A LITTLE DAYDREAM, and the loop cleared" onClick={fullReset}>RESET</Key>
 
         {/* the main sheet: three columns on a desktop, one at a time on a phone */}
         {!phone && <>
@@ -1955,9 +1994,9 @@ function App() {
           onChange={(i) => { update('routing', i); showReadout('ROUTING', ['in', 'in + loop', 'loop'][i]); }}/>}
         {L.loopMode && <ThreeWay r={L.loopMode} labels={['Env', 'Tape', 'Stretch']} index={params.loopMode} label="Loop mode"
           onChange={(i) => { update('loopMode', i); showReadout('LOOP MODE', ['env', 'tape', 'stretch'][i]); }}/>}
-        {KNOB_IDS.map((id, i) => L.knob[i] && <Knob key={id} i={i} r={L.knob[i]} valueW={L.knobValueW} params={params} effective={effective(MOD_TARGETS.indexOf(id))}
+        {KNOB_IDS.map((id, i) => L.knob[i] && <Knob key={id} i={i} r={L.knob[i]} valueW={L.knobValueW} params={said} effective={effective(MOD_TARGETS.indexOf(id))}
           onChange={update} onTouch={touch} modSource={modSource} selectSource={selectSource} showReadout={showReadout} openMenu={openMenu}
-          active={shownKnob === i ? describe(id, params).toUpperCase() : null} onActive={setActiveKnob}/>)}
+          active={shownKnob === i ? describe(id, said).toUpperCase() : null} onActive={setActiveKnob}/>)}
         {L.wetSync && (params.wetMode === 1 || params.wetMode === 3) && <Plate r={L.wetSync} text="SYNC" on={params.sync} onClick={() => pressSwitch('sync', 'SYNC', 'on the beat', 'free')}/>}
         {L.tapeDelay && params.wetMode === 1 && <Plate r={L.tapeDelay} text="TAPE" on={params.tapeDelay} onClick={() => pressSwitch('tapeDelay', 'TAPE', 'tape echo: TIME bends the pitch', 'digital: TIME crossfades')}/>}
         {L.envSync && params.loopMode === 0 && <Plate r={L.envSync} text="SYNC" on={params.envSync} onClick={() => pressSwitch('envSync', 'SYNC', 'on the beat', 'free')}/>}

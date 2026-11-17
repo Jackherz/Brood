@@ -64,7 +64,7 @@ let browser;
  const lcd = () => page.locator('.lcd').textContent();
  // The screen shows help while the mouse rests on a control, so move it off the panel first.
  const readout = async (pattern) => { await page.mouse.move(2, 2); await page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.lcd').textContent), pattern.source) };
- // A first visit opens the tour: each step leaves its own controls in reach and veils the rest.
+ // A first visit opens the tour: each step opens more controls, what it opens stays open, and the rest is veiled.
  const veiled = (name) => page.getByRole('slider',{name,exact:true}).evaluate((e) => !!e.closest('[inert]'));
  const tourTitle = () => page.locator('.tourbar h2').textContent();
  assert.equal(await tourTitle(), 'START WITH SOUND');
@@ -81,7 +81,8 @@ let browser;
  assert.equal(await veiled('TIME'), true);
  await page.getByRole('button',{name:'Step 5: add some space'}).click();
  assert.equal(await veiled('TIME'), false);
- assert.equal(await veiled('LENGTH'), true);
+ assert.equal(await veiled('LENGTH'), false);   // opened in step 2, and still open
+ assert.equal(await page.getByRole('button',{name:/^Reset/}).evaluate((e) => !!e.closest('[inert]')), true);   // only ALL opens the header
  await page.getByRole('button',{name:/^All of Brood/}).click();
  assert.equal(await page.locator('.stage [inert]').count(), 0);
  await page.getByRole('button',{name:'END TOUR',exact:true}).click();

@@ -688,6 +688,13 @@ class BroodCore {
     this.fsDown = { wet: null, loop: null };   // press state for footswitches
     this.rec = { phase: 'idle', histIdx: 0, histCycle: 0, endAt: -1, barTarget: 0 };   // RECORD
     this.engaged = 0;
+    // The browser page's own (the plug-in has no such thing, and with it off nothing changes):
+    // while a loop plays, the dry side stands down so the loop is heard alone. It comes back
+    // when the loop stops, and while a layer is being added, so you hear what you're adding.
+    this.soloLoop = false;
+    this.dryKeep = 1;                           // the dry side's share, ramped over 30 ms
+    this.dryStep = 1 / (0.03 * fs);
+    this.dropUndo = false;                      // a full reset: the cleared take isn't kept for UNDO
     this.events = [];                           // UI notifications (loop captured, ...)
     this.peakIn = 0; this.peakOut = 0;
   }
@@ -777,6 +784,18 @@ class BroodCore {
     this.doClear();
   }
 
+  // The page's RESET: the wet side and any layer stand down, the take goes (fading out first if
+  // it's playing, as CLEAR does) and nothing is kept for UNDO. The settings are the page's to
+  // put back; the memory of what was just heard carries on.
+  fullReset() {
+    this.fsDown.wet = null; this.wetOn = false; this.wetMomentary = false; this.freeze = false;
+    this.fsDown.loop = null;
+    this.overdub = false; this.dubLatched = false; this.p.overdubLatch = 0;
+    this.clearLoop();
+    if (this.pendingOp) this.dropUndo = true; else this.forgetUndo();
+  }
+  forgetUndo() { this.undoKind = 0; this.undoLen = 0; this.undoRedo = false; this.dropUndo = false; }
+
   // UNDO: one step back over the last CLEAR, new take or overdub layer; again, it redoes.
   // Undoing a layer keeps a playing loop playing (it dips while the take is swapped);
   // undoing a clear or a take leaves the loop stopped, ready for a tap.
@@ -843,6 +862,7 @@ class BroodCore {
       else { this.loopState = 'play'; if (this.takeFollows) { this.pendingLock = true; this.lockGain = 0; this.lockShift = NaN; } }
     }
     this.resumeAfterOp = false;
+    if (this.dropUndo) this.forgetUndo();
   }
 
   // ── the host's transport ── (mirrors native/dsp/brood.h)
@@ -1705,8 +1725,11 @@ class BroodCore {
       this.engaged += (engagedT - this.engaged) * 0.001;
       const dg = 1 - this.engaged * (1 - Math.min(1, 2 * (1 - this.e.mix)));
       const wg = Math.min(1, 2 * this.e.mix);
-      let l = dry * dg + el * wg;
-      let r = dry * dg + er * wg;
+      const keepT = this.soloLoop && this.loopState === 'play' && !this.overdub ? 0 : 1;
+      if (this.dryKeep !== keepT) this.dryKeep = keepT > this.dryKeep ? Math.min(1, this.dryKeep + this.dryStep) : Math.max(0, this.dryKeep - this.dryStep);
+      const dk = dg * this.dryKeep;
+      let l = dry * dk + el * wg;
+      let r = dry * dk + er * wg;
       // A fully bypassed plugin must be transparent, including signals above 0 dBFS.
       const fullyBypassed = !p.trails && !this.wetOn && !latchFreeze && this.loopState === 'off' && this.engaged < 1e-4;
       if (!fullyBypassed) { l = softLimit(l); r = softLimit(r); }
@@ -1830,6 +1853,8 @@ if (typeof AudioWorkletProcessor !== 'undefined') {
           else if (m.type === 'fs') core.footswitch(m.which, m.action);
           else if (m.type === 'clear') core.clearLoop();
           else if (m.type === 'undo') core.undoLoop();
+          else if (m.type === 'soloLoop') core.soloLoop = !!m.value;
+          else if (m.type === 'reset') core.fullReset();
         }
       };
     }
