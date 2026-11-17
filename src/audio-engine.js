@@ -29,6 +29,57 @@ export class AudioEngine {
     this.sourceVersion = 0;
     this.inputLevel = 0.8;
     this.sentParams = {};
+    // Songs a host page offers (setSongs): played by streaming through one audio element, never
+    // decoded whole, so a long song costs no more memory than a short one.
+    this.songs = [];
+    this.songEl = null;
+    this.songNode = null;
+    this.songCue = null;   // where a song starts when it next plays, in seconds
+    this.fade = null;      // every source passes through this, so changes fade instead of click
+  }
+
+  setSongs(list) { this.songs = Array.isArray(list) ? list : []; }
+  songFor(id) { return this.songs.find((song) => song.id === id) || null; }
+  songElement() {
+    if (!this.songEl) {
+      const el = new Audio();
+      el.preload = 'auto';
+      el.loop = true;
+      this.songEl = el;
+    }
+    return this.songEl;
+  }
+  // Where the chosen song is, for the song bar.
+  songState() {
+    const song = this.songFor(this.demoId);
+    if (!song) return null;
+    const el = this.songEl, here = el && el.dataset.id === song.id;
+    return {
+      id: song.id,
+      time: this.songCue != null ? this.songCue : here ? el.currentTime : 0,
+      duration: here && Number.isFinite(el.duration) ? el.duration : song.duration || 0,
+      playing: !!here && !el.paused,
+    };
+  }
+  // Jump in the song: a quick fade either side, so the jump doesn't click.
+  async seekSong(seconds) {
+    const song = this.songFor(this.demoId), el = this.songEl;
+    if (!song) return;
+    if (!el || el.dataset.id !== song.id || el.paused || !this.running) { this.songCue = Math.max(0, seconds); return; }
+    await this.fadeOut();
+    el.currentTime = Math.max(0, Math.min(seconds, (el.duration || seconds + 1) - 0.05));
+    this.fadeIn();
+  }
+  async fadeOut() {
+    if (!this.fade || !this.source || !this.running) return;
+    const g = this.fade.gain, now = this.context.currentTime;
+    g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0, now + 0.012);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  fadeIn() {
+    if (!this.fade || !this.context) return;
+    const g = this.fade.gain, now = this.context.currentTime;
+    g.cancelScheduledValues(now); g.setValueAtTime(0, now); g.linearRampToValueAtTime(1, now + 0.012);
   }
 
   get running() { return this.context?.state === 'running'; }
@@ -45,6 +96,9 @@ export class AudioEngine {
         channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'speakers',
       });
       const gain = context.createGain();
+      const fade = context.createGain();
+      fade.connect(gain);
+      this.fade = fade;
       const analyser = context.createAnalyser();
       const output = context.createGain();
       gain.gain.value = this.inputLevel;
@@ -79,6 +133,7 @@ export class AudioEngine {
   async pause() {
     if (!this.context) return;
     this.sourceVersion++;
+    await this.fadeOut();
     this.stopSource(); // release the microphone while paused
     await this.context.suspend();
   }
@@ -114,18 +169,46 @@ export class AudioEngine {
   async connectSource(kind) {
     this.sourceKind = kind;
     const version = ++this.sourceVersion;
+    await this.fadeOut();   // the old source fades out first: no click at the change
+    if (version !== this.sourceVersion) return;
     this.stopSource();
     if (!this.context || this.context.state !== 'running') return;
+    const into = this.fade || this.gain;
     if (kind === 'live') {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Live input is unavailable here. Try a secure browser or choose the demo.');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
       if (version !== this.sourceVersion || !this.running) { stream.getTracks().forEach((track) => track.stop()); return; }
       this.stream = stream;
       this.source = this.context.createMediaStreamSource(stream);
-      this.source.connect(this.gain);
+      this.source.connect(into);
+      this.fadeIn();
+      return;
+    }
+    const song = kind === 'demo' ? this.songFor(this.demoId) : null;
+    if (song) {
+      const el = this.songElement();
+      if (!this.songNode) this.songNode = this.context.createMediaElementSource(el);
+      if (el.dataset.id !== song.id) { el.dataset.id = song.id; el.src = song.src; }
+      if (el.readyState < 1) {
+        await new Promise((resolve) => {
+          const done = () => { el.removeEventListener('loadedmetadata', done); el.removeEventListener('error', done); resolve(); };
+          el.addEventListener('loadedmetadata', done); el.addEventListener('error', done);
+          setTimeout(done, 8000);
+        });
+      }
+      if (version !== this.sourceVersion || !this.running) return;
+      if (el.error) throw new Error('Could not load that song. Check your connection and try again.');
+      if (this.songCue != null) { el.currentTime = this.songCue; this.songCue = null; }
+      this.songNode.connect(into);
+      try { await el.play(); }
+      catch (_) { this.songNode.disconnect(); throw new Error('The song could not start here. Press START AUDIO to play it.'); }
+      if (version !== this.sourceVersion) { el.pause(); this.songNode.disconnect(); return; }
+      this.source = { stop: () => el.pause(), disconnect: () => this.songNode.disconnect() };
+      this.fadeIn();
       return;
     }
     let buffer = this.fileBuffer;
+    if (kind === 'demo' && !DEMOS.some((demo) => demo.id === this.demoId)) this.demoId = DEMOS[0].id;   // a song no longer offered
     if (kind === 'demo') {
       buffer = await this.loadDemo(this.demoId);
       if (version !== this.sourceVersion || !this.running) return;
@@ -134,9 +217,10 @@ export class AudioEngine {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
-    source.connect(this.gain);
+    source.connect(into);
     source.start();
     this.source = source;
+    this.fadeIn();
   }
 
   loadDemo(id) {
@@ -153,7 +237,7 @@ export class AudioEngine {
 
   // Picking a demo while audio runs swaps it straight away; otherwise it plays on START AUDIO.
   async chooseDemo(id) {
-    if (!DEMOS.some((demo) => demo.id === id)) return;
+    if (!DEMOS.some((demo) => demo.id === id) && !this.songFor(id)) return;
     this.demoId = id;
     if (this.running) await this.connectSource('demo');
   }
@@ -172,6 +256,7 @@ export class AudioEngine {
   async dispose() {
     this.sourceVersion++;
     this.stopSource();
+    if (this.songEl) { this.songEl.pause(); this.songEl.removeAttribute('src'); }
     if (this.context && this.context.state !== 'closed') await this.context.close();
     this.context = null;
     this.node = null;

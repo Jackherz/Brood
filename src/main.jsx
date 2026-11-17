@@ -340,6 +340,7 @@ Object.assign(R, loopRects(R.loopArea), modRects(R.rampArea));
 const SRC = {
   caption: [38, 748, 80, 50], picker: [118, 759, 156, 28], demo: [280, 759, 246, 28], load: [532, 759, 90, 28], status: [628, 759, 64, 28],
   tour: [698, 759, 64, 28], plugin: [768, 759, 120, 28], tempoLabel: [888, 759, 56, 28], tempo: [944, 759, 104, 28], start: [1060, 759, 116, 28],
+  song: [118, 793, 1058, 20],   // a song's place, when the DEMO stepper is on a song
 };
 const DESK = {
   ...R, W, H, phone: false, src: SRC, overlay: R.pedal, knobValueW: 236,
@@ -352,7 +353,7 @@ function deskLayout(p) {
 }
 
 // A phone: the same parts, stacked on a canvas 390 wide, one column's knobs at a time.
-const PW = 390, PH = 1636;
+const PW = 390, PH = 1676;
 const PHONE = {
   W: PW, H: PH, phone: true, knobValueW: 176,
   presetBar: [12, 58, 366, 36], presetPrev: [12, 58, 32, 36], presetName: [48, 58, 214, 36], presetNext: [266, 58, 32, 36], save: [306, 58, 72, 36],
@@ -363,7 +364,7 @@ const PHONE = {
   hoodCell: [0, 1, 2, 3, 4].map((i) => [24, 1169 + i * 44, 342, 44]),
   src: {
     caption: [24, 1407, 120, 22], picker: [12, 1433, 366, 32], demo: [12, 1471, 366, 32], load: [12, 1511, 120, 32], status: [140, 1511, 238, 32],
-    tempoLabel: [24, 1551, 50, 32], tempo: [74, 1551, 106, 32], start: [190, 1551, 188, 32], tour: [12, 1591, 120, 32], plugin: [140, 1591, 238, 32],
+    tempoLabel: [24, 1551, 50, 32], tempo: [74, 1551, 106, 32], start: [190, 1551, 188, 32], tour: [12, 1591, 120, 32], plugin: [140, 1591, 238, 32], song: [12, 1633, 366, 28],
   },
 };
 Object.assign(PHONE, loopRects(PHONE.loopArea), modRects(PHONE.rampArea));
@@ -438,7 +439,8 @@ function helpTable(p, modOpen, L) {
   add(L.loopDiv, 'LOOP DIV', 'the loop runs on a divided clock: lower, longer, further from the other side.');
   // The source picker exists only in the browser.
   add(L.src.picker, 'SOURCE', 'what Brood hears: a demo loop, an audio file of your own, or the microphone. use headphones with the microphone.');
-  add(L.src.demo, 'DEMO', 'seven loops to play Brood with when nothing is plugged in. click to step to the next; each one sets TEMPO to its own.');
+  add(L.src.demo, 'DEMO', 'loops, and on jackherz.com songs, to play Brood with. click to step to the next; a loop sets TEMPO to its own.');
+  add(L.src.song, 'SONG', 'where you are in the song. drag to jump; LOOP keeps what you just heard.');
   add(L.src.load, 'LOAD FILE', 'choose an audio file from this computer. it loops into Brood; nothing is uploaded.');
   add(L.src.tempo, 'TEMPO', 'the beat SYNC and RECORD\'s bars count in. a host sets it in the plug-in; here you do.');
   add(L.src.tour, 'TOUR', 'a few steps through brood, one part of the panel at a time. the sound and every setting carry on as they are.');
@@ -473,11 +475,20 @@ function Txt({ r, align = 'left', cls = 'nm', size, color, children, style, fit 
   const el = useRef(null);
   const text = React.Children.toArray(children).join('');
   useLayoutEffect(() => {
-    if (!fit) return;
-    const node = el.current.firstChild;
-    node.style.transform = '';
-    const k = Math.max(0.7, Math.min(1, el.current.clientWidth / Math.max(1, node.scrollWidth)));
-    if (k < 1) node.style.transform = `scaleX(${k.toFixed(3)})`;
+    if (!fit) return undefined;
+    const measure = () => {
+      const box = el.current, node = box?.firstChild;
+      if (!node) return;
+      node.style.transform = '';
+      const k = Math.max(0.7, Math.min(1, box.clientWidth / Math.max(1, node.scrollWidth)));
+      if (k < 1) node.style.transform = `scaleX(${k.toFixed(3)})`;
+    };
+    measure();
+    // Measured before the panel's fonts arrive, a text keeps the fallback's width: measure again
+    // when they have.
+    let live = true;
+    document.fonts?.ready.then(() => { if (live) measure(); });
+    return () => { live = false; };
   }, [fit, text, r[2], size?.fontSize]);
   return <div ref={el} className={`abs txt ${cls} ${align}`} style={{ ...at(r), lineHeight: `${r[3]}px`, color, ...size, ...style }}>
     {fit ? <span className="fit" style={{ transformOrigin: align === 'center' ? '50% 50%' : align === 'right' ? '100% 50%' : '0 50%' }}>{children}</span> : children}
@@ -575,6 +586,53 @@ function ThreeWay({ r, labels, index, onChange, label }) {
       return <button key={name} type="button" role="radio" aria-checked={i === index} className={i === index ? 'on' : ''}
         style={{ left: x0, width: x1 - x0, height: r[3] - 2, ...nf(16) }} onClick={() => onChange(i)}><span>{name.toUpperCase()}</span></button>;
     })}
+  </div>;
+}
+
+// A song's place (the browser's own, for songs a host page offers): the time so far, a track
+// to drag or tap to jump, and the length. Arrows jump 5 s.
+const mmss = (t) => (Number.isFinite(t) && t > 0 ? `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}` : '0:00');
+function SongBar({ r, engine, title }) {
+  const el = useRef(null), last = useRef(0);
+  const [st, setSt] = useState(() => engine.songState());
+  const [drag, setDrag] = useState(null);   // where the finger is, 0 to 1, while dragging
+  useEffect(() => { const id = setInterval(() => setSt(engine.songState()), 250); return () => clearInterval(id); }, [engine]);
+  if (!st) return null;
+  // With a title (on a desktop), it takes the left of the row and the bar the rest.
+  const lead = title ? 320 : 0;
+  const dur = st.duration || 0, side = 52, span = r[2] - lead - 2 * side;
+  const pos = drag ?? (dur ? clamp(st.time / dur) : 0);
+  const fracAt = (event) => clamp((designPoint(el.current, event, r[2]).x - lead - side) / span);
+  const seek = (f) => { if (dur) engine.seekSong(f * dur); };
+  const down = (event) => {
+    if (event.button !== 0 || !dur) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const f = fracAt(event); setDrag(f); seek(f); last.current = performance.now();
+  };
+  const move = (event) => {
+    if (drag == null) return;
+    const f = fracAt(event); setDrag(f);
+    if (performance.now() - last.current > 150) { seek(f); last.current = performance.now(); }   // jumps while dragging, not every pixel
+  };
+  const up = (event) => { if (drag == null) return; const f = fracAt(event); seek(f); setDrag(null); setSt({ ...st, time: f * dur }); };
+  const key = (event) => {
+    const d = event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 5 : event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? -5 : 0;
+    if (!d || !dur) return;
+    event.preventDefault();
+    engine.seekSong(clamp(st.time + d, 0, dur)); setSt({ ...st, time: clamp(st.time + d, 0, dur) });
+  };
+  const x = lead + side + span * pos, cy = r[3] / 2;
+  return <div ref={el} className="abs slider songbar" style={at(r)} role="slider" tabIndex="0" aria-label="Song position"
+    aria-valuemin="0" aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(pos * dur)} aria-valuetext={`${mmss(pos * dur)} of ${mmss(dur)}`}
+    onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={key}>
+    {title && <Txt fit r={[0, 0, lead - 12, r[3]]} cls="vl" size={vf(15)} color={INK}>{title.toUpperCase()}</Txt>}
+    <Txt r={[lead, 0, side - 8, r[3]]} align="right" cls="vl" size={vf(15)} color={MUTED}>{mmss(pos * dur)}</Txt>
+    <svg className="abs" style={{ left: 0, top: 0 }} width={r[2]} height={r[3]} aria-hidden="true">
+      <rect x={lead + side} y={cy - 1.5} width={span} height="3" rx="1.5" fill={INK} fillOpacity=".16"/>
+      <rect x={lead + side} y={cy - 1.5} width={Math.max(0, x - lead - side)} height="3" rx="1.5" fill={INK} fillOpacity=".6"/>
+      <circle cx={x} cy={cy} r="5" fill={INK}/>
+    </svg>
+    <Txt r={[lead + side + span + 8, 0, side - 8, r[3]]} cls="vl" size={vf(15)} color={MUTED}>{dur ? mmss(dur) : '--:--'}</Txt>
   </div>;
 }
 
@@ -1182,7 +1240,7 @@ const TOUR = [
   { title: 'START WITH SOUND',
     body: 'Brood plays a demo loop, or your own file, or your voice with MIC.',
     try: 'Press START AUDIO.',
-    holes: (L) => [L.phone ? [12, 1403, 366, 224] : [24, 744, 1152, 60], L.loopView],
+    holes: (L) => [L.phone ? [12, 1403, 366, 264] : [24, 744, 1152, 72], L.loopView],
     tasks: [{ target: (L) => L.src.start, done: (now) => now.running }] },
   { title: 'CATCH A LOOP', tab: 2,
     body: 'Brood is always listening: LOOP keeps the last few seconds, and MEMORY sets how many.',
@@ -1349,7 +1407,10 @@ function App() {
   const [pluginOpen, setPluginOpen] = useState(false);
   const [preset, setPreset] = useState(0);
   const [source, setSource] = useState('demo');
-  const [demoId, setDemoId] = useState(() => { const d = safeRead('brood-demo-v1'); return DEMOS.some((x) => x.id === d) ? d : DEMOS[0].id; });
+  const [demoId, setDemoId] = useState(() => { const d = safeRead('brood-demo-v1'); return typeof d === 'string' && d ? d : DEMOS[0].id; });
+  // Songs a host page offers in songs.json beside the app (jackherz.com does): after the loops
+  // in the DEMO stepper, streamed rather than loaded whole.
+  const [songs, setSongs] = useState([]);
   const [fileName, setFileName] = useState('');
   const [inputGain, setInputGain] = useState(1);
   const [running, setRunning] = useState(false);
@@ -1382,6 +1443,9 @@ function App() {
     return t.open ? clamp(Math.round(t.step), 0, TOUR.length - 1) : -1;
   });
   const { scale, phone } = useScale(tour >= 0);
+  // A desktop's DEMO stepper is narrow: a song may give a short name for it (songs.json "short"),
+  // and its full title goes beside the song bar. A phone's stepper has room for the full title.
+  const sounds = [...DEMOS, ...songs.map((x) => ({ id: x.id, name: phone ? x.title : x.short || x.title, title: x.title, song: true }))];
   // The focus outline is for the keyboard. A finger or a mouse focuses a knob too, and phones
   // then leave the outline standing, so it shows only after a key, until the next touch or click.
   useEffect(() => {
@@ -1414,6 +1478,54 @@ function App() {
   }
   useEffect(() => { engineRef.current.setParams(params); safeWrite('brood-params-v4', params); }, [params]);
   useEffect(() => { const engine = engineRef.current; return () => { engine.dispose(); }; }, []);
+  useEffect(() => {
+    let gone = false;
+    fetch(`${import.meta.env.BASE_URL}songs.json`).then((r) => (r.ok ? r.json() : [])).catch(() => []).then((list) => {
+      if (gone) return;
+      const clean = (Array.isArray(list) ? list : []).filter((x) => x && typeof x.id === 'string' && typeof x.src === 'string' && typeof x.title === 'string');
+      engineRef.current.setSongs(clean);
+      setSongs(clean);
+      // A remembered song that isn't offered here any more falls back to the first loop.
+      setDemoId((id) => {
+        if (DEMOS.some((d) => d.id === id) || clean.some((x) => x.id === id)) return id;
+        engineRef.current.demoId = DEMOS[0].id;
+        return DEMOS[0].id;
+      });
+    });
+    return () => { gone = true; };
+  }, []);
+  // A host page can hand over a song already playing: ?song=<id>&t=<seconds>&play=1. Brood
+  // carries it on from there if the browser lets sound start by itself; otherwise it waits at
+  // that moment for START AUDIO.
+  const handedOver = useRef(false);
+  useEffect(() => {
+    if (handedOver.current || !songs.length) return;
+    handedOver.current = true;
+    const q = new URLSearchParams(window.location.search);
+    const song = songs.find((x) => x.id === q.get('song'));
+    if (!song) return;
+    const engine = engineRef.current;
+    engine.songCue = Math.max(0, Number(q.get('t')) || 0);
+    engine.demoId = song.id; engine.sourceKind = 'demo';
+    setDemoId(song.id); setSource('demo');
+    const ready = () => showReadout('SONG', `${song.title.toLowerCase()}, ready where it was. press START AUDIO`);
+    if (q.get('play') !== '1') { ready(); return; }
+    (async () => {
+      try {
+        if (!engine.context) await engine.create(paramsRef.current);
+        engine.setParams(paramsRef.current);
+        await Promise.race([engine.context.resume(), new Promise((resolve) => setTimeout(resolve, 700))]);
+        if (!engine.running) { ready(); return; }
+        engine.setInputLevel(inputGain);
+        await engine.connectSource('demo');
+        setRunning(true);
+        showReadout('SONG', song.title.toLowerCase());
+      } catch (_) {
+        try { await engine.pause(); } catch (__) { /* already stopped */ }
+        setRunning(false); ready();
+      }
+    })();
+  }, [songs]);
   useEffect(() => { const id = setInterval(() => setBlink(Math.floor(performance.now() / 160) % 2 === 0), 40); return () => clearInterval(id); }, []);
   const update = useCallback((id, value) => setParams((previous) => ({ ...previous, [id]: value })), []);
   const showReadout = useCallback((label, value) => setLcd({ label, value, follows: null }), []);
@@ -1503,17 +1615,18 @@ function App() {
   const chooseSource = async (kind) => {
     if (kind === 'file' && !fileName) { fileInput.current?.click(); return; }
     setSource(kind); setNotice('');
-    showReadout('SOURCE', kind === 'demo' ? `the demo: ${DEMOS.find((d) => d.id === demoId).name.toLowerCase()}` : kind === 'file' ? fileName : 'the microphone. use headphones');
+    showReadout('SOURCE', kind === 'demo' ? `the demo: ${(sounds.find((d) => d.id === demoId)?.name || '').toLowerCase()}` : kind === 'file' ? fileName : 'the microphone. use headphones');
     try { await engineRef.current.connectSource(kind); }
     catch (error) { setNotice(error?.name === 'NotAllowedError' ? 'Microphone access was denied. Choose DEMO or allow access in your browser.' : (error.message || 'Could not connect input.')); }
   };
   // A demo loop: it becomes the source, and TEMPO follows it so SYNC and RECORD's bars fit.
   const chooseDemo = async (id) => {
-    const demo = DEMOS.find((d) => d.id === id);
+    const demo = DEMOS.find((d) => d.id === id), song = songs.find((x) => x.id === id);
+    if (!demo && !song) return;
     setDemoId(id); safeWrite('brood-demo-v1', id);
     setSource('demo'); setNotice('');
-    update('bpm', demo.bpm);
-    showReadout('DEMO', `${demo.name.toLowerCase()}: ${demo.detail}`);
+    if (demo) { update('bpm', demo.bpm); showReadout('DEMO', `${demo.name.toLowerCase()}: ${demo.detail}`); }
+    else showReadout('SONG', `${song.title.toLowerCase()}${song.album ? `, ${song.album.toLowerCase()}` : ''}`);
     try {
       if (source === 'demo') await engineRef.current.chooseDemo(id);
       else { engineRef.current.demoId = id; await engineRef.current.connectSource('demo'); }
@@ -1748,7 +1861,7 @@ function App() {
   ];
   const balanceShown = balanceRouted && running ? effective(6) : params.balance;
   const pressSwitch = (id, label, on, off) => { const next = params[id] ? 0 : 1; update(id, next); showReadout(label, next ? on : off); };
-  const demo = DEMOS.find((d) => d.id === demoId);
+  const demo = sounds.find((d) => d.id === demoId) || sounds[0];
   const sourceText = notice || (source === 'demo' ? '' : source === 'file' ? fileName : 'use headphones');
 
   const lcdW = L.lcd[2];
@@ -1923,8 +2036,9 @@ function App() {
         <Txt r={src.caption} size={nf(20)} color={INK}>SOURCE</Txt>
         <ThreeWay r={src.picker} labels={['Demo', 'File', 'Mic']} index={['demo', 'file', 'live'].indexOf(source)} label="Source"
           onChange={(i) => chooseSource(['demo', 'file', 'live'][i])}/>
-        <Stepper r={src.demo} caption="DEMO" capWidth={40} names={DEMOS.map((d) => d.name.toUpperCase())} index={DEMOS.indexOf(demo)} label="Demo loop"
-          onStep={(d) => chooseDemo(DEMOS[(DEMOS.indexOf(demo) + d + DEMOS.length) % DEMOS.length].id)}/>
+        <Stepper r={src.demo} caption="DEMO" capWidth={40} names={sounds.map((d) => d.name.toUpperCase())} index={sounds.indexOf(demo)} label="Demo loop or song"
+          onStep={(d) => chooseDemo(sounds[(sounds.indexOf(demo) + d + sounds.length) % sounds.length].id)}/>
+        {demo?.song && <SongBar r={src.song} engine={engineRef.current} title={phone ? null : demo.title}/>}
         <Key r={src.load} onClick={() => fileInput.current?.click()}>LOAD FILE</Key>
         <input ref={fileInput} type="file" accept="audio/*,.wav,.aif,.aiff,.flac" onChange={readFile} hidden/>
         <Txt fit r={src.status} cls="vl" size={vf(16)} color={notice ? INK : MUTED}>{sourceText.toUpperCase()}</Txt>
