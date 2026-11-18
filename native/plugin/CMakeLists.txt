@@ -15,7 +15,7 @@ if(APPLE)
 endif()
 
 juce_add_plugin(Brood
-  VERSION 0.3.0
+  VERSION 0.3.1
   COMPANY_NAME "Glyph Audio"
   BUNDLE_ID "audio.brood.brood"
   PLUGIN_MANUFACTURER_CODE Broo
@@ -111,7 +111,7 @@ endif()
 
 option(BROOD_BUILD_VST3_HOST_TESTS "Build a JUCE-based VST3 hosting smoke test" OFF)
 if(BROOD_BUILD_VST3_HOST_TESTS)
-  juce_add_console_app(vst3_host_tests PRODUCT_NAME "Brood VST3 Host Tests" VERSION 0.3.0)
+  juce_add_console_app(vst3_host_tests PRODUCT_NAME "Brood VST3 Host Tests" VERSION 0.3.1)
   target_sources(vst3_host_tests PRIVATE ../tests/vst3_host_tests.cpp)
   add_dependencies(vst3_host_tests Brood_VST3)
   target_compile_definitions(vst3_host_tests PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
