@@ -490,9 +490,12 @@ void BroodProcessor::pullParams() {
 
 bool BroodProcessor::loadFile(const juce::File& f) {
     std::unique_ptr<juce::AudioFormatReader> r(formats_.createReaderFor(f));
-    if (!r || r->lengthInSamples <= 0 || r->lengthInSamples > 60 * 60 * 192000) return false;
-    juce::AudioBuffer<float> buf(static_cast<int>(r->numChannels), static_cast<int>(r->lengthInSamples));
-    r->read(&buf, 0, buf.getNumSamples(), 0, true, true);
+    // A file's header is outside data: refuse silly rates, read two channels at most and
+    // twenty minutes at most, so a strange or crafted file can't take gigabytes.
+    if (!r || r->numChannels < 1 || r->lengthInSamples <= 0 || !(r->sampleRate >= 1000.0 && r->sampleRate <= 768000.0)) return false;
+    const auto frames = static_cast<int>(juce::jmin<juce::int64>(r->lengthInSamples, static_cast<juce::int64>(20.0 * 60.0 * r->sampleRate)));
+    juce::AudioBuffer<float> buf(juce::jmin(2, static_cast<int>(r->numChannels)), frames);
+    r->read(&buf, 0, frames, 0, true, true);
     const juce::SpinLock::ScopedLockType lock(fileLock_);   // the audio thread only tries this lock
     file_ = std::move(buf); fileRate_ = r->sampleRate; filePos_ = 0; fileName_ = f.getFileName();
     return true;
@@ -885,7 +888,7 @@ static void writeTake(juce::ValueTree& parent, const brood::Core& core, const ch
 
 bool BroodProcessor::takeMoment(const juce::File& file) {
     std::unique_ptr<juce::AudioFormatReader> reader(formats_.createReaderFor(file));
-    if (reader == nullptr || reader->lengthInSamples < 64 || reader->sampleRate <= 0) return false;
+    if (reader == nullptr || reader->numChannels < 1 || reader->lengthInSamples < 64 || !(reader->sampleRate >= 1000.0 && reader->sampleRate <= 768000.0)) return false;
     const auto frames = static_cast<int>(juce::jmin<juce::int64>(reader->lengthInSamples, static_cast<juce::int64>(300.0 * reader->sampleRate)));
     juce::AudioBuffer<float> source(2, frames);
     reader->read(&source, 0, frames, 0, true, true);
@@ -965,9 +968,14 @@ void BroodProcessor::setStateInformation(const void* data, int size) {
             for (int i = 0; i < takes.getNumChildren(); ++i) {
                 const auto take = takes.getChild(i);
                 const int slot = take["id"].toString() == "right" ? 1 : 0;
-                const int samples = static_cast<int>(take["samples"]);
+                // A set file is outside data: a damaged or crafted one must not make us
+                // allocate more than the longest take the core can hold (restoreLoop
+                // refuses anything longer anyway).
+                const double claimed = static_cast<double>(take["samples"]);
+                if (!(claimed >= 64.0 && claimed <= static_cast<double>(brood::kMaxLoopSamples))) continue;
+                const int samples = static_cast<int>(claimed);
                 const auto encoded = take["pcm"].toString();
-                if (samples < 64 || encoded.isEmpty()) continue;
+                if (encoded.isEmpty()) continue;
                 juce::MemoryBlock block;
                 if (!block.fromBase64Encoding(encoded) || block.getSize() < 2) continue;
                 juce::MemoryInputStream raw(block, false);

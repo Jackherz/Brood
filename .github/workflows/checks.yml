@@ -8,26 +8,36 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token: these checks never write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   repo:
     name: repo self-check + JS tests + web build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Repository self-check
         run: bash scripts/check-repo.sh
 
       - name: Install JavaScript dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: JavaScript DSP tests
         run: npm test
