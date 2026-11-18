@@ -8,7 +8,17 @@ const { execFileSync } = require('child_process');
 
 const exe = process.argv[2];
 const dir = path.join(__dirname, 'scenarios');
+// Renders go in a temp folder: removed when every scenario passes, kept when one fails (so the
+// renders can be looked at), and any left over from an earlier run is removed after a day.
+for (const old of fs.readdirSync(os.tmpdir()).filter((x) => x.startsWith('brood-parity-'))) {
+  const p = path.join(os.tmpdir(), old);
+  try { if (Date.now() - fs.statSync(p).mtimeMs > 24 * 3600 * 1000) fs.rmSync(p, { recursive: true, force: true }); } catch {}
+}
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'brood-parity-'));
+process.on('exit', (code) => {
+  if (code === 0) fs.rmSync(tmp, { recursive: true, force: true });
+  else console.log(`renders kept in ${tmp} (removed by the next run after a day)`);
+});
 let failed = 0;
 for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.txt')).sort()) {
   const sc = path.join(dir, f);
