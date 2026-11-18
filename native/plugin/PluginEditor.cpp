@@ -1365,7 +1365,7 @@ void BroodEditor::updateBench() {
     const bool ours = fresh && waiting->fromChip == "E-01" && momentSent != 0 && waiting->stamp >= momentSent - 5000;
     const juce::String fromThere = !fresh ? juce::String()
                                  : ours ? "SENT " + juce::String(waiting->seconds, 2) + " S. TAKE TO RESAMPLE"
-                                 : "FROM " + waiting->fromChip + " " + waiting->fromName + " / " + juce::String(waiting->seconds, 2) + " S";
+                                 : "FROM " + waiting->fromName + " / " + juce::String(waiting->seconds, 2) + " S";
     if (capture == Capture::waiting) benchStrip.set(state, "WAITING FOR THE NEXT BAR", "STOP", true, fresh);
     else if (capture == Capture::recording) benchStrip.set(state, "RECORDING " + juce::String(juce::roundToInt(proc.outputCaptureProgress() * 100.f)) + "%", "STOP", true, fresh);
     else benchStrip.set(state, fresh ? fromThere : momentSent != 0 ? "SENT: AN INSTRUMENT CAN TAKE IT" : "NOTHING WAITING", "SEND >", bars || caught == 1, fresh);
